@@ -18,7 +18,7 @@ python3 tools/smoke.py
 
 `lint` AST-parses first-party Python, syntax-checks first-party JavaScript with Node, and checks the launcher shell syntax. It is not a Python style or type checker. Clippy treats Rust warnings as errors. `contracts` lists its selected Python/Node files and runs every declared scenario for the asynchronous UI tests. Tests use mocks and tiny synthetic fixtures; they do not launch browsers or load trained models. The smoke test independently checks 26 exact source values and native/pooled PNG outputs across seven rules; other rules and dtype/slice behavior have dedicated Rust/contract coverage.
 
-The GitHub workflow uses pinned official action revisions, read-only repository permissions, serial steps, and no deployment, secrets, or `pull_request_target`. Toolchain setup may access official tool distribution services; Cargo builds remain offline. A runner that fails memory/disk guards fails CI rather than weakening the guards.
+The GitHub workflow uses pinned official action revisions, read-only repository permissions, serial steps, and no deployment, secrets, or `pull_request_target`. Toolchain setup may access official tool distribution services; Cargo builds remain offline. On disposable GitHub-hosted runners, CI removes the unused preinstalled Android SDK to recover build disk space. This step does not run on self-hosted machines. A runner that still fails memory/disk guards fails CI rather than weakening the guards.
 
 ## Optional qualification
 

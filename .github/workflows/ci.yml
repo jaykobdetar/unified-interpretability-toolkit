@@ -32,6 +32,16 @@ jobs:
         run: python3 tools/check.py lint
       - name: Portable contract tests
         run: python3 tools/check.py contracts
+      - name: Reserve build disk on the disposable hosted runner
+        if: runner.environment == 'github-hosted'
+        # This project does not use Android. Preserve the 25 GiB build/runtime gate.
+        run: |
+          df -h .
+          if test -d '/usr/local/lib/android/sdk'; then
+            test "$(realpath -e -- '/usr/local/lib/android/sdk')" = '/usr/local/lib/android/sdk'
+            sudo rm -rf -- '/usr/local/lib/android/sdk'
+          fi
+          df -h .
       - name: Offline Rust lint
         run: python3 tools/guarded-build.py clippy --all-targets -- -D warnings
       - name: Offline Rust tests
