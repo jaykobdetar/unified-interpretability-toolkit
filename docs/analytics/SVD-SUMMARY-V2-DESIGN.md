@@ -1,6 +1,6 @@
 # 128 × 128 SVD summary contract and qualification boundary
 
-Status: implemented with portable fixtures; [retained qualification](SVD-QUALIFICATION.md) covers four fixed synthetic 128-window numeric cases and one ordinary standalone HTTP/browser workflow at the exact recorded runtime. The dense 64 × 64 implementation remains unchanged. Four CPU seconds, five wall seconds and 768 MiB address-space limits remain authoritative. Public-model and broader runtime claims require separate source bindings, review and assigned capacity.
+Status: implemented and locally qualified on the combined batch for diagonal128 worker/oracle and the fixed dense-offset standalone HTTP/browser workflow. [Qualification](SVD-QUALIFICATION.md) separately preserves three additional inherited source-lane numeric cases. The dense 64 × 64 implementation remains unchanged. Four CPU seconds, five wall seconds and 768 MiB address-space limits remain authoritative. Public-model and broader runtime claims require separate source bindings, review and assigned capacity.
 
 ## Admission and lifecycle
 

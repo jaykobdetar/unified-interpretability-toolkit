@@ -1,8 +1,23 @@
 # Bounded SVD summary qualification
 
-The runtime at commit `80c252de62827668621846a6569820d258b453a5` (tree `b6cffb5da7862eb61cc28a9bb13d1d77e71b8821`) passed four fixed synthetic numerical cases and one ordinary standalone HTTP/browser workflow. Later documentation changes do not change that runtime. The [summary contract](SVD-SUMMARY-V2-DESIGN.md) adds explicit `svd_summary` windows up to 128 × 128; the legacy dense mode remains capped at 64 × 64.
+The integrated local batch passed the selected diagonal128 worker and independent oracle, plus the fixed dense-offset standalone HTTP/browser workflow. Its exact source and fresh release binary were independently accepted. These results qualify the cases below; repository publication and CI on the release commit remain separate gates. The [summary contract](SVD-SUMMARY-V2-DESIGN.md) permits explicit windows up to 128 × 128; legacy dense mode remains capped at 64 × 64.
 
-## Numerical cases
+## Current combined qualification
+
+| Case | Accepted scope | Result body bytes |
+| --- | --- | ---: |
+| Complete BF16 diagonal128, seed 77 | Production worker; analytic original spectrum/energy; independent Gram-eigenvalue shuffle oracle; permutation, native binding and both 256-value residual previews | 21,602 |
+| BF16 dense256; rows [64,192), columns [32,160), seed 77 | Real standalone coordinator/renderer/worker; retained independent numeric parity; complete spectra/energies and exact preview maps; ordinary completion, active owned cancellation and reselection | 25,989 |
+
+The combined workflow used a newly bound release binary and verified current loaded assets before and after. Exactly two starts and one ordinary cancel gesture produced a same-owner cancelled terminal with no live worker or pending cleanup; public busy was false and both ports closed. No retry, induced delay or inference mutation occurred. Numeric children retain one CPU/BLAS thread, 768 MiB AS, four CPU seconds and the five-second kernel-default alarm before NumPy import. Outer guards retain one CPU, 1 GiB summed RSS and verified cleanup.
+
+The HTTP/browser run took 9.23 seconds with 906.68 MiB sampled aggregate RSS; the selected diagonal worker/oracle sequence took 0.41 seconds with 80.42 MiB. These are observed bounded workflows, not general performance guarantees. Inspected desktop/mobile-width views retain the select-label truncation and duplicate residual/mapping capture limitation. No physical mobile, full-layout or accessibility acceptance follows.
+
+## Inherited source qualification
+
+Runtime `80c252de62827668621846a6569820d258b453a5` (tree `b6cffb5da7862eb61cc28a9bb13d1d77e71b8821`) previously passed four synthetic numerical cases and a standalone HTTP/browser workflow. The records below remain inherited evidence. Only diagonal128 and the fixed standalone dense-offset workflow received the fresh combined checks above; zero, signed rank-one and dense-offset standalone oracles were not rerun on this batch.
+
+### Inherited numerical cases
 
 Each case used native BF16 bytes, seed 77, one owned production analytics worker and a separately bounded independent oracle. Original and shuffled windows were fitted separately using NumPy 2.4.2. Analytic invariants and a symmetric Gram eigensystem checked complete spectra, Frobenius and residual energies, and all 256 residual-preview values per side. Independent source reconstruction, raw-bit multiset/permutation checks, exact preview mappings, closed source/model/slice/region bindings, body caps and cleanup passed. Zero-energy fractions stayed null; comparisons did not require arbitrary singular-vector signs or degenerate bases to match.
 
@@ -15,7 +30,7 @@ Each case used native BF16 bytes, seed 77, one owned production analytics worker
 
 These are four separately assigned first attempts, with no retries or seed search. Each numeric child kept one CPU/BLAS thread, 768 MiB address space, four CPU seconds and the existing five-second wall policy. Retained guards report complete owned-process cleanup. They establish these cases, not arbitrary inputs, universal performance or deadline-expiry behavior.
 
-## Standalone HTTP and browser workflow
+### Inherited standalone HTTP and browser workflow
 
 One guarded production `--analytics-only` coordinator and real Rust renderer served the dense offset fixture above. Live HTTP source/model/revision and native slice binding, current loaded module/viewer/index/CSS hashes, and the literal serialized result body were checked. Both full spectra and every residual-preview value matched the previously qualified dense result exactly; no oracle rerun was needed. The unchanged embedded viewer binary was reused because all Rust and embedded bundle parts were unchanged; the two changed analytics modules were served and hash-checked through the production coordinator.
 

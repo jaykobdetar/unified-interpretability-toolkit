@@ -1,10 +1,16 @@
 # Synthetic data workflow browser qualification
 
-The production assets at `f9d8a56514a210314af82872040c6c03e90d7f86` passed guarded offline release tests (60 tests) and release build. The qualified binary SHA-256 was `54d13bc37c43dd805444588a90841dcf0089051ecb35503595d3ecaff4a434fe`. Browser results apply to those exact embedded assets; later asset changes need new qualification.
+The integrated local batch passed 80 Rust tests and a successful exact-source release build, then fresh synthetic exports/archive browser checks and independent decoding of all 18 downloads. Its current binary SHA-256 is `3e501dd150f646fffc0c1321d3bb2d74128f5c3bc2bf08cf24e880a4a62169e7`. Source, build, harness and asset bindings were preserved before and after; independent final qualification is accepted. Remote publication and exact-commit CI remain separate.
+
+Current exports took 6.61 seconds with 855.68 MiB sampled owned RSS; archives took 4.76 seconds with 866.96 MiB. Both retained the one-CPU/1-GiB/120-second guard, verified cleanup and closed ports, with no page/proxy errors or inference mutations. NumPy 2.4.2 decoded all 18 files across six BF16/F16/F32 slice/vector cases. These are observed bounded synthetic runs, not general performance or permission guarantees.
+
+## Inherited source qualification
+
+Earlier production assets at `f9d8a56514a210314af82872040c6c03e90d7f86` passed 60 release tests and release build; that binary SHA-256 was `54d13bc37c43dd805444588a90841dcf0089051ecb35503595d3ecaff4a434fe`. The earlier measurements below remain historical. The combined batch above received a fresh build and runtime qualification rather than reusing that binary.
 
 The deterministic source fixture has 84 finite BF16/F16/F32 values in six tensors: three `[2,3,4]` tensors with distinct leading slices and three four-value vectors. Its 640-byte safetensors SHA-256 is `88a2a3c670327ac387ec6133f8b4773b7e0f6ad72b70c1178d44c7781d0846d5`. It includes signed zero, minimum subnormals and maximum finite values. No trained weights or private prompts are used.
 
-## Executed checks
+### Earlier executed checks
 
 Chromium `153.0.8010.12`, through installed Playwright `1.62.1`, qualified two separate ordinary browser lifetimes:
 
