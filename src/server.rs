@@ -1,3 +1,5 @@
+mod reuse;
+mod reuse_transport;
 use crate::{
     headroom, render, require,
     slice::{parse_indices, TensorSlice},
@@ -5,6 +7,7 @@ use crate::{
     state::State,
     Result,
 };
+use reuse_transport::Connection;
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
@@ -107,6 +110,16 @@ fn write_response(
     Ok(())
 }
 fn response_head(status: u16, mime: &str, length: usize, headers: &str) -> String {
+    response_head_with_connection(status, mime, length, headers, false)
+}
+fn response_head_with_connection(
+    status: u16,
+    mime: &str,
+    length: usize,
+    headers: &str,
+    reusable: bool,
+) -> String {
+    let connection = if reusable { "keep-alive" } else { "close" };
     let phrase = match status {
         200 => "OK",
         202 => "Accepted",
@@ -120,7 +133,7 @@ fn response_head(status: u16, mime: &str, length: usize, headers: &str) -> Strin
     } else {
         "Cache-Control: no-store\r\n"
     };
-    format!("HTTP/1.1 {status} {phrase}\r\nContent-Type: {mime}\r\nContent-Length: {length}\r\nConnection: close\r\n{cache}X-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'\r\n{headers}\r\n")
+    format!("HTTP/1.1 {status} {phrase}\r\nContent-Type: {mime}\r\nContent-Length: {length}\r\nConnection: {connection}\r\n{cache}X-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'\r\n{headers}\r\n")
 }
 pub fn reply(mut socket: TcpStream, status: u16, mime: &str, body: &[u8], headers: &str) {
     let text = response_head(status, mime, body.len(), headers);
@@ -186,7 +199,7 @@ pub(crate) fn error(s: TcpStream, status: u16, e: impl std::fmt::Display) {
 enum Job {
     Wake,
     Calibrate(usize),
-    Tile(TcpStream, Query),
+    Tile(Connection, Query),
 }
 pub(crate) fn disconnected(s: &TcpStream) -> bool {
     let _ = s.set_nonblocking(true);
@@ -350,6 +363,8 @@ fn accept_backoff(failures: u32) -> Duration {
 pub fn serve(state: Arc<State>, port: u16) -> Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let port = listener.local_addr()?.port();
+    let reuse = reuse_transport::Runtime::new().ok();
+    let worker_reuse = reuse.clone();
     let (sender, receiver) = sync_channel::<Job>(8);
     let worker = state.clone();
     std::thread::Builder::new().name("atlas-numeric-worker".into()).spawn(move || loop {
@@ -378,8 +393,12 @@ pub fn serve(state: Arc<State>, port: u16) -> Result<()> {
                     worker.progress.lock().unwrap().all_requested = false;
                 }
             }
-            Some(Job::Tile(socket, q)) => {
-                if disconnected(&socket) { continue; }
+            Some(Job::Tile(connection, q)) => {
+                if disconnected(&connection.socket) { continue; }
+                if connection.expired(Instant::now()) {
+                    connection.close_error(503, "Connection reuse eligibility expired");
+                    continue;
+                }
                 let start = Instant::now();
                 let result = (|| {
                     let binding = q.get("binding", "");
@@ -394,18 +413,19 @@ pub fn serve(state: Arc<State>, port: u16) -> Result<()> {
                         if !q.get("binding", "").is_empty() {
                             headers.push_str("Cache-Control: private, max-age=86400, immutable\r\n");
                         }
-                        reply(socket, 200, "image/png", &png, &headers);
+                        reuse_transport::reply_tile(connection, &png, &headers, worker_reuse.as_deref());
                     }
                     Err(error_value) => {
                         let code = if error_value.to_string().contains("not ready") { 503 } else { 400 };
-                        error(socket, code, error_value);
+                        connection.close_error(code, error_value);
                     }
                 }
             }
             None => break,
         }
     })?;
-    let (dispatch_sender, dispatch_receiver) = sync_channel::<CompletedRequest>(DISPATCH_CAPACITY);
+    let (dispatch_sender, dispatch_receiver) =
+        sync_channel::<reuse_transport::Completed>(DISPATCH_CAPACITY);
     let dispatch_state = state.clone();
     let numeric_sender = sender.clone();
     let _dispatch_thread = std::thread::Builder::new()
@@ -421,7 +441,7 @@ pub fn serve(state: Arc<State>, port: u16) -> Result<()> {
         json!({"listening":format!("http://127.0.0.1:{port}"),"metadata_ready_seconds":state.started.elapsed().as_secs_f64(),"header_bytes":state.source.header_bytes,"tensors":state.source.tensors.len(),"peak_rss_mib":crate::peak_rss_mib(),"resources":crate::resources::snapshot()?})
     );
     std::io::stdout().flush()?;
-    run_transport(listener, dispatch_sender)
+    reuse_transport::run(listener, dispatch_sender, reuse)
 }
 
 // Shared bounded intake; comparison uses the same admission and header deadlines.
@@ -596,10 +616,21 @@ pub(crate) fn parse_request(raw: &[u8], port: u16) -> Result<Request> {
 fn dispatch(
     state: &Arc<State>,
     sender: &SyncSender<Job>,
-    socket: TcpStream,
+    mut connection: Connection,
     raw: &[u8],
     port: u16,
 ) {
+    if connection.expired(Instant::now()) {
+        connection.close_error(503, "Connection reuse eligibility expired");
+        return;
+    }
+    if connection.lease.is_some() && !reuse::bounded_framing(raw) {
+        connection.close_error(
+            400,
+            "One bounded HTTP header required on a reused connection",
+        );
+        return;
+    }
     let request = parse_request(raw, port).and_then(|request| {
         headroom()?;
         Ok(request)
@@ -608,10 +639,22 @@ fn dispatch(
     let (method, path, q, headers) = match request {
         Ok(v) => v,
         Err(e) => {
-            error(socket, 400, e);
+            connection.close_error(400, e);
             return;
         }
     };
+    connection.eligible = reuse::candidate(
+        raw,
+        &method,
+        &path,
+        q.get("binding", ""),
+        headers.get("connection").map(String::as_str).unwrap_or(""),
+    );
+    let Connection {
+        socket,
+        lease,
+        eligible,
+    } = connection;
     if method == "POST" && path == "/api/calibrate" {
         if headers.get("x-atlas-local").map(String::as_str) != Some("1") {
             error(socket, 400, "Local action header required");
@@ -670,13 +713,20 @@ fn dispatch(
         return;
     }
     if path == "/tile" {
-        match sender.try_send(Job::Tile(socket, q)) {
+        match sender.try_send(Job::Tile(
+            Connection {
+                socket,
+                lease,
+                eligible,
+            },
+            q,
+        )) {
             Ok(()) => {}
             Err(e) => {
                 let (std::sync::mpsc::TrySendError::Full(job)
                 | std::sync::mpsc::TrySendError::Disconnected(job)) = e;
                 if let Job::Tile(s, _) = job {
-                    error(s, 503, "Numeric queue full; retry shortly")
+                    s.close_error(503, "Numeric queue full; retry shortly")
                 }
             }
         }
