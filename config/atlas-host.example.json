@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "profile": "local-v1",
+  "bind": "127.0.0.1",
+  "ports": {"coordinator": 8796, "renderer": 8797},
+  "paths": {"registry": "../cache-host/registry.json", "cache": "../cache-host/artifacts"}
+}

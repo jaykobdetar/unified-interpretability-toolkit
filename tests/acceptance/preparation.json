@@ -1,0 +1,42 @@
+{
+  "runtime_base": "dbb2f314f392178332f72e2a25a0d05e1b3df08e",
+  "runtime_blobs_unchanged": {
+    "src/lib.rs": "8198910dabbbcef73807ebdbd5d69983aa9c6242",
+    "src/main.rs": "e87b7d51d8ac87348e890ff0d73dbe3b0bffd191",
+    "src/render.rs": "68757d901ceb08042f417e3eaa24b97ae68a5f2b",
+    "src/server.rs": "2189b08d9a717a2be2d510e2c404b28450ad43cf",
+    "src/source.rs": "22a57adf90bc4086c0474fecceb145ae8f33b0c7",
+    "src/state.rs": "52d5280b5b44fd1c02f5332f43b92b2bfe711594",
+    "tools/check_model_hashes.py": "9188a6f731e6ed462047385eb6802c269f61e8ad",
+    "tools/final_open_latency.py": "0c108d091a2cf9b3bae1f5f2b89317985bc5406c",
+    "tools/guarded-browser-test.py": "ea08587ff523f4afddb06a9b8761cedda7b17c94",
+    "tools/guarded-build.py": "af84ed061b0e0e8665ccf36c998aa7865868f4f3",
+    "tools/guarded-inference-test.py": "fe480485f6085d80474cdc290e0bc1b490f14bea",
+    "tools/inference_edits.py": "74d22df2709b5d8bee5b965270edbd4867895f14",
+    "tools/inference_observations.py": "f656fa70033d0d9875289c870ab14225b84776fb",
+    "tools/inference_prompt_pair.py": "e2b644234376385875c1a6af63602a33860883a7",
+    "tools/inference_sweep.py": "6711e45f20891cd266ce0e83b7b2d028f18a422e",
+    "tools/inference_worker.py": "06c7786a9782134d71833addc9c749f7eb0492c2",
+    "tools/live_inference.py": "39afc53271e8fa3e7cfdccc70164e6ede2aab65f",
+    "tools/make_fixture.py": "82fa66fc3347c5526271a0424c95d78cb73815e0",
+    "tools/reference_server.py": "6716338f869297b633eb88c349a0b02a3c0c4983",
+    "tools/smoke.py": "75e8e9236e6d931151aa71b30dcc0ada140242c9",
+    "web/app.js": "b15f45d04213569d14e1bb7864a774eeaddae8eb",
+    "web/atlas-tools.js": "c675529f2bc92e5e633beb124dff4a8ca26240e2",
+    "web/index.html": "7ff5d5f2029fdf026475d379d2885771c41bead2",
+    "web/inference.js": "e0df60f68a225c8a52c6647c6ec7bb5e6ce7c926",
+    "web/style.css": "26a41f9176fce11afd81c9a8ae7cc8221f42adbc",
+    "web/vendor/OpenSeadragon-LICENSE.txt": "eb18aceff4f748a3cba80b685ce5ff4acf40ecc8",
+    "web/vendor/openseadragon.min.js": "1dbf094a69d32b6d8f8762d29f872e2b80b0b744",
+    "web/workspace-tools.js": "2fe46cfcdc4b95e479cc345d38bf6298963d1abd"
+  },
+  "checks": [
+    "Node syntax: prompt-pair-browser, sweep-maximum-browser, support",
+    "Pure Node acceptance-support fixtures passed",
+    "Five fake owner-client tests passed",
+    "Python harness/client AST syntax passed"
+  ],
+  "real_browser_model_build_listener_capacity_checks_run": false,
+  "production_defects_discovered": [],
+  "real_qualification": "PENDING"
+}

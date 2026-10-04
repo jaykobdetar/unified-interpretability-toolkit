@@ -1,0 +1,81 @@
+{
+  "schema": "weight-atlas-head-layout-v1",
+  "adapter_id": "builtin-llama-eager",
+  "adapter_version": 1,
+  "source_model": {
+    "repo": "HuggingFaceTB/SmolLM2-135M",
+    "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+    "weights_sha256": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1",
+    "config_sha256": "1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843"
+  },
+  "model_type": "llama",
+  "width": 576,
+  "layers": 30,
+  "query_heads": 9,
+  "kv_heads": 3,
+  "head_dim": 64,
+  "queries_per_kv": 3,
+  "vocab_size": 49152,
+  "intermediate_size": 1536,
+  "capture_sites": {
+    "block": "decoder block output after attention and MLP residual additions, before final RMSNorm",
+    "attention": "attention output after o_proj, before attention residual addition",
+    "mlp": "MLP output after down_proj, before MLP residual addition"
+  },
+  "layout": "llama-eager-head-major-v1",
+  "head_ablation": "o_proj columns",
+  "query_intervention": "q_proj rows",
+  "evidence": "pinned_configuration",
+  "runtime_verified": false,
+  "inference_support": "requires complete pinned files, supported runtime and resource admission",
+  "native_weight_layout": [
+    "output_feature",
+    "input_feature"
+  ],
+  "projection_mappings": {
+    "q_proj": {
+      "axis": "rows",
+      "head_kind": "query",
+      "heads": 9,
+      "head_dim": 64,
+      "shape": [
+        576,
+        576
+      ]
+    },
+    "k_proj": {
+      "axis": "rows",
+      "head_kind": "kv",
+      "heads": 3,
+      "head_dim": 64,
+      "shape": [
+        192,
+        576
+      ]
+    },
+    "v_proj": {
+      "axis": "rows",
+      "head_kind": "kv",
+      "heads": 3,
+      "head_dim": 64,
+      "shape": [
+        192,
+        576
+      ]
+    },
+    "o_proj": {
+      "axis": "columns",
+      "head_kind": "query_output",
+      "heads": 9,
+      "head_dim": 64,
+      "shape": [
+        576,
+        576
+      ]
+    }
+  },
+  "ranges": "zero-based half-open: [head * head_dim, (head + 1) * head_dim)",
+  "query_to_kv": "floor(query_head / queries_per_kv)",
+  "kv_to_queries": "[kv_head * queries_per_kv, (kv_head + 1) * queries_per_kv)",
+  "slice_support": "stored rank-two matrices only; canonical empty slice; no higher-rank inference handoff"
+}

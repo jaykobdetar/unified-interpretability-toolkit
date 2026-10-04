@@ -1,0 +1,44 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CARGO_BUILD_JOBS: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Select Rust toolchain
+        run: rustup toolchain install 1.92.0 --profile minimal --component clippy && rustup default 1.92.0
+      - name: Python and JavaScript syntax, shell syntax
+        run: python3 tools/check.py lint
+      - name: Portable contract tests
+        run: python3 tools/check.py contracts
+      - name: Offline Rust lint
+        run: python3 tools/guarded-build.py clippy --all-targets -- -D warnings
+      - name: Offline Rust tests
+        run: python3 tools/guarded-build.py test --release -- --test-threads=1
+      - name: Offline release build
+        run: python3 tools/guarded-build.py build --release
+      - name: Tiny synthetic fixture smoke
+        run: python3 tools/smoke.py
+      - name: Launcher preflight
+        run: ./run-atlas.sh --demo --check

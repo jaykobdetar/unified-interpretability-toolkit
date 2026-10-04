@@ -1,0 +1,8 @@
+# Tested direct runtime constraints; no installation is performed by the launcher.
+# Select the CPU-only PyTorch distribution from its official source.
+# This is not a complete transitive environment lock.
+torch==2.8.0+cpu
+transformers==4.56.2
+tokenizers==0.22.2
+safetensors==0.8.0
+numpy==2.5.3

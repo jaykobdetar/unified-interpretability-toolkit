@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "model_identity": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "tensor": 7,
+  "name": "example.weight",
+  "dtype": "F32",
+  "shape": [2, 3, 4],
+  "rows": 3,
+  "cols": 4,
+  "slice": {
+    "leading_indices": [1],
+    "display_axes": [1, 2]
+  }
+}

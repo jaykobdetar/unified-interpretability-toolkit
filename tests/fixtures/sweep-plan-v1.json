@@ -1,0 +1,133 @@
+{
+  "fixture": "public synthetic request, no model values",
+  "request": {
+    "mode": "sweep",
+    "source_model": {
+      "repo": "HuggingFaceTB/SmolLM2-135M",
+      "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "weights_sha256": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1"
+    },
+    "prompts": [
+      "public synthetic"
+    ],
+    "targets": [
+      {
+        "kind": "offset",
+        "layer": 0,
+        "heads": [
+          0
+        ],
+        "offset": 0
+      }
+    ],
+    "operation": "zero",
+    "seed": 7,
+    "capture_layer": 7,
+    "activation_site": "block"
+  },
+  "plan": {
+    "version": "weight-atlas-sweep-plan-v1",
+    "seed": 7,
+    "control_version": "weight-atlas-sweep-control-v1",
+    "source_model": {
+      "repo": "HuggingFaceTB/SmolLM2-135M",
+      "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "weights_sha256": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1"
+    },
+    "targets": [
+      {
+        "kind": "offset",
+        "layer": 0,
+        "heads": [
+          0
+        ],
+        "offset": 0
+      }
+    ],
+    "cases": [
+      {
+        "id": "empty",
+        "role": "empty_control",
+        "edits": [],
+        "selected_cells": 0,
+        "target": null,
+        "control_geometry": null
+      },
+      {
+        "id": "target-1",
+        "role": "target",
+        "target": {
+          "kind": "offset",
+          "layer": 0,
+          "heads": [
+            0
+          ],
+          "offset": 0
+        },
+        "edits": [
+          {
+            "tensor": "model.layers.0.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "zero",
+            "start": 0,
+            "end": 1
+          }
+        ],
+        "selected_cells": 576,
+        "control_geometry": null
+      },
+      {
+        "id": "matched_control-1",
+        "role": "matched_control",
+        "target": {
+          "kind": "offset",
+          "layer": 0,
+          "heads": [
+            0
+          ],
+          "offset": 55
+        },
+        "edits": [
+          {
+            "tensor": "model.layers.0.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "zero",
+            "start": 55,
+            "end": 56
+          }
+        ],
+        "selected_cells": 576,
+        "control_geometry": "different offset: one complete row in each same named head"
+      }
+    ],
+    "prompt_count": 1,
+    "records": 3,
+    "prefills": 6,
+    "capture_layer": 7,
+    "activation_site": "block",
+    "coverage": "explicit subset only; 30 layers, 9 query heads/layer, 64 offsets/head; no complete head sweep",
+    "limits": {
+      "targets": 2,
+      "interventions_including_controls": 5,
+      "prompts": 2,
+      "probes_per_prompt": 1,
+      "records": 10,
+      "prefills": 20,
+      "edits": 8,
+      "selected_cells": 65536,
+      "wall_seconds": 120,
+      "worker_cpu_seconds": 90,
+      "control_version": "weight-atlas-sweep-control-v1",
+      "scope": "explicit query-head/offset subset only; fixed prompt context; no generation or automatic resume"
+    },
+    "digest": "3ae820fd3c6c5828f59b5f2ef9163f2e98da2782c42215001780e0a22a5a59a9"
+  }
+}

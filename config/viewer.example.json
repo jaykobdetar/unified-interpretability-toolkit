@@ -1,0 +1,7 @@
+{
+  "model": "/path/to/your/safetensors-model",
+  "cache": "../cache",
+  "port": 8775,
+  "name": "My local model",
+  "revision": "local selection; revision not asserted"
+}

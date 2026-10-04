@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "repository": "weight-atlas/tiny-bf16",
+  "revision": "fixture-v1",
+  "license": {"id": "Apache-2.0", "accepted": true, "file": null},
+  "provenance": "synthetic_fixture",
+  "files": [
+    {"name": "tiny.safetensors", "bytes": 244, "sha256": "c0075bfc55f9e51ccac3c5511ea55a5ca19744b002921e8d2e4ae3f60d321be3"}
+  ]
+}

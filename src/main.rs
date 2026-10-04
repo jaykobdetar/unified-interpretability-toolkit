@@ -1,0 +1,428 @@
+use serde_json::{json, Value};
+use std::{
+    collections::BTreeMap,
+    io::Write,
+    os::unix::fs::FileExt,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Instant,
+};
+use weight_atlas_rust::{
+    atomic_write, configure, headroom, peak_rss_mib, render, require, server,
+    slice::{parse_indices, TensorSlice},
+    source::{Dtype, Source},
+    state::State,
+    Result,
+};
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("ERROR: {e}");
+        std::process::exit(1)
+    }
+}
+fn run() -> Result<()> {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    run_args(args, configure)
+}
+fn run_args(args: Vec<String>, configure: impl FnOnce() -> Result<usize>) -> Result<()> {
+    if args.is_empty() || args[0] == "--help" {
+        println!("Weight Atlas Rust\nCommands: metadata | serve | calibrate | verify | tile | inspect | bench\nComparison: compare-metadata | compare-calibrate | compare-tile | compare-inspect | compare-serve; explicit --model A --compare-model B; --cache outside both\nComparison tile: --tensor ID --quantity a|b|delta|abs_delta --mapping linear|asinh|magnitude --out PREFIX; compare-calibrate requires --tensor ID\nRequired: --model DIRECTORY\nCommon: --cache DIRECTORY (default ./cache) --name NAME --revision REVISION\nserve: --port 8775 --verify-sha false; true hashes all bytes before listening; no remote binding\ncalibrate: --tensor ID (omit for all); resumes valid calibration\nverify: full SHA-256 reads, compares local model-api.json if present\ntile: --tensor ID --rules global_linear,global_asinh --level L --x X --y Y --out PREFIX\ninspect: --tensor ID --row R --col C\nbench: --tensor ID --repeats 3; factors 1,4,16, both global rules\nSingle CPU, 768 MiB address-space limit, >=3 GiB available RAM, >=25 GiB disk reserve.\nCache identity checks do not claim a fresh full-content hash.");
+        return Ok(());
+    }
+    let command = &args[0];
+    let mut opts = BTreeMap::new();
+    require((args.len() - 1).is_multiple_of(2), "Options require values")?;
+    for p in args[1..].chunks_exact(2) {
+        require(p[0].starts_with("--"), "Expected --option value")?;
+        require(
+            opts.insert(p[0][2..].to_owned(), p[1].clone()).is_none(),
+            "Duplicate CLI option",
+        )?
+    }
+    if command == "profile-worker" {
+        return weight_atlas_rust::profile_worker::run(&opts);
+    }
+    let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
+    let model = PathBuf::from(opts.get("model").ok_or("--model DIRECTORY is required")?);
+    let cpu = configure()?;
+    let start = Instant::now();
+    if command == "metadata" {
+        let s = Source::open(&model)?;
+        println!(
+            "{}",
+            json!({"source_directory":s.root,"source_identity":s.identity,"header_bytes":s.header_bytes,"source_bytes":s.bytes,"tensor_count":s.tensors.len(),"parameter_count":s.tensors.iter().map(|t|t.count).sum::<usize>(),"catalog":s.tensors,"shards":s.shards,"elapsed_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"cpu":cpu,"full_sha_recomputed":false})
+        );
+        return Ok(());
+    }
+    if command.starts_with("compare-") {
+        return run_comparison(command, &opts, &model, cpu);
+    }
+    let state = Arc::new(State::open(
+        &model,
+        Path::new(&get("cache", "cache")),
+        opts.get("name").cloned(),
+        opts.get("revision").cloned(),
+    )?);
+    if command == "serve" && get("verify-sha", "false") == "true" {
+        verify_source(&state, cpu, Instant::now())?;
+    }
+    match command.as_str() {
+        "serve" => server::serve(state, get("port", "8775").parse()?)?,
+        "hosted-renderer" => weight_atlas_rust::hosted_renderer::run(state,
+            opts.get("channel-fd").ok_or("Private channel required")?.parse()?)?,
+        "calibrate" => {
+            let ids = if let Some(id) = opts.get("tensor") {
+                vec![id.parse()?]
+            } else {
+                state
+                    .source
+                    .tensors
+                    .iter()
+                    .filter(|t| t.available)
+                    .map(|t| t.id)
+                    .collect()
+            };
+            let mut minimum = headroom()?;
+            for id in ids {
+                minimum = minimum.min(headroom()?);
+                state.calibrate_one(id)?
+            }
+            let model = state.model()?;
+            println!(
+                "{}",
+                json!({"model":model,"wall_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"minimum_available_gib":minimum as f64/1024f64.powi(3),"cpu":cpu})
+            );
+        }
+        "verify" => println!("{}", verify_source(&state, cpu, Instant::now())?),
+        "inspect" => println!(
+            "{}",
+            server::inspect(
+                &state,
+                &server::query(
+                    &opts
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect::<Vec<_>>()
+                )
+            )?
+        ),
+        "tile" => {
+            let id: usize = get("tensor", "0").parse()?;
+            let slice = TensorSlice::new(&state.source, id, &parse_indices(&get("slice", ""))?)?;
+            let t = &slice.tensor;
+            let level: u32 = get("level", &t.max_level.to_string()).parse()?;
+            let rules = get("rules", "global_linear,global_asinh");
+            let rules = rules.split(',').collect::<Vec<_>>();
+            let luts = rules
+                .iter()
+                .map(|r| {
+                    render::validate_rule_dtype(r, Dtype::parse(&t.dtype)?)?;
+                    render::legend(r, state.stats(id).as_ref(), state.global())
+                        .and_then(|l| state.tensor_mapping(t, r, &l))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let refs = luts.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+            let (fields, m) = render::tile_fields(
+                &state.source,
+                t,
+                &refs,
+                level,
+                get("x", "0").parse()?,
+                get("y", "0").parse()?,
+            )?;
+            let out = get("out", "tile");
+            for (rule, field) in rules.iter().zip(&fields) {
+                std::fs::write(
+                    format!("{out}-{rule}.png"),
+                    render::png_for_rule(rule, field, m.width, m.height)?,
+                )?;
+                let mut f = std::fs::File::create(format!("{out}-{rule}.f64le"))?;
+                for x in field {
+                    f.write_all(&x.to_le_bytes())?
+                }
+            }
+            println!(
+                "{}",
+                json!({"metrics":m,"seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib()})
+            );
+        }
+        "bench" => {
+            let id = get("tensor", "0").parse()?;
+            let t = state.source.tensor(id)?;
+            let reps: usize = get("repeats", "3").parse()?;
+            require((1..=30).contains(&reps), "repeats 1–30")?;
+            let mut records = Vec::new();
+            for f in [1usize, 4, 16] {
+                if f > 1usize << t.max_level {
+                    continue;
+                }
+                let level = t.max_level - f.trailing_zeros();
+                let mut times = Vec::new();
+                let mut last = None;
+                for _ in 0..reps {
+                    let begin = Instant::now();
+                    let luts = render::RULES[..2]
+                        .iter()
+                        .map(|r| {
+                            render::legend(r, state.stats(id).as_ref(), state.global())
+                                .and_then(|l| state.tensor_mapping(t, r, &l))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let refs = luts.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+                    let (fields, m) = render::tile_fields(&state.source, t, &refs, level, 0, 0)?;
+                    let mut bytes = 0;
+                    for field in fields {
+                        bytes += render::png(&field, m.width, m.height)?.len()
+                    }
+                    times.push(begin.elapsed().as_secs_f64());
+                    last = Some(json!({"metrics":m,"png_bytes":bytes}));
+                }
+                records.push(json!({"tensor":t.name,"shape":t.shape,"factor":f,"level":level,"runs_seconds":times,"last":last}));
+            }
+            println!(
+                "{}",
+                json!({"records":records,"wall_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"cpu":cpu})
+            );
+        }
+        _ => return Err("Unknown command; use --help".into()),
+    };
+    Ok(())
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn help_and_argument_errors_precede_resource_or_model_work() {
+        for args in [vec![], vec!["--help".into()]] {
+            let called = std::cell::Cell::new(false);
+            run_args(args, || {
+                called.set(true);
+                Err("Injected low-memory guard".into())
+            })
+            .unwrap();
+            assert!(!called.get());
+        }
+        let called = std::cell::Cell::new(false);
+        assert!(run_args(vec!["metadata".into()], || {
+            called.set(true);
+            Err("Injected low-memory guard".into())
+        })
+        .is_err());
+        assert!(!called.get());
+        let called = std::cell::Cell::new(false);
+        let result = run_args(
+            vec!["metadata".into(), "--model".into(), "/unused".into()],
+            || {
+                called.set(true);
+                Err("Injected low-memory guard".into())
+            },
+        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Injected low-memory guard"));
+        assert!(called.get());
+    }
+}
+
+fn run_comparison(
+    command: &str,
+    opts: &BTreeMap<String, String>,
+    model: &Path,
+    cpu: usize,
+) -> Result<()> {
+    use weight_atlas_rust::{comparison::Comparison, comparison_http};
+    let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
+    let b = PathBuf::from(
+        opts.get("compare-model")
+            .ok_or("--compare-model DIRECTORY is required for comparison")?,
+    );
+    let pair = Arc::new(Comparison::open(
+        model,
+        &b,
+        Path::new(&get("cache", "cache-comparison")),
+    )?);
+    let id = get("tensor", "0").parse()?;
+    let output = match command {
+        "compare-metadata" => pair.model()?,
+        "compare-calibrate" => {
+            require(
+                opts.contains_key("tensor"),
+                "Comparison calibration requires an explicit --tensor ID",
+            )?;
+            pair.calibrate_one(id)?;
+            pair.model()?
+        }
+        "compare-inspect" => {
+            pair.inspect(id, get("row", "0").parse()?, get("col", "0").parse()?)?
+        }
+        "compare-tile" => {
+            let quantity = get("quantity", "delta");
+            let mapping = get("mapping", "linear");
+            let level = get("level", &pair.pair(id)?.max_level.to_string()).parse()?;
+            let x = get("x", "0").parse()?;
+            let y = get("y", "0").parse()?;
+            let prefix =
+                pair.output_prefix(Path::new(opts.get("out").ok_or("--out PREFIX required")?))?;
+            let (field, metrics) = pair.fields(id, &quantity, &mapping, level, x, y)?;
+            let rule = if quantity == "abs_delta" || mapping == "magnitude" {
+                "tensor_magnitude"
+            } else {
+                "tensor_linear"
+            };
+            let png = render::png_for_rule(rule, &field, metrics.width, metrics.height)?;
+            let parent = prefix
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
+            std::fs::create_dir_all(parent)?;
+            let stem = prefix.to_string_lossy();
+            atomic_write(Path::new(&format!("{stem}.png")), &png)?;
+            atomic_write(
+                Path::new(&format!("{stem}.f64le")),
+                &field
+                    .iter()
+                    .flat_map(|x| x.to_le_bytes())
+                    .collect::<Vec<_>>(),
+            )?;
+            let mut result = pair.identity_metadata();
+            result["pair_id"] = json!(id);
+            result["quantity"] = json!(quantity);
+            result["mapping"] = json!(mapping);
+            result["legend"] = pair.legend(id, &quantity, &mapping)?;
+            result["metrics"] = json!(metrics);
+            result["cpu"] = json!(cpu);
+            result
+        }
+        "compare-serve" => {
+            comparison_http::serve(pair, get("port", "8776").parse()?)?;
+            return Ok(());
+        }
+        _ => return Err("Unknown comparison command".into()),
+    };
+    println!("{}", output);
+    Ok(())
+}
+
+fn verify_source(state: &State, cpu: usize, start: Instant) -> Result<Value> {
+    use sha2::{Digest, Sha256};
+    let mut records = Vec::new();
+    let mut buf = vec![0u8; 2 * 1048576];
+    let mut minimum = headroom()?;
+    let ap = state.source.root.join("model-api.json");
+    let official: Option<Value> = if ap.exists() {
+        Some(weight_atlas_rust::source::json_unique(
+            &weight_atlas_rust::source::read_small(&ap, 8 * 1024 * 1024)?,
+        )?)
+    } else {
+        None
+    };
+    for (s, f) in state.source.shards.iter().zip(&state.source.files) {
+        let mut h = Sha256::new();
+        let mut offset = 0;
+        while offset < s.fingerprint.size {
+            minimum = minimum.min(headroom()?);
+            let n = (s.fingerprint.size - offset).min(buf.len() as u64) as usize;
+            f.read_exact_at(&mut buf[..n], offset)?;
+            h.update(&buf[..n]);
+            offset += n as u64
+        }
+        state.source.check()?;
+        let hash = format!("{:x}", h.finalize());
+        let expected = official
+            .as_ref()
+            .and_then(|v| v["siblings"].as_array())
+            .and_then(|a| a.iter().find(|v| v["rfilename"] == s.name))
+            .and_then(|v| v["lfs"]["sha256"].as_str());
+        if let Some(e) = expected {
+            require(
+                hash == e,
+                "Full shard SHA mismatch against local pinned metadata",
+            )?
+        }
+        records.push(json!({"shard":s.name,"sha256":hash,"matches_saved_expected_sha":expected.map(|e|e==hash),"bytes":s.fingerprint.size}));
+        eprintln!("Hashed {}", s.name);
+    }
+    let v = json!({"source_identity":state.source.identity,"shards":records,"wall_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"minimum_available_gib":minimum as f64/1024f64.powi(3),"cpu":cpu,"scope":"Fresh full source SHA; comparisons use explicitly selected local metadata, not a new remote trust check"});
+    atomic_write(
+        &state.root.join("verification.json"),
+        &serde_json::to_vec_pretty(&v)?,
+    )?;
+    *state.fresh_hashes.lock().unwrap() = Some(v.clone());
+    Ok(v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn actual_hash_pass_counts_missing_partial_and_complete_expectations() {
+        let root = std::env::temp_dir().join(format!("atlas-hash-scope-{}", std::process::id()));
+        let model = root.join("model");
+        std::fs::create_dir_all(&model).unwrap();
+        let mut siblings = Vec::new();
+        for id in 0..3 {
+            let header = format!(
+                "{{\"tensor{id}\":{{\"dtype\":\"BF16\",\"shape\":[1],\"data_offsets\":[0,2]}}}}"
+            );
+            let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+            bytes.extend_from_slice(header.as_bytes());
+            bytes.extend_from_slice(&[0x80, 0x3f]);
+            let filename = format!("shard-{id}.safetensors");
+            std::fs::write(model.join(&filename), &bytes).unwrap();
+            siblings.push(
+                json!({"rfilename":filename,"lfs":{"sha256":weight_atlas_rust::sha(&bytes)}}),
+            );
+        }
+        for (trial, expected_count) in [None, Some(0), Some(1), Some(3)].iter().enumerate() {
+            if let Some(n) = expected_count {
+                std::fs::write(
+                    model.join("model-api.json"),
+                    json!({"siblings":&siblings[..*n]}).to_string(),
+                )
+                .unwrap();
+            }
+            let cache = root.join(format!("cache-{trial}"));
+            let state = State::open(&model, &cache, None, None).unwrap();
+            assert_eq!(state.model().unwrap()["coverage"]["sha_hashed_shards"], 0);
+            let report = verify_source(&state, 0, Instant::now()).unwrap();
+            assert_eq!(report["shards"].as_array().unwrap().len(), 3);
+            let coverage = state.model().unwrap()["coverage"].clone();
+            assert_eq!(coverage["sha_hashed_shards"], 3);
+            assert_eq!(
+                coverage["sha_expected_matched_shards"],
+                expected_count.unwrap_or(0)
+            );
+            assert_eq!(coverage["sha_verified_shards"], expected_count.unwrap_or(0));
+            assert_eq!(
+                coverage["sha_missing_expected_shards"],
+                3 - expected_count.unwrap_or(0)
+            );
+            drop(state);
+            let reopened = State::open(&model, &cache, None, None).unwrap();
+            assert_eq!(
+                reopened.model().unwrap()["coverage"]["sha_hashed_shards"],
+                0
+            );
+            assert_eq!(
+                reopened.model().unwrap()["coverage"]["sha_verified_shards"],
+                0
+            );
+        }
+        siblings[0]["lfs"]["sha256"] = json!("0".repeat(64));
+        std::fs::write(
+            model.join("model-api.json"),
+            json!({"siblings":siblings}).to_string(),
+        )
+        .unwrap();
+        let state = State::open(&model, &root.join("cache-mismatch"), None, None).unwrap();
+        assert!(verify_source(&state, 0, Instant::now()).is_err());
+        assert_eq!(state.model().unwrap()["coverage"]["sha_hashed_shards"], 0);
+        assert!(!state.root.join("verification.json").exists());
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

@@ -1,0 +1,393 @@
+{
+  "scope": "Pure plan expansion only; NO model/session executed",
+  "request_without_digest": {
+    "mode": "sweep",
+    "source_model": {
+      "repo": "HuggingFaceTB/SmolLM2-135M",
+      "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "weights_sha256": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1"
+    },
+    "prompts": [
+      "The capital of France is",
+      "1, 2, 3,"
+    ],
+    "targets": [
+      {
+        "kind": "head",
+        "layer": 0,
+        "head": 0
+      },
+      {
+        "kind": "offset",
+        "layer": 7,
+        "heads": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7
+        ],
+        "offset": 3
+      }
+    ],
+    "operation": "scale",
+    "scale": 0.5,
+    "seed": 7,
+    "capture_layer": 7,
+    "activation_site": "attention"
+  },
+  "resolved_plan": {
+    "version": "weight-atlas-sweep-plan-v1",
+    "seed": 7,
+    "control_version": "weight-atlas-sweep-control-v1",
+    "source_model": {
+      "repo": "HuggingFaceTB/SmolLM2-135M",
+      "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "weights_sha256": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1"
+    },
+    "targets": [
+      {
+        "kind": "head",
+        "layer": 0,
+        "head": 0
+      },
+      {
+        "kind": "offset",
+        "layer": 7,
+        "heads": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7
+        ],
+        "offset": 3
+      }
+    ],
+    "cases": [
+      {
+        "id": "empty",
+        "role": "empty_control",
+        "edits": [],
+        "selected_cells": 0,
+        "target": null,
+        "control_geometry": null
+      },
+      {
+        "id": "target-1",
+        "role": "target",
+        "target": {
+          "kind": "head",
+          "layer": 0,
+          "head": 0
+        },
+        "edits": [
+          {
+            "tensor": "model.layers.0.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "scale",
+            "start": 0,
+            "end": 64,
+            "scale": 0.5
+          }
+        ],
+        "selected_cells": 36864,
+        "control_geometry": null
+      },
+      {
+        "id": "matched_control-1",
+        "role": "matched_control",
+        "target": {
+          "kind": "head",
+          "layer": 0,
+          "head": 7
+        },
+        "edits": [
+          {
+            "tensor": "model.layers.0.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "scale",
+            "start": 448,
+            "end": 512,
+            "scale": 0.5
+          }
+        ],
+        "selected_cells": 36864,
+        "control_geometry": "different head-aligned contiguous 64-row range"
+      },
+      {
+        "id": "target-2",
+        "role": "target",
+        "target": {
+          "kind": "offset",
+          "layer": 7,
+          "heads": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "offset": 3
+        },
+        "edits": [
+          {
+            "tensor": "model.layers.7.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "scale",
+            "start": 3,
+            "end": 4,
+            "scale": 0.5
+          },
+          {
+            "tensor": "model.layers.7.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "scale",
+            "start": 67,
+            "end": 68,
+            "scale": 0.5
+          },
+          {
+            "tensor": "model.layers.7.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "scale",
+            "start": 131,
+            "end": 132,
+            "scale": 0.5
+          },
+          {
+            "tensor": "model.layers.7.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "scale",
+            "start": 195,
+            "end": 196,
+            "scale": 0.5
+          },
+          {
+            "tensor": "model.layers.7.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "scale",
+            "start": 259,
+            "end": 260,
+            "scale": 0.5
+          },
+          {
+            "tensor": "model.layers.7.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "scale",
+            "start": 323,
+            "end": 324,
+            "scale": 0.5
+          },
+          {
+            "tensor": "model.layers.7.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "scale",
+            "start": 387,
+            "end": 388,
+            "scale": 0.5
+          },
+          {
+            "tensor": "model.layers.7.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "scale",
+            "start": 451,
+            "end": 452,
+            "scale": 0.5
+          }
+        ],
+        "selected_cells": 4608,
+        "control_geometry": null
+      },
+      {
+        "id": "matched_control-2",
+        "role": "matched_control",
+        "target": {
+          "kind": "offset",
+          "layer": 7,
+          "heads": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "offset": 54
+        },
+        "edits": [
+          {
+            "tensor": "model.layers.7.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "scale",
+            "start": 54,
+            "end": 55,
+            "scale": 0.5
+          },
+          {
+            "tensor": "model.layers.7.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "scale",
+            "start": 118,
+            "end": 119,
+            "scale": 0.5
+          },
+          {
+            "tensor": "model.layers.7.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "scale",
+            "start": 182,
+            "end": 183,
+            "scale": 0.5
+          },
+          {
+            "tensor": "model.layers.7.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "scale",
+            "start": 246,
+            "end": 247,
+            "scale": 0.5
+          },
+          {
+            "tensor": "model.layers.7.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "scale",
+            "start": 310,
+            "end": 311,
+            "scale": 0.5
+          },
+          {
+            "tensor": "model.layers.7.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "scale",
+            "start": 374,
+            "end": 375,
+            "scale": 0.5
+          },
+          {
+            "tensor": "model.layers.7.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "scale",
+            "start": 438,
+            "end": 439,
+            "scale": 0.5
+          },
+          {
+            "tensor": "model.layers.7.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "scale",
+            "start": 502,
+            "end": 503,
+            "scale": 0.5
+          }
+        ],
+        "selected_cells": 4608,
+        "control_geometry": "different offset: one complete row in each same named head"
+      }
+    ],
+    "prompt_count": 2,
+    "records": 10,
+    "prefills": 20,
+    "capture_layer": 7,
+    "activation_site": "attention",
+    "coverage": "explicit subset only; 30 layers, 9 query heads/layer, 64 offsets/head; no complete head sweep",
+    "limits": {
+      "targets": 2,
+      "interventions_including_controls": 5,
+      "prompts": 2,
+      "probes_per_prompt": 1,
+      "records": 10,
+      "prefills": 20,
+      "edits": 8,
+      "selected_cells": 65536,
+      "wall_seconds": 120,
+      "worker_cpu_seconds": 90,
+      "control_version": "weight-atlas-sweep-control-v1",
+      "scope": "explicit query-head/offset subset only; fixed prompt context; no generation or automatic resume"
+    },
+    "digest": "926b82e8c4dff806d94fe95b5e3d55461d893adf95d5a9cbda2bf38ab644311d"
+  }
+}
