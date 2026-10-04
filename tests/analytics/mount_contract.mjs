@@ -55,4 +55,13 @@ const thirdRejected=assert.rejects(third,/superseded|cancelled/);
 for(const [id,t] of [...timers])if(t.ms===200){timers.delete(id);t.fn();}
 await thirdRejected;
 selected={...selected,dtype:'F32'};assert.throws(()=>captured.load({seed:1,svd:false}),/BF16/);assert.equal(starts.length,0);
+selected={...selected,dtype:'BF16',shape:[256,256],rows:256,cols:256};events['atlas:tensor']({detail:selected});
+const summaryRequest=captured.load({seed:77,scope:'svd_summary'});await settle();
+assert.deepEqual(Object.keys(starts[0].data).sort(),['region','scope','seed','tensor']);
+assert.equal(starts[0].data.scope,'svd_summary');
+starts.shift().resolve({ok:true,json:()=>Promise.resolve({job:'summary-owner',status:'complete',result:report})});await summaryRequest;
+const fieldControls=main.afterNode.children.find(x=>x.className==='analytics-controls');
+// This double stores className exactly as assigned by the production mount.
+const rowsInput=fieldControls.children[2].children[0]; rowsInput.value=129;
+assert.throws(()=>captured.load({seed:77,scope:'svd_summary'}),/128/);assert.equal(starts.length,0);
 console.log('PASS: mount selected-window request, late admission cancellation, one pending operation, native jump, pagehide ownership cleanup');

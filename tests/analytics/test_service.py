@@ -49,6 +49,75 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(popen.call_count,1)
         return result
 
+    def summary_mode(self):
+        from analytics.svd_summary import digest
+        self.model.update(source_identity='a'*64, revision='synthetic fixture')
+        self.model['model_identity'] = digest(['weight-atlas-model-v1', self.model['source_identity'], self.model['revision']])
+        self.data = {'scope':'svd_summary','tensor':0,'region':self.data['region'],'seed':77}
+
+    def summary_event(self):
+        from analytics.svd_summary import skeleton
+        report = skeleton(self.model,self.tensor,self.data['region'],77)
+        # Declared protocol-only zero result, not a fit of this source fixture.
+        side = {'singular_values':[0.,0.], 'energy_fractions':[None,None],
+                'frobenius_energy':0., 'rank_one_residual_energy':0.,
+                'rank_one_residual_energy_fraction':None, 'zero_energy':True,
+                'rank_one_residual_preview':[0.]*6}
+        report['results'] = {'original':side, 'shuffled':side}
+        return {'ok':True,'result':report}
+
+    def test_summary_source_revision_binding_before_spawn(self):
+        self.summary_mode(); self.model['revision'] = 'changed'
+        with patch('analytics.service.subprocess.Popen') as spawn, patch('analytics.service.shutil.disk_usage',return_value=SimpleNamespace(free=30*1024**3)):
+            with self.assertRaisesRegex(ValueError,'revision binding'): self.jobs.start(self.data)
+            spawn.assert_not_called()
+        self.assertFalse(self.jobs.busy)
+
+    def test_summary_completion_requires_closed_bound_schema_and_cleanup(self):
+        for corruption in (None, 'schema', 'map', 'slice', 'model', 'legacy', 'oversize'):
+            self.summary_mode(); self.start()
+            event = self.summary_event()
+            if corruption == 'schema': event['result']['schema'] = 'weight-atlas.analytics.v1'
+            if corruption == 'map': event['result']['control']['preview_position_to_source'][0] = 999
+            if corruption == 'slice': event['result']['source_binding']['slice']['leading_indices'] = [1]
+            if corruption == 'model': event['result']['source_binding']['model_identity'] = 'b'*64
+            if corruption == 'legacy': event['result'] = {'test':1}
+            if corruption == 'oversize': event['result']['padding'] = 'x'*63488
+            with patch('analytics.service.os.read',return_value=json.dumps(event).encode()+b'\n'): self.jobs.tick()
+            self.assertEqual(self.jobs.status,'complete' if corruption is None else 'error')
+            self.assertFalse(self.jobs.busy)
+            self.assertEqual(self.jobs.snapshot()['result'] is not None,corruption is None)
+
+    def test_summary_pipeline_reads_verified_source_and_skips_dense_general_report(self):
+        self.summary_mode()
+        captured = []
+        def protocol_compute(np, values, **kwargs):
+            captured.append((values, kwargs))
+            return self.summary_event()['result']
+        # NumPy/fit is a declared protocol double; real catalog/header/region read runs.
+        with patch.dict(sys.modules, {'numpy':object()}), patch('analytics.svd_summary.compute_with_numpy',side_effect=protocol_compute), patch('analytics.core.analyze',side_effect=AssertionError('Dense general report forbidden')), patch('analytics.profiles.resolve_local',side_effect=AssertionError('Layout scan forbidden')):
+            result = analyze_request(self.payload())
+        self.assertEqual(captured[0][0],[1.,-2.,0.,4.,5.,-6.])
+        self.assertEqual(captured[0][1]['region'],self.data['region'])
+        self.assertEqual(result['source_binding']['slice'],{'leading_indices':[],'display_axes':[0,1]})
+        self.assertEqual(result['source_binding']['model_identity'],self.model['model_identity'])
+        self.model['revision'] = 'changed'
+        with patch('analytics.svd_summary.compute_with_numpy') as compute:
+            with self.assertRaisesRegex(ValueError,'revision binding'): analyze_request(self.payload())
+            compute.assert_not_called()
+
+    def test_summary_buffer_cap_is_tighter_without_relaxing_legacy_caps(self):
+        self.summary_mode(); self.start()
+        self.jobs.buffer = bytearray(b'x'*(63488+2048))
+        with patch('analytics.service.os.read',return_value=b'x'): self.jobs.tick()
+        self.assertEqual(self.jobs.error,'Analysis output cap exceeded')
+        self.assertFalse(self.jobs.busy)
+        from analytics.worker import MAX_INPUT, MAX_OUTPUT
+        self.assertEqual(MAX_INPUT,512*1024); self.assertEqual(MAX_OUTPUT,2*1024*1024-2048)
+        limits = self.jobs.metadata()['limits']
+        self.assertEqual(limits['svd_axis'],64); self.assertEqual(limits['svd_values'],4096)
+        self.assertEqual(limits['svd_summary']['body_bytes'],63488)
+
     def test_real_adapter_function_on_tiny_source(self):
         result = analyze_request(self.payload())
         self.assertEqual([r['mean_abs'] for r in result['original']['rows']],[1,5])

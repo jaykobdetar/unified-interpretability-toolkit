@@ -1,6 +1,6 @@
 # Bounded data workflow qualification plan
 
-Status: export/import/storage contracts, independent numeric fixtures, and bounded synthetic browser export/archive mechanics are checked. The [browser qualification scope](DATA-BROWSER-QUALIFICATION.md) records exact production assets and the remaining permission/integration gaps. Full-slice profile UI, higher-rank bookmark/note scope and larger SVD remain pending separately granted runtime slots. The steps below are remaining qualification plans; keep receipts, temporary models and logs outside the checkout.
+Status: export/import/storage contracts, independent numeric fixtures, and bounded synthetic browser export/archive mechanics are checked. The [browser qualification scope](DATA-BROWSER-QUALIFICATION.md) records exact production assets and the remaining permission/integration gaps. Separate [128-window SVD qualification](analytics/SVD-QUALIFICATION.md) covers four fixed synthetic numeric cases and an ordinary standalone HTTP/browser workflow. Full-slice profile host workflows, higher-rank bookmark/note scope and real-model profile qualification remain separately assigned work. The steps below are remaining qualification plans; keep receipts, temporary models and logs outside the checkout.
 
 ## Build and retained checks
 
@@ -26,6 +26,6 @@ In that owned fixture host, use the ordinary **Start full slice** action once on
 
 ## SVD and completion evidence
 
-Follow [SVD scaling assessment](analytics/SVD-SCALING.md) for any later larger-window attempt. The shipped cap stays 64 × 64 until source, byte/time/memory budgets, independent invariants and actual UI workflow are qualified together. Stop on failure/refusal; do not silently retry with looser gates or another seed.
+The legacy dense SVD cap stays 64 × 64. The explicit 128 × 128 summary has the [retained synthetic and standalone workflow scope](analytics/SVD-QUALIFICATION.md); registry/fixture-host admission, public-model windows and vector/rectangular runtime cases remain unqualified. Follow [SVD scaling assessment](analytics/SVD-SCALING.md) for further work. Stop on failure/refusal; do not silently retry with looser gates or another seed.
 
 For each granted phase, report exact candidate/binary digest, fixture source identity, executed bounded cases, numerical oracle, wall/CPU/RSS/output sizes, observed complete/partial status and confirmed owned-process cleanup. A successful source-only test is not a successful runtime workflow. Release capacity only after the owned coordinator and its children are stopped/reaped and its ports close; leave unrelated applications and pods alone.

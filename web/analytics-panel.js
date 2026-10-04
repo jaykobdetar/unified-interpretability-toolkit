@@ -17,13 +17,14 @@ export function mountAnalytics(root, {load, jump}) {
   const viewLabel = el('label', 'View '), view = el('select');
   view.setAttribute('aria-label', 'View');
   for (const [key, label] of [['strength', 'Mean absolute strength'], ['outliers', 'Largest absolute values'],
-    ['heads', 'Head boundaries and folded offsets'], ['vector', 'Vector bars'], ['svd', 'Singular energy and residual']]) {
+    ['heads', 'Head boundaries and folded offsets'], ['vector', 'Vector bars'], ['svd', 'Singular energy and residual (64 detail)'], ['svd_summary', 'SVD spectrum and residual preview (128 summary)']]) {
     const option = el('option', label); option.value = key; view.append(option);
   }
   viewLabel.append(view); controls.append(viewLabel);
   const sortLabel = el('label', 'Sort strips '), sort = el('input'); sort.type = 'checkbox'; sortLabel.prepend(sort); controls.append(sortLabel);
   const refresh = el('button', 'Compare original / shuffle'); refresh.type = 'button'; controls.append(refresh);
   const svdButton = el('button', 'Compute bounded SVD comparison'); svdButton.type = 'button'; controls.append(svdButton);
+  const summaryButton = el('button', 'Compute 128-window SVD summary'); summaryButton.type = 'button'; controls.append(summaryButton);
   panel.append(controls);
   const status = el('p'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); panel.append(status);
   panel.append(el('p', 'Same-region exact-multiset shuffle; statistics fit separately. A shuffle alone does not prove pattern meaning. Sorting can manufacture gradients. Matrix geometry remains in native order.', 'analytics-caution'));
@@ -101,8 +102,11 @@ export function mountAnalytics(root, {load, jump}) {
   function render() {
     body.replaceChildren();
     svdButton.hidden = view.value !== 'svd';
+    summaryButton.hidden = view.value !== 'svd_summary';
     sortLabel.hidden = view.value !== 'strength';
     if (!report) return;
+    if (report.schema === 'weight-atlas.svd-window-summary.v2') { renderSummary(); return; }
+    if (view.value === 'svd_summary') { body.append(el('p', 'Compute the explicit summary for this selected native window. Full spectrum, 16 × 16 residual preview; 64-detail analysis stays separate.')); return; }
     const {original: a, shuffled: b, coverage, heads} = report;
     status.textContent = `${report.tensor} • ${coverage.visited_values.toLocaleString()} / ${coverage.total_tensor_values.toLocaleString()} tensor values • window rows [${report.region.row}, ${report.region.row+report.region.rows}), columns [${report.region.col}, ${report.region.col+report.region.cols}) • ${coverage.full_tensor ? 'full tensor' : 'partial native window'} • seed ${report.control.seed}`;
     if (view.value === 'strength') {
@@ -147,19 +151,42 @@ export function mountAnalytics(root, {load, jump}) {
     }
   }
 
+  function renderSummary() {
+    const c = report.coverage, p = report.preview, r = report.region;
+    status.textContent = `${report.tensor} • ${c.visited_values.toLocaleString()} / ${c.total_tensor_values.toLocaleString()} tensor values (${fmt(100*c.tensor_fraction)}%) • rows [${r.row}, ${r.row+r.rows}), columns [${r.col}, ${r.col+r.cols}) • ${c.full_tensor ? 'full tensor' : 'partial native window'}; no full-model claim • seed ${report.control.seed}`;
+    if (view.value !== 'svd_summary') { body.append(el('p', 'This report contains a spectrum and residual preview. Choose the summary view, or recompute regional analysis for this view.')); return; }
+    const a = report.results.original, b = report.results.shuffled;
+    body.append(el('p', `Uncentered SVD fitted independently on both complete selected windows. Full-window rank-one residual energy fraction: original ${fmt(a.rank_one_residual_energy_fraction)}, shuffled ${fmt(b.rank_one_residual_energy_fraction)}. Zero energy gives unavailable fractions.`));
+    const series = (result, key) => result[key].map((value, index) => ({index, value}));
+    pairBars('Complete selected-window singular spectrum', series(a,'singular_values'), series(b,'singular_values'), null);
+    pairBars('Complete selected-window singular energy fractions', series(a,'energy_fractions'), series(b,'energy_fractions'), null);
+    body.append(el('p', `Residual preview only: top-left ${p.shape[0]} × ${p.shape[1]} positions (${p.displayed_values} / ${c.visited_values}; ${fmt(100*p.displayed_values/c.visited_values)}%). ${p.omitted_values} residual positions omitted per side; preview does not describe the omitted residuals.`));
+    const residual = result => result.rank_one_residual_preview.map((value, i) => ({index:p.positions[i],value}));
+    pairBars('Rank-one residual preview (native window positions)', residual(a), residual(b), null, true);
+    const details = el('details'); details.append(el('summary', 'All displayed residual positions and shuffled source coordinates'));
+    const list = el('ol');
+    p.positions.forEach((position, i) => {
+      const source = report.control.preview_position_to_source[i];
+      const native = index => JSON.stringify(report.shape?.length === 1 ? [r.col+index%r.cols] : [r.row+Math.floor(index/r.cols),r.col+index%r.cols]);
+      list.append(el('li', `window [${Math.floor(position/r.cols)}, ${position%r.cols}], native ${native(position)}: original ${fmt(a.rank_one_residual_preview[i])}; shuffled ${fmt(b.rank_one_residual_preview[i])} → source ${native(source)}`));
+    });
+    details.append(list); body.append(details);
+    body.append(el('p', `Complete permutation SHA-256: ${report.control.permutation_sha256}; ${report.control.digest_encoding}. ${report.control.omitted_mapping_entries} mapping entries omitted. Schema ${report.schema}; algorithm ${report.algorithm}; source ${report.source_identity}; revision binding ${report.model_identity}; cache key ${report.cache_key}.`));
+  }
+
   async function reload(withSvd = false) {
     const value = Number(seed.value);
     if (!Number.isInteger(value) || value < 0 || value > 4294967295) { status.textContent = 'Seed must be an integer from 0 to 4294967295.'; return; }
     const requestEpoch = ++epoch;
     report = null; body.replaceChildren(); status.textContent = 'Reading bounded native region…';
     try {
-      const next = await load({seed: value, svd: withSvd});
+      const next = await load(withSvd === 'svd_summary' ? {seed:value, scope:'svd_summary'} : {seed: value, svd: withSvd});
       if (disposed || requestEpoch !== epoch) return;
-      if (next.schema !== 'weight-atlas.analytics.v1') throw new Error('Unsupported analytics schema');
-      report = next; render();
+      if (next.schema !== (withSvd === 'svd_summary' ? 'weight-atlas.svd-window-summary.v2' : 'weight-atlas.analytics.v1')) throw new Error('Unsupported analytics schema');
+      report = next; if (withSvd === 'svd_summary') view.value = 'svd_summary'; render();
     } catch (error) { if (!disposed && requestEpoch === epoch) status.textContent = `Analytics unavailable: ${error.message}`; }
   }
-  view.onchange = render; sort.onchange = render; refresh.onclick = () => reload(false); svdButton.onclick = () => reload(true);
+  view.onchange = render; sort.onchange = render; refresh.onclick = () => reload(false); svdButton.onclick = () => reload(true); summaryButton.onclick = () => reload('svd_summary');
   render();
   return {reload, setReport(next) { ++epoch; report = next; if (!next) status.textContent = ''; render(); }, destroy() { disposed = true; ++epoch; panel.remove(); }};
 }

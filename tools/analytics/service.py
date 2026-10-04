@@ -9,6 +9,7 @@ import tempfile
 import time
 
 from .source import Catalog, Tensor
+from . import svd_summary
 from .worker import MAX_INPUT, MAX_OUTPUT, parse_json, validate_request
 
 GIB = 1024**3
@@ -29,6 +30,7 @@ class AnalyticsJobs:
         self.stop_reason = None
         self.started = self.last_seen = clock()
         self.peak_rss = 0
+        self.summary_contract = None
 
     @property
     def busy(self):
@@ -38,6 +40,8 @@ class AnalyticsJobs:
         return {'available': True, 'busy': self.busy or self.inference_busy(),
                 'limits': {'jobs': 1, 'queue': 0, 'values': 65536, 'axis': 4096,
                            'svd_axis': 64, 'svd_values': 4096, 'wall_seconds': 5,
+                           'svd_summary': {'schema': svd_summary.SCHEMA, 'axis': 128, 'values': 16384,
+                                           'preview_axis': 16, 'body_bytes': svd_summary.MAX_BODY},
                            'output_bytes': MAX_OUTPUT, 'worker_address_space_mib': 768},
                 'coverage': 'Explicit selected window or bounded catalog prefix; no full-model claim by default'}
 
@@ -58,7 +62,8 @@ class AnalyticsJobs:
             raise ValueError('Analytics requires an all-BF16 source catalog; F16/F32 analysis is unsupported')
         if Path(metadata['source_directory']).resolve() != self.model:
             raise ValueError('Validated renderer model differs from configured analytics source')
-        return {'source_identity': metadata['source_identity'], 'catalog': [
+        return {**{key: metadata[key] for key in ('model_identity', 'revision') if key in metadata},
+                'source_identity': metadata['source_identity'], 'catalog': [
             {key: t[key] for key in ('id', 'name', 'shape', 'dtype', 'shard', 'byte_offset')}
             for t in metadata['catalog']]}
 
@@ -70,9 +75,13 @@ class AnalyticsJobs:
             raise ValueError('Analytics paused by memory/disk reserve gates')
         self.status = 'starting'
         self.result = None; self.error = None; self.buffer.clear()
+        self.summary_contract = None
         try:
             model = self._model()
-            validate_request(data, model['catalog'])
+            chosen = validate_request(data, model['catalog'])
+            if data.get('scope') == 'svd_summary':
+                svd_summary.binding(model, chosen, data['region'], data['seed'])
+                self.summary_contract = {'model': model, 'tensor': chosen, 'region': data['region'], 'seed': data['seed']}
             catalog = Catalog(self.model, [Tensor(t['name'], tuple(t['shape']), t['shard'], t['byte_offset'])
                                           for t in model['catalog']], model['source_identity'])
             # Source.check() in this second trusted metadata read binds our local
@@ -153,15 +162,18 @@ class AnalyticsJobs:
             if not chunk:
                 eof = True; break
             self.buffer.extend(chunk)
-            if len(self.buffer) > MAX_OUTPUT+1:
+            output_limit = svd_summary.MAX_BODY+2048 if self.summary_contract is not None else MAX_OUTPUT
+            if len(self.buffer) > output_limit+1:
                 self.error = 'Analysis output cap exceeded'; self.status = 'error'; self.stop(); return
             if b'\n' in self.buffer:
                 try:
                     raw, rest = bytes(self.buffer).split(b'\n', 1)
-                    if rest or len(raw) > MAX_OUTPUT:
+                    if rest or len(raw) > output_limit:
                         raise ValueError('Unexpected worker output')
                     event = parse_json(raw)
                     if event.get('ok') is True and isinstance(event.get('result'), dict):
+                        if self.summary_contract is not None:
+                            svd_summary.validate(event['result'], **self.summary_contract)
                         self.result = event['result']; self.status = 'complete'
                     elif event.get('ok') is False and isinstance(event.get('error'), str):
                         self.error = event['error'][:512]; self.status = 'error'

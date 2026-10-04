@@ -39,7 +39,10 @@ def validate_request(data, catalog):
         if set(data) - {'scope', 'seed'}:
             raise ValueError('Model ranking accepts only scope and seed')
         return None
-    if scope != 'region':
+    if scope == 'svd_summary':
+        if set(data) != {'scope', 'tensor', 'region', 'seed'}:
+            raise ValueError('SVD summary accepts only scope, tensor, region and seed')
+    elif scope != 'region':
         raise ValueError('Unknown analytics scope')
     tensor_id = integer(data.get('tensor'), 0, 511, 'tensor')
     tensor = next((t for t in catalog if t['id'] == tensor_id), None)
@@ -49,6 +52,9 @@ def validate_request(data, catalog):
     if not isinstance(region, dict) or set(region) != {'row', 'col', 'rows', 'cols'}:
         raise ValueError('Exact native region fields required')
     geometry(tensor['shape'], region)
+    if scope == 'svd_summary':
+        from .svd_summary import check_window
+        check_window(tensor['shape'], region)
     return tensor
 
 
@@ -111,6 +117,15 @@ def analyze_request(payload):
     seed = data.get('seed', 1)
     if chosen is None:
         return catalog.model_outliers(seed=seed)
+    if data.get('scope') == 'svd_summary':
+        from .svd_summary import compute_with_numpy, binding
+        binding(payload['model'], chosen, data['region'], seed)
+        tensor = next(t for t in catalog.tensors if t.name == chosen['name'])
+        values = catalog.read(tensor, data['region'])
+        import numpy as np  # Same owned worker, BLAS/process caps; no general dense report.
+        result = compute_with_numpy(np, values, model=payload['model'], tensor=chosen, region=data['region'], seed=seed)
+        catalog.verify()
+        return result
     from .profiles import resolve_local
     options, unavailable = resolve_local(catalog.root)
     tensor = next(t for t in catalog.tensors if t.name == chosen['name'])

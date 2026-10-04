@@ -53,7 +53,7 @@ Listeners bind to loopback and retain origin checks. Use them locally. Model pat
 
 [Launch/configuration](docs/LAUNCH.md) · [Architecture](docs/ARCHITECTURE.md) · [API](docs/API-PROGRESSIVE.md) · [Inference](docs/INFERENCE.md) · [Model preparation](docs/MODELS.md) · [Development and testing](docs/DEVELOPMENT.md)
 
-Data workflows: [original region exports](docs/REGION-EXPORT.md), [private experiment archives](docs/EXPERIMENT-ARCHIVES.md), [real Qwen window walkthrough](docs/WORKED-EXAMPLE.md), and [pending bounded qualification](docs/DATA-WORKFLOW-QUALIFICATION.md).
+Data workflows: [original region exports](docs/REGION-EXPORT.md), [private experiment archives](docs/EXPERIMENT-ARCHIVES.md), [real Qwen window walkthrough](docs/WORKED-EXAMPLE.md), [bounded SVD qualification](docs/analytics/SVD-QUALIFICATION.md), and [remaining qualification plans](docs/DATA-WORKFLOW-QUALIFICATION.md).
 
 CI runs offline Rust build/tests/clippy, Python and JavaScript syntax checks, portable contract tests, and the tiny synthetic smoke test. It needs no weights, secrets, browser, or GPU. CI does not certify real-model inference or visual correctness.
 

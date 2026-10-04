@@ -40,6 +40,24 @@ view.value = 'svd'; view.onchange();
 assert.ok(all(root).some(x => x.textContent.includes('has not run')));
 view.value = 'vector'; widget.setReport(fixtures.vector);
 assert.ok(all(root).some(x => x.textContent === 'Signed vector values'));
+const summary = {
+  schema:'weight-atlas.svd-window-summary.v2', algorithm:'uncentered-independent-svd-xorshift32-v1',
+  tensor:'synthetic128', region:{row:128,col:0,rows:128,cols:128},
+  coverage:{visited_values:16384,total_tensor_values:16777216,tensor_fraction:1/1024,full_tensor:false,full_model:false},
+  preview:{shape:[16,16],displayed_values:256,omitted_values:16128,positions:Array.from({length:256},(_,i)=>Math.floor(i/16)*128+i%16)},
+  control:{seed:77,permutation_sha256:'a'.repeat(64),digest_encoding:'uint32 little-endian',preview_position_to_source:Array.from({length:256},(_,i)=>i),omitted_mapping_entries:16128},
+  source_identity:'b'.repeat(64),model_identity:'c'.repeat(64),cache_key:'d'.repeat(64),
+  results:Object.fromEntries(['original','shuffled'].map(side=>[side,{singular_values:Array(128).fill(0),energy_fractions:Array(128).fill(null),rank_one_residual_energy_fraction:null,rank_one_residual_preview:Array(256).fill(0)}]))
+};
+view.value = 'svd_summary'; widget.setReport(summary);
+assert.match(status.textContent,/16,384.*16,777,216.*partial native window; no full-model claim/);
+assert.ok(all(root).some(x=>x.textContent.includes('256 / 16384; 1.563%')));
+assert.ok(all(root).some(x=>x.textContent.includes('16128 residual positions omitted per side')));
+assert.ok(all(root).some(x=>x.textContent.includes('Complete permutation SHA-256')));
+assert.equal(all(root).filter(x=>x.tag==='li' && x.textContent.startsWith('window [')).length,256);
+view.value='strength'; view.onchange();
+assert.ok(all(root).some(x=>x.textContent.includes('recompute regional analysis')));
+view.value='vector'; widget.setReport(fixtures.vector);
 const a = widget.reload(), b = widget.reload();
 resolveB(fixtures.vector); await b; resolveA(fixtures.matrix); await a;
 assert.ok(all(root).some(x => x.textContent.startsWith('synthetic.vector •')));
@@ -54,4 +72,11 @@ widget.destroy(); assert.equal(root.children[0].removed, true);
 const model = new Node('root', doc);
 renderModelOutliers(model, {coverage: {full_model:false, visited_values:2, total_values:8, visited_tensors:1, total_tensors:2, selection:'bounded windows', tensors:[]}, control:{kind:'same region',seed:1,statistics:'refit'}, rankings:{original:{values:[]},shuffled:{values:[]}},warning:'partial'});
 assert.ok(all(model).some(x => x.textContent === 'Partial-model outlier ranking'));
+const separate = new Node('root',doc), requests = [];
+const summaryWidget = mountAnalytics(separate,{load:async data=>{requests.push(data);return summary;},jump(){}});
+await all(separate).find(x=>x.textContent==='Compute 128-window SVD summary').onclick();
+assert.deepEqual(requests,[{seed:1,scope:'svd_summary'}]);
+assert.ok(all(separate).some(x=>x.textContent.includes('Residual preview only')));
+await summaryWidget.reload();
+assert.ok(all(separate).some(x=>x.textContent.includes('Unsupported analytics schema')));
 console.log('PASS: paired views, sorting index maps, native jumps, unavailable SVD, vector, clear-status and pending-response invalidation, stale responses, cleanup, partial-model label');

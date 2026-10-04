@@ -74,12 +74,16 @@ async function run(data) {
   } finally { pending = false; }
 }
 const widget = mountAnalytics(regionHost, {
-  load: ({seed,svd}) => {
+  load: ({seed,svd,scope}) => {
     const tensor = window.atlasAnalyticsBridge?.selected();
     if (!tensor) throw new Error('Select a native tensor first.');
     if(tensor.available===false||tensor.shape.length>2)throw new Error('Legacy window analytics is unavailable for this tensor mapping; no slice is silently substituted.');
     if (tensor.dtype !== 'BF16') throw new Error('Bounded analytics currently supports original BF16 sources only; F16/F32 viewing remains available.');
     const region = Object.fromEntries(Object.entries(inputs).map(([key,input]) => [key,Number(input.value)]));
+    if (scope === 'svd_summary') {
+      if (!Object.values(region).every(Number.isInteger) || region.rows < 1 || region.cols < 1 || region.rows > 128 || region.cols > 128) throw new Error('SVD summary requires a native window of at most 128 × 128 / 16384 values.');
+      return run({scope:'svd_summary',tensor:tensor.id,region,seed});
+    }
     return run({tensor:tensor.id,region,seed,svd});
   },
   jump: data => window.atlasAnalyticsBridge?.jump(data)
@@ -94,6 +98,7 @@ function select(tensor) {
   inputs.rows.max = Math.min(4096,tensor.rows); inputs.cols.max = Math.min(4096,tensor.cols);
   note.textContent = tensor.dtype === 'BF16' ? `Selected ${tensor.name}. Choose a window, then Compare original / shuffle.` : `Selected ${tensor.name} (${tensor.dtype}). Analytics supports original BF16 sources only; use the viewer for F16/F32.`;
 }
+button('128 window', () => { const t=window.atlasAnalyticsBridge?.selected(); if(t){inputs.row.value='0';inputs.col.value='0';inputs.rows.value=Math.min(128,t.rows);inputs.cols.value=Math.min(128,t.cols);} });
 button('Tall band', () => { const t=window.atlasAnalyticsBridge?.selected(); if(t){inputs.row.value='0';inputs.col.value='0';inputs.rows.value=Math.min(4096,t.rows);inputs.cols.value=Math.min(16,t.cols);} });
 button('Wide band', () => { const t=window.atlasAnalyticsBridge?.selected(); if(t){inputs.row.value='0';inputs.col.value='0';inputs.rows.value=Math.min(16,t.rows);inputs.cols.value=Math.min(4096,t.cols);} });
 button('Cancel analysis', cancel);

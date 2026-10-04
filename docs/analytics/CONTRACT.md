@@ -52,7 +52,7 @@ absolute value by within-head offset, counts, covered head IDs, and partial/full
 head-axis coverage; partial windows never claim a full-head average. Unknown,
 fused, transposed, ambiguous, or unreviewed layouts are excluded.
 
-## Optional explicit SVD
+## Optional explicit dense SVD
 
 No Rust linear algebra crate is vendored. Use existing local NumPy LAPACK in a
 short-lived, one-CPU worker in an explicitly selected compatible environment. Limit both dimensions to 64, values to 4,096, wall time to 5 seconds,
@@ -67,3 +67,8 @@ Tradeoffs: optional NumPy availability/version and subprocess overhead; no Rust
 dependency or hand-written approximate solver; hard process timeout can report
 an exclusion. No SVD run, browser run, substantial scan, or Rust build occurs
 without the serialized heavy slot. Existing launch/stop gates remain authoritative.
+
+The separate `svd_summary` request returns a complete selected-window spectrum
+up to 128 × 128 with a bounded residual preview and explicit source mapping.
+Its [closed contract](SVD-SUMMARY-V2-DESIGN.md) and [qualification scope](SVD-QUALIFICATION.md)
+keep the legacy dense response and its 64 × 64 cap unchanged.

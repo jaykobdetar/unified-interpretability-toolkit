@@ -40,7 +40,7 @@ def main():
         'profile_http_integration.py', 'profile_http_ownership.py',
         'profile_internal_diagnostics.py', 'profile_lifetime_policy.py',
         'profile_spawn_registration.py', 'profile_startup_diagnostics.py',
-        'analytics/test_core.py', 'analytics/test_service.py')]
+        'analytics/test_core.py', 'analytics/test_service.py', 'analytics/test_svd_summary.py')]
     javascript = sorted((ROOT / 'tests').glob('ui-*.cjs'))
     javascript = [p for p in javascript if 'browser' not in p.name]
     javascript += sorted((ROOT / 'tests').glob('profile_*.js'))

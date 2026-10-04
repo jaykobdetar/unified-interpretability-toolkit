@@ -23,7 +23,7 @@ The archive phase used a clearly labeled metadata-only fixture coordinator. It f
 
 The OPFS test used a real browser-owned `FileSystemFileHandle`, but replaced the picker with that task-owned handle. It qualifies write/close and consent/redaction mechanics, not native file-picker permission. Reload with an active journal was not exercised; initialization forgets the handle in source, while this browser sequence detached it first. Actual native picker choice/cancellation and permission prompts need a headed interaction selecting one declared fresh temporary journal, without personal files. Headless file-input selection exercised the upload control but did not qualify an operating-system file dialog. Downloads used `acceptDownloads:true`; multiple-download permission UI remains unqualified.
 
-Deterministic load/write failure, timeout, cancellation, reset and stale initialization remain covered by the retained pure doubles. No live failure responses, denial probes or permission revocation were injected. Bookmark/note scope across higher-rank slices, full-slice profile host workflow, larger-window SVD and physical mobile devices remain separate qualifications.
+Deterministic load/write failure, timeout, cancellation, reset and stale initialization remain covered by the retained pure doubles. No live failure responses, denial probes or permission revocation were injected. Bookmark/note scope across higher-rank slices, full-slice profile host workflow and physical mobile devices remain separate qualifications. The later [128-window SVD qualification](analytics/SVD-QUALIFICATION.md) records its own exact runtime and standalone HTTP/browser scope; it does not broaden the export/archive integration or permission claims above.
 
 ## Reusable harness
 
