@@ -177,12 +177,14 @@ class Registry:
             if os.path.exists(temporary):
                 os.unlink(temporary)
 
-    def register(self, root, manifest, name, *, max_bytes=1024**2, timeout_ms=1000):
+    def register(self, root, manifest, name, *, max_bytes=1024**2, timeout_ms=1000,
+                 publish_disabled=False):
         """Verify already installed files. No renderer/inference readiness claim."""
         manifest = validate_manifest(manifest)
         label(name, 128)
         integer(max_bytes, 1)
         integer(timeout_ms, 1, 5000)
+        require(type(publish_disabled) is bool, 'Disabled publication must be boolean')
         total = sum(file['bytes'] for file in manifest['files'])
         require(total <= max_bytes, 'Verification exceeds explicit byte allowance')
         root = Path(root).resolve(strict=True)
@@ -225,7 +227,10 @@ class Registry:
             entry = {'model_id': identifier, 'content_digest': content, 'name': name,
                      'root': str(root), 'manifest': manifest, 'fingerprints': fingerprints,
                      'verified_at': datetime.now(timezone.utc).isoformat(),
-                     'enabled': old['enabled'] if old is not None else False}
+                     # Acquisition must atomically publish a disabled receipt,
+                     # including replacement of a previously enabled identity.
+                     # Standalone registration preserves its existing behavior.
+                     'enabled': old['enabled'] if old is not None and not publish_disabled else False}
             require(self._unchanged(entry), 'Source changed before receipt publication')
             checkpoint()
             data['models'] = [entry if item['model_id'] == identifier else item for item in data['models']]

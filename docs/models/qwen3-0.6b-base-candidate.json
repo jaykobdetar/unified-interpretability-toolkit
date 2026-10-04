@@ -1,0 +1,37 @@
+{
+  "repository": "Qwen/Qwen3-0.6B-Base",
+  "revision": "da87bfb608c14b7cf20ba1ce41287e8de496c0cd",
+  "status": "public_metadata_only_not_installed_or_qualified",
+  "license": "Apache-2.0",
+  "license_acceptance": "requires_explicit_owner_acceptance_before_acquisition",
+  "model.safetensors": {
+    "bytes": 1192135096,
+    "sha256": "cd2a512003e2f9f3cd3c32a9c3573f820bb28c940f73c57b1ddaa983d9223eba",
+    "evidence": "official_pinned_revision_lfs_metadata_not_payload_verification"
+  },
+  "config.json": {
+    "bytes": 727,
+    "sha256": "504a6b58c4271583724e66584b6b7698aea18450209df6b2f7582df0e89cee59"
+  },
+  "LICENSE": {
+    "bytes": 11343,
+    "sha256": "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e"
+  },
+  "tokenizer.json": {
+    "bytes": 7031645,
+    "git_blob_sha1": "443909a61d429dff23010e5bddd28ff530edda00",
+    "sha256": null,
+    "status": "not_fetched_requires_expected_sha256_before_registration"
+  },
+  "tokenizer_config.json": {
+    "bytes": 9678,
+    "git_blob_sha1": "6a3829ee9491f36113e64df37573be81df0366f5",
+    "sha256": null,
+    "status": "not_fetched_requires_expected_sha256_before_registration"
+  },
+  "sources": {
+    "metadata": "https://huggingface.co/api/models/Qwen/Qwen3-0.6B-Base/revision/da87bfb608c14b7cf20ba1ce41287e8de496c0cd?blobs=true",
+    "config": "https://huggingface.co/Qwen/Qwen3-0.6B-Base/raw/da87bfb608c14b7cf20ba1ce41287e8de496c0cd/config.json",
+    "license": "https://huggingface.co/Qwen/Qwen3-0.6B-Base/raw/da87bfb608c14b7cf20ba1ce41287e8de496c0cd/LICENSE"
+  }
+}

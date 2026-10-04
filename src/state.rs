@@ -87,6 +87,25 @@ fn revision_identity(source_identity: &str, revision: &str) -> String {
         .to_string()
         .as_bytes())
 }
+fn browser_tile_binding(
+    model: &str,
+    source: &str,
+    slice: &str,
+    rule: &str,
+    legend: &Value,
+) -> String {
+    sha(json!([
+        "weight-atlas-browser-tile-v1",
+        model,
+        source,
+        slice,
+        RENDER_VERSION,
+        rule,
+        legend
+    ])
+    .to_string()
+    .as_bytes())
+}
 impl State {
     pub fn model_identity(&self) -> String {
         revision_identity(&self.source.identity, &self.revision)
@@ -250,6 +269,7 @@ impl State {
         if self.stats(id).is_some() {
             return Ok(());
         }
+        let _workspace = crate::resources::reserve(crate::resources::JOB_WORKSPACE_BYTES)?;
         let t = self.source.tensor(id)?;
         self.progress.lock().unwrap().active = Some(id);
         let result = (|| {
@@ -377,6 +397,24 @@ impl State {
         cache.push_back((key, mapping.clone()));
         Ok(mapping)
     }
+    /// Opaque browser identity includes the exact committed legend and selected slice.
+    pub fn tile_binding_for(&self, slice: &TensorSlice, rule: &str, legend: &Value) -> String {
+        browser_tile_binding(
+            &self.model_identity(),
+            &self.source.identity,
+            &slice.identity,
+            rule,
+            legend,
+        )
+    }
+    pub fn tile_binding(&self, id: usize, leading: &[usize], rule: &str) -> Result<String> {
+        self.source.check()?;
+        let slice = TensorSlice::new(&self.source, id, leading)?;
+        render::validate_rule_dtype(rule, Dtype::parse(&slice.tensor.dtype)?)?;
+        let legend = render::legend(rule, self.stats(id).as_ref(), self.global())?;
+        Ok(self.tile_binding_for(&slice, rule, &legend))
+    }
+
     pub fn tile(
         &self,
         id: usize,
@@ -396,12 +434,32 @@ impl State {
         x: usize,
         y: usize,
     ) -> Result<(Vec<u8>, bool, render::Metrics)> {
+        self.tile_slice_bound(id, leading, rule, level, x, y, None)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn tile_slice_bound(
+        &self,
+        id: usize,
+        leading: &[usize],
+        rule: &str,
+        level: u32,
+        x: usize,
+        y: usize,
+        binding: Option<&str>,
+    ) -> Result<(Vec<u8>, bool, render::Metrics)> {
+        let _compute = self.compute.lock().unwrap();
         self.source.check()?;
         let slice = TensorSlice::new(&self.source, id, leading)?;
         let t = &slice.tensor;
         render::validate_rule_dtype(rule, Dtype::parse(&t.dtype)?)?;
         let s = self.stats(id);
         let l = render::legend(rule, s.as_ref(), self.global())?;
+        if let Some(expected) = binding {
+            require(
+                expected == self.tile_binding_for(&slice, rule, &l),
+                "Tile binding changed; reload the selected view",
+            )?;
+        }
         require(level <= t.max_level, "Invalid tile level")?;
         let factor = 1usize << (t.max_level - level);
         require(
@@ -420,6 +478,7 @@ impl State {
         )
         .as_bytes());
         if let Some(bytes) = self.cache.lock().unwrap().get(&key)? {
+            self.source.check()?;
             return Ok((
                 bytes,
                 true,
@@ -433,13 +492,67 @@ impl State {
                 },
             ));
         }
-        let _compute = self.compute.lock().unwrap();
         let lut = self.tensor_mapping(t, rule, &l)?;
         let (fields, m) = render::tile_fields(&self.source, t, &[&lut], level, x, y)?;
         let png = render::png_for_rule(rule, &fields[0], m.width, m.height)?;
         self.cache.lock().unwrap().put(&key, &png)?;
         Ok((png, false, m))
     }
+    /// Explicit CLI preparation of one <=256x256 overview, at most four rules.
+    /// No calibration, model scanning beyond the selected slice or background work.
+    pub fn prepare_overview(
+        &self,
+        id: usize,
+        leading: &[usize],
+        rules: &[&str],
+        max_values: usize,
+    ) -> Result<Value> {
+        require(
+            (1..=64 * 1024 * 1024).contains(&max_values),
+            "Overview max-values must be 1–67108864",
+        )?;
+        require(
+            !rules.is_empty() && rules.len() <= 4,
+            "Overview requires 1–4 rules",
+        )?;
+        let _compute = self.compute.lock().unwrap();
+        self.source.check()?;
+        let slice = TensorSlice::new(&self.source, id, leading)?;
+        let t = &slice.tensor;
+        require(
+            t.count <= max_values,
+            "Selected slice exceeds explicit overview value budget",
+        )?;
+        let level = t.max_level.min(8);
+        let mut legends = Vec::new();
+        let mut mappings = Vec::new();
+        for rule in rules {
+            render::validate_rule_dtype(rule, Dtype::parse(&t.dtype)?)?;
+            let legend = render::legend(rule, self.stats(id).as_ref(), self.global())?;
+            mappings.push(self.tensor_mapping(t, rule, &legend)?);
+            legends.push(legend);
+        }
+        let refs = mappings.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+        let (fields, metrics) = render::tile_fields(&self.source, t, &refs, level, 0, 0)?;
+        let mut records = Vec::new();
+        for ((rule, field), legend) in rules.iter().zip(&fields).zip(&legends) {
+            let key = sha(format!(
+                "{}:{RENDER_VERSION}:{id}:{rule}:{level}:0:0:{legend}:{}",
+                self.source.identity, slice.identity
+            )
+            .as_bytes());
+            let png = render::png_for_rule(rule, field, metrics.width, metrics.height)?;
+            self.cache.lock().unwrap().put(&key, &png)?;
+            records.push(json!({"rule":rule,"level":level,"x":0,"y":0,
+                "binding":self.tile_binding_for(&slice,rule,legend),"png_bytes":png.len()}));
+        }
+        self.source.check()?;
+        Ok(
+            json!({"api_version":1,"source_binding":self.slice_binding(&slice),"max_values":max_values,
+            "metrics":metrics,"tiles":records,"coverage":"one selected-slice overview per rule; fine tiles remain on demand"}),
+        )
+    }
+
     /// Small readiness projection. Never construct the full tensor catalog here.
     pub fn status(&self, selected: Option<usize>) -> Result<Value> {
         self.source.check()?;
@@ -554,7 +667,7 @@ impl State {
                 .filter(|r| r["matches_saved_expected_sha"].is_null())
                 .count()
         });
-        let mut model = json!({"api_version":1,"extensions":["progressive-calibration-v1","source-dtypes-v1","trailing-slices-v1","source-binding-v2"],"backend":"Rust","name":self.name,"revision":self.revision,"representation":"Original BF16/F16/F32 source values; no model execution","parameter_count":total,"global_max":g,"calibration_complete":g.is_some(),"source_directory":self.source.root,"source_bytes":self.source.bytes,"header_bytes_read":self.source.header_bytes,"source_identity":self.source.identity,"model_identity":self.model_identity(),"identity_validation":self.calibration_note,"fresh_source_hashes":fresh,"catalog":catalog,"rules":RULES.iter().map(|r|render::rule_info(r).unwrap()).collect::<Vec<_>>(),"coverage":{"source_complete":true,"sha_hashed_shards":hashed,"sha_expected_matched_shards":matched,"sha_missing_expected_shards":missing_expectation,"sha_verified_shards":matched,"source_validation":"Complete header/index coverage; file identity checked. Freshly hashed shards and matches against saved local expectations are counted separately; saved expectations are not newly authenticated upstream.","statistics_complete":g.is_some(),"values_streamed":c.tensors.values().map(|s|s.count).sum::<usize>(),"calibrated_tensors":c.tensors.len(),"active_tensor":p.active,"calibration_error":p.error,"all_requested":p.all_requested,"materialized_tiles":cache.entries.len(),"materialized_bytes":cache.bytes,"cache_budget_bytes":2u64*1024*1024*1024,"fine_tile_file_cap":1000,"all_pixels_materialized":false,"rendering_policy":"On-demand numeric tiles. No full-model pixel pyramid required."},"render_semantics":"Each pooled pixel is the F64 mean of the pointwise transformed field over aligned source blocks. Only real edge addresses count. Summation/libm rounding can differ from Python; raw source values are unchanged."});
+        let mut model = json!({"api_version":1,"extensions":["progressive-calibration-v1","source-dtypes-v1","trailing-slices-v1","source-binding-v2"],"backend":"Rust","name":self.name,"revision":self.revision,"representation":"Original BF16/F16/F32 source values; no model execution","parameter_count":total,"global_max":g,"calibration_complete":g.is_some(),"source_directory":self.source.root,"source_bytes":self.source.bytes,"header_bytes_read":self.source.header_bytes,"source_identity":self.source.identity,"model_identity":self.model_identity(),"identity_validation":self.calibration_note,"fresh_source_hashes":fresh,"catalog":catalog,"rules":RULES.iter().map(|r|render::rule_info(r).unwrap()).collect::<Vec<_>>(),"coverage":{"source_complete":true,"sha_hashed_shards":hashed,"sha_expected_matched_shards":matched,"sha_missing_expected_shards":missing_expectation,"sha_verified_shards":matched,"source_validation":"Complete header/index coverage; file identity checked. Freshly hashed shards and matches against saved local expectations are counted separately; saved expectations are not newly authenticated upstream.","statistics_complete":g.is_some(),"values_streamed":c.tensors.values().map(|s|s.count).sum::<usize>(),"calibrated_tensors":c.tensors.len(),"active_tensor":p.active,"calibration_error":p.error,"all_requested":p.all_requested,"materialized_tiles":cache.entries.len(),"materialized_bytes":cache.bytes,"cache_budget_bytes":cache.budget_bytes,"fine_tile_file_cap":cache.file_cap,"all_pixels_materialized":false,"rendering_policy":"On-demand numeric tiles. No full-model pixel pyramid required."},"render_semantics":"Each pooled pixel is the F64 mean of the pointwise transformed field over aligned source blocks. Only real edge addresses count. Summation/libm rounding can differ from Python; raw source values are unchanged."});
         // Keep additive status fields outside the large base JSON macro so its
         // expansion stays within the existing crate recursion limit.
         model["global_calibration_supported"] = json!(unsupported == 0);
@@ -569,14 +682,22 @@ pub struct TileCache {
     pub root: PathBuf,
     pub entries: BTreeMap<String, (u64, SystemTime)>,
     pub bytes: u64,
+    budget_bytes: u64,
+    file_cap: usize,
 }
 impl TileCache {
     pub fn open(root: &Path) -> Result<Self> {
+        Self::open_with_limits(root, crate::resources::policy())
+    }
+    fn open_with_limits(root: &Path, limits: &crate::resources::Resources) -> Result<Self> {
+        limits.validate()?;
         std::fs::create_dir_all(root)?;
         let mut c = Self {
             root: root.into(),
             entries: BTreeMap::new(),
             bytes: 0,
+            budget_bytes: limits.tile_cache_bytes,
+            file_cap: limits.tile_cache_files,
         };
         for e in std::fs::read_dir(root)? {
             let e = e?;
@@ -592,7 +713,8 @@ impl TileCache {
     }
     fn trim(&mut self, extra: u64) -> Result<()> {
         while !self.entries.is_empty()
-            && (self.bytes + extra > 2 * 1024 * 1024 * 1024 || self.entries.len() >= 1000)
+            && (self.bytes.saturating_add(extra) > self.budget_bytes
+                || self.entries.len() >= self.file_cap)
         {
             let key = self
                 .entries
@@ -651,6 +773,7 @@ impl TileCache {
         Ok(None)
     }
     pub fn put(&mut self, key: &str, data: &[u8]) -> Result<()> {
+        require(data.len() <= 1024 * 1024, "Tile cache entry exceeds 1 MiB")?;
         let name = format!("{key}.png");
         if self.entries.contains_key(&name) {
             return Ok(());
@@ -667,6 +790,163 @@ impl TileCache {
 #[cfg(test)]
 mod cache_tests {
     use super::*;
+
+    #[test]
+    fn model_reports_the_captured_effective_cache_limits() {
+        let root =
+            std::env::temp_dir().join(format!("atlas-effective-cache-{}", std::process::id()));
+        let model = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/tiny-bf16");
+        let state = State::open(&model, &root, None, None).unwrap();
+        for limits in [
+            crate::resources::Resources::default(),
+            crate::resources::Resources {
+                tile_cache_bytes: 16 * crate::resources::MIB,
+                tile_cache_files: 64,
+                ..Default::default()
+            },
+            crate::resources::Resources {
+                tile_cache_bytes: 8 * crate::resources::GIB,
+                tile_cache_files: 8000,
+                ..Default::default()
+            },
+        ] {
+            *state.cache.lock().unwrap() =
+                TileCache::open_with_limits(&root.join("tiles"), &limits).unwrap();
+            let report = state.model().unwrap();
+            assert_eq!(
+                report["coverage"]["cache_budget_bytes"],
+                limits.tile_cache_bytes
+            );
+            assert_eq!(
+                report["coverage"]["fine_tile_file_cap"],
+                limits.tile_cache_files
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn small_cache_captures_limits_and_trims_before_an_admitted_write() {
+        let root = std::env::temp_dir().join(format!("atlas-small-cache-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        // Sparse regular files exercise accounting without allocating 16 MiB of test RAM.
+        for index in 0..64 {
+            File::create(root.join(format!("{index}.png")))
+                .unwrap()
+                .set_len(256 * 1024)
+                .unwrap();
+        }
+        let limits = crate::resources::Resources {
+            tile_cache_bytes: 16 * crate::resources::MIB,
+            tile_cache_files: 64,
+            ..Default::default()
+        };
+        let mut cache = TileCache::open_with_limits(&root, &limits).unwrap();
+        assert!(cache.entries.len() < limits.tile_cache_files);
+        let incoming = vec![0; 1024 * 1024];
+        cache.put("new", &incoming).unwrap();
+        assert!(cache.bytes <= limits.tile_cache_bytes);
+        assert!(cache.entries.len() <= limits.tile_cache_files);
+        assert_eq!(
+            cache.bytes,
+            cache.entries.values().map(|&(n, _)| n).sum::<u64>()
+        );
+        assert_eq!(cache.get("new").unwrap().unwrap(), incoming);
+        let prior = (cache.bytes, cache.entries.len());
+        assert!(cache.put("too-large", &vec![0; 1024 * 1024 + 1]).is_err());
+        assert_eq!((cache.bytes, cache.entries.len()), prior);
+        assert!(!root.join("too-large.png").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bound_tiles_and_prepared_overviews_match_legacy_pixels() {
+        let root =
+            std::env::temp_dir().join(format!("atlas-bound-overview-{}", std::process::id()));
+        let model = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/tiny-bf16");
+        let state = State::open(&model, &root, None, None).unwrap();
+        state.calibrate_one(0).unwrap();
+        let level = state.source.tensor(0).unwrap().max_level.min(8);
+        let binding = state.tile_binding(0, &[], "tensor_linear").unwrap();
+        assert!(state
+            .tile_slice_bound(0, &[], "tensor_linear", level, 0, 0, Some("stale"))
+            .is_err());
+        let prepared = state
+            .prepare_overview(0, &[], &["tensor_linear"], 1024)
+            .unwrap();
+        assert_eq!(prepared["tiles"][0]["binding"], binding);
+        let (bound, hit, _) = state
+            .tile_slice_bound(0, &[], "tensor_linear", level, 0, 0, Some(&binding))
+            .unwrap();
+        assert!(hit);
+        let (legacy, hit, _) = state.tile(0, "tensor_linear", level, 0, 0).unwrap();
+        assert!(hit);
+        assert_eq!(bound, legacy);
+        assert!(state
+            .prepare_overview(0, &[], &["tensor_linear"], 1)
+            .is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn browser_identity_changes_for_every_content_input() {
+        let original = browser_tile_binding(
+            "model-A",
+            "source-A",
+            "slice-A",
+            "tensor_linear",
+            &json!({"max":1}),
+        );
+        assert_eq!(original.len(), 64);
+        assert_eq!(
+            original,
+            browser_tile_binding(
+                "model-A",
+                "source-A",
+                "slice-A",
+                "tensor_linear",
+                &json!({"max":1})
+            )
+        );
+        for changed in [
+            browser_tile_binding(
+                "model-B",
+                "source-A",
+                "slice-A",
+                "tensor_linear",
+                &json!({"max":1}),
+            ),
+            browser_tile_binding(
+                "model-A",
+                "source-B",
+                "slice-A",
+                "tensor_linear",
+                &json!({"max":1}),
+            ),
+            browser_tile_binding(
+                "model-A",
+                "source-A",
+                "slice-B",
+                "tensor_linear",
+                &json!({"max":1}),
+            ),
+            browser_tile_binding(
+                "model-A",
+                "source-A",
+                "slice-A",
+                "tensor_asinh",
+                &json!({"max":1}),
+            ),
+            browser_tile_binding(
+                "model-A",
+                "source-A",
+                "slice-A",
+                "tensor_linear",
+                &json!({"max":2}),
+            ),
+        ] {
+            assert_ne!(original, changed);
+        }
+    }
 
     #[test]
     fn revision_identity_is_domain_separated_and_deterministic() {

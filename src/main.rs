@@ -8,7 +8,7 @@ use std::{
     time::Instant,
 };
 use weight_atlas_rust::{
-    atomic_write, configure, headroom, peak_rss_mib, render, require, server,
+    atomic_write, configure, configure_standalone, headroom, peak_rss_mib, render, require, server,
     slice::{parse_indices, TensorSlice},
     source::{Dtype, Source},
     state::State,
@@ -22,11 +22,17 @@ fn main() {
 }
 fn run() -> Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    run_args(args, configure)
+    run_args(args, |scope| match scope {
+        weight_atlas_rust::resources::StartupScope::Legacy => configure(),
+        weight_atlas_rust::resources::StartupScope::Standalone => configure_standalone(),
+    })
 }
-fn run_args(args: Vec<String>, configure: impl FnOnce() -> Result<usize>) -> Result<()> {
+fn run_args(
+    args: Vec<String>,
+    configure: impl FnOnce(weight_atlas_rust::resources::StartupScope) -> Result<usize>,
+) -> Result<()> {
     if args.is_empty() || args[0] == "--help" {
-        println!("Weight Atlas Rust\nCommands: metadata | serve | calibrate | verify | tile | inspect | bench\nComparison: compare-metadata | compare-calibrate | compare-tile | compare-inspect | compare-serve; explicit --model A --compare-model B; --cache outside both\nComparison tile: --tensor ID --quantity a|b|delta|abs_delta --mapping linear|asinh|magnitude --out PREFIX; compare-calibrate requires --tensor ID\nRequired: --model DIRECTORY\nCommon: --cache DIRECTORY (default ./cache) --name NAME --revision REVISION\nserve: --port 8775 --verify-sha false; true hashes all bytes before listening; no remote binding\ncalibrate: --tensor ID (omit for all); resumes valid calibration\nverify: full SHA-256 reads, compares local model-api.json if present\ntile: --tensor ID --rules global_linear,global_asinh --level L --x X --y Y --out PREFIX\ninspect: --tensor ID --row R --col C\nbench: --tensor ID --repeats 3; factors 1,4,16, both global rules\nSingle CPU, 768 MiB address-space limit, >=3 GiB available RAM, >=25 GiB disk reserve.\nCache identity checks do not claim a fresh full-content hash.");
+        println!("Weight Atlas Rust\nCommands: metadata | serve | calibrate | verify | tile | overview | inspect | bench\nComparison: compare-metadata | compare-calibrate | compare-tile | compare-inspect | compare-serve; explicit --model A --compare-model B; --cache outside both\nComparison tile: --tensor ID --quantity a|b|delta|abs_delta --mapping linear|asinh|magnitude --out PREFIX; compare-calibrate requires --tensor ID\nRequired: --model DIRECTORY\nCommon: --cache DIRECTORY (default ./cache) --name NAME --revision REVISION\nserve: --port 8775 --verify-sha false; true hashes all bytes before listening; no remote binding\ncalibrate: --tensor ID (omit for all); resumes valid calibration\nverify: full SHA-256 reads, compares local model-api.json if present\noverview: --tensor ID --slice INDICES --rules tensor_linear,tensor_asinh --max-values 16777216; explicit bounded coarse preparation\ntile: --tensor ID --rules global_linear,global_asinh --level L --x X --y Y --out PREFIX\ninspect: --tensor ID --row R --col C\nbench: --tensor ID --repeats 3; factors 1,4,16, both global rules\nDefaults: one CPU, 768 MiB address-space budget, >=3 GiB effective RAM reserve plus process budget, >=25 GiB disk reserve.\n--resources JSON selects validated standalone budgets; see docs/RESOURCES.md.\nCache identity checks do not claim a fresh full-content hash.");
         return Ok(());
     }
     let command = &args[0];
@@ -39,12 +45,23 @@ fn run_args(args: Vec<String>, configure: impl FnOnce() -> Result<usize>) -> Res
             "Duplicate CLI option",
         )?
     }
+    if let Some(raw) = opts.get("resources") {
+        require(
+            weight_atlas_rust::resources::StartupScope::for_command(command)
+                == weight_atlas_rust::resources::StartupScope::Standalone,
+            "Custom resources apply only to the standalone viewer/reader",
+        )?;
+        require(raw.len() <= 4096, "Resource configuration exceeds limit")?;
+        weight_atlas_rust::resources::initialize(serde_json::from_str(raw)?)?;
+    }
     if command == "profile-worker" {
         return weight_atlas_rust::profile_worker::run(&opts);
     }
     let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
     let model = PathBuf::from(opts.get("model").ok_or("--model DIRECTORY is required")?);
-    let cpu = configure()?;
+    let cpu = configure(weight_atlas_rust::resources::StartupScope::for_command(
+        command,
+    ))?;
     let start = Instant::now();
     if command == "metadata" {
         let s = Source::open(&model)?;
@@ -68,8 +85,12 @@ fn run_args(args: Vec<String>, configure: impl FnOnce() -> Result<usize>) -> Res
     }
     match command.as_str() {
         "serve" => server::serve(state, get("port", "8775").parse()?)?,
-        "hosted-renderer" => weight_atlas_rust::hosted_renderer::run(state,
-            opts.get("channel-fd").ok_or("Private channel required")?.parse()?)?,
+        "hosted-renderer" => weight_atlas_rust::hosted_renderer::run(
+            state,
+            opts.get("channel-fd")
+                .ok_or("Private channel required")?
+                .parse()?,
+        )?,
         "calibrate" => {
             let ids = if let Some(id) = opts.get("tensor") {
                 vec![id.parse()?]
@@ -106,6 +127,22 @@ fn run_args(args: Vec<String>, configure: impl FnOnce() -> Result<usize>) -> Res
                 )
             )?
         ),
+        "overview" => {
+            let id = opts
+                .get("tensor")
+                .ok_or("Overview requires explicit --tensor ID")?
+                .parse()?;
+            let leading = parse_indices(&get("slice", ""))?;
+            let rules = get("rules", "tensor_linear,tensor_asinh");
+            let rules = rules.split(',').collect::<Vec<_>>();
+            let report = state.prepare_overview(
+                id,
+                &leading,
+                &rules,
+                get("max-values", "16777216").parse()?,
+            )?;
+            println!("{}", report);
+        }
         "tile" => {
             let id: usize = get("tensor", "0").parse()?;
             let slice = TensorSlice::new(&state.source, id, &parse_indices(&get("slice", ""))?)?;
@@ -194,10 +231,55 @@ mod cli_tests {
     use super::*;
 
     #[test]
+    fn startup_dispatch_keeps_hosted_and_comparison_on_legacy_configuration() {
+        use weight_atlas_rust::resources::StartupScope;
+        for (command, expected) in [
+            ("serve", StartupScope::Standalone),
+            ("metadata", StartupScope::Standalone),
+            ("hosted-renderer", StartupScope::Legacy),
+            ("compare-serve", StartupScope::Legacy),
+            ("compare-metadata", StartupScope::Legacy),
+        ] {
+            let observed = std::cell::Cell::new(None);
+            let result = run_args(
+                vec![command.into(), "--model".into(), "/unused".into()],
+                |scope| {
+                    observed.set(Some(scope));
+                    Err("Injected startup boundary".into())
+                },
+            );
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Injected startup boundary"));
+            assert_eq!(observed.get(), Some(expected));
+        }
+        for command in ["hosted-renderer", "compare-serve", "profile-worker"] {
+            let called = std::cell::Cell::new(false);
+            assert!(run_args(
+                vec![
+                    command.into(),
+                    "--model".into(),
+                    "/unused".into(),
+                    "--resources".into(),
+                    "{}".into()
+                ],
+                |_| {
+                    called.set(true);
+                    Err("Unexpected startup".into())
+                }
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("standalone"));
+            assert!(!called.get());
+        }
+    }
+    #[test]
     fn help_and_argument_errors_precede_resource_or_model_work() {
         for args in [vec![], vec!["--help".into()]] {
             let called = std::cell::Cell::new(false);
-            run_args(args, || {
+            run_args(args, |_| {
                 called.set(true);
                 Err("Injected low-memory guard".into())
             })
@@ -205,7 +287,7 @@ mod cli_tests {
             assert!(!called.get());
         }
         let called = std::cell::Cell::new(false);
-        assert!(run_args(vec!["metadata".into()], || {
+        assert!(run_args(vec!["metadata".into()], |_| {
             called.set(true);
             Err("Injected low-memory guard".into())
         })
@@ -214,7 +296,7 @@ mod cli_tests {
         let called = std::cell::Cell::new(false);
         let result = run_args(
             vec!["metadata".into(), "--model".into(), "/unused".into()],
-            || {
+            |_| {
                 called.set(true);
                 Err("Injected low-memory guard".into())
             },

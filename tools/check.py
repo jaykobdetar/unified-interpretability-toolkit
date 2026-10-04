@@ -46,8 +46,8 @@ def main():
     javascript += sorted((ROOT / 'tests').glob('profile_*.js'))
     javascript += [ROOT / 'tests' / name for name in (
         'acceptance-support.cjs', 'acceptance-pin-buffer.cjs', 'data-view-contracts.cjs',
-        'host-client.cjs', 'inference-availability.cjs', 'experiment_logs.cjs',
-        'workspace-tools.cjs', 'workspace-ui.cjs', 'analytics/mount_contract.mjs',
+        'host-client.cjs', 'inference-availability.cjs', 'experiment_logs.cjs', 'experiment-import.cjs', 'durable-log.cjs',
+        'workspace-tools.cjs', 'region-export.cjs', 'workspace-ui.cjs', 'analytics/mount_contract.mjs',
         'analytics/ui_contract.mjs')]
     for file in python:
         run([sys.executable, '-B', str(file.relative_to(ROOT))])

@@ -97,12 +97,13 @@
   el('region-use-cell').addEventListener('click',()=>{if(!state.selected){say('region-status','Inspect a native address first.');return;}const [r,c]=state.selected;setBounds([r,c,r,c]);focusRegion();});
   el('region-focus').addEventListener('click',focusRegion);
   el('region-cancel').addEventListener('click',cancelExport);
+  el('region-format').addEventListener('change',cancelExport);
   el('region-export').addEventListener('click',async()=>{
     if(exportController)return;const controller=new AbortController();exportController=controller;const signal=controller.signal;
     el('region-export').disabled=true;el('region-cancel').disabled=false;let timedOut=false;
     const deadline=setTimeout(()=>{timedOut=true;controller.abort();},30000);
-    try{const csv=await A.collectRegion({model:state.model,tensor:state.tensor,bounds:bounds(),signal,read:(url,signal)=>A.readJSON(url,{signal,onState:event=>globalThis.atlasWorkspace.retry(event,url,signal,'export')}),onProgress:(n,total)=>say('region-status',`Reading original values: ${n}/${total}.`)});
-      if(signal.aborted||exportController!==controller)return;download(csv,'text/csv;charset=utf-8','weight-atlas-region.csv');say('region-status','Raw CSV exported with exact source metadata.');
+    try{const format=el('region-format').value||'csv',result=await A.collectRegion({format,model:state.model,tensor:state.tensor,bounds:bounds(),signal,read:(url,signal)=>A.readJSON(url,{signal,onState:event=>globalThis.atlasWorkspace.retry(event,url,signal,'export')}),onProgress:(n,total)=>say('region-status',`Reading original values: ${n}/${total}.`)});
+      if(signal.aborted||exportController!==controller)return;if(format==='csv')download(result,'text/csv;charset=utf-8','weight-atlas-region.csv');else{download(result.data,'application/octet-stream','weight-atlas-region.npy');download(JSON.stringify(result.metadata,null,2),'application/json','weight-atlas-region.metadata.json');}say('region-status',format==='csv'?'Raw CSV exported with exact source metadata.':'Numeric NumPy and source metadata exported. Keep both files; a browser may require permission for the second download.');
     }catch(e){if(exportController===controller)say('region-status',timedOut?'Export exceeded 30 seconds; no file produced. Try a smaller region.':e.name==='AbortError'?'Export cancelled; no file produced.':e.message);}
     finally{clearTimeout(deadline);renderRetries();if(exportController===controller){exportController=null;el('region-export').disabled=false;el('region-cancel').disabled=true;}}
   });

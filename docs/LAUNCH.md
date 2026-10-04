@@ -28,6 +28,8 @@ Copy `config/viewer.example.json` to ignored `config/viewer.local.json` and set 
 ./run-atlas.sh --config config/viewer.local.json
 ```
 
+Optional standalone `resources` budgets are described in [resource configuration](RESOURCES.md). Defaults preserve the original finite limits; startup admission also checks process budget plus the effective RAM floor.
+
 Precedence is CLI options, `ATLAS_MODEL/ATLAS_CACHE/ATLAS_PORT/ATLAS_NAME/ATLAS_REVISION`, then JSON values. `ATLAS_CONFIG` selects a config file. `--demo` explicitly selects the checked-in fixture. Paths in JSON resolve relative to the config file; CLI/environment paths resolve relative to your current directory. The default cache is the checkout's ignored `cache/` directory. Configuration is parsed as JSON and never executed. Cache paths inside the selected model are refused. Use separate caches for concurrent viewers.
 
 ## Inference is a separate process
@@ -55,7 +57,7 @@ The owner registry and experimental fixture-profile launchers are documented in 
 | --- | --- |
 | Missing Python or Cargo | Install the prerequisite, then retry explicitly. Rust 1.92.0 is the tested toolchain. |
 | Missing viewer binary | Run `./run-atlas.sh --demo --build`. |
-| Memory/disk guard refusal | Free resources or use a machine with sufficient capacity. The build needs 5 GiB available RAM and 25 GiB free disk; native runtime needs 3 GiB available RAM and the same disk reserve. |
+| Memory/disk guard refusal | Free resources or use a machine with sufficient capacity. The build needs 5 GiB available RAM and 25 GiB free disk; native default admission needs 3.75 GiB effective available RAM (3 GiB reserve plus a 768 MiB process budget) and the same disk reserve. Optional standalone budgets are described in RESOURCES.md. |
 | Port occupied | Choose a free `--port`; do not stop an unrelated service. |
 | Cache locked | Stop the viewer that owns it, or choose another cache directory. |
 | No color view yet | Wait for selected-tensor calibration. Raw scalar inspection is available first. Global rules require complete calibration. |

@@ -1,4 +1,4 @@
-"""Local owner interface; deliberately has no HTTP or download implementation."""
+"""Local owner interface; acquisition is explicit and has no HTTP action route."""
 import argparse
 import json
 import subprocess
@@ -28,6 +28,17 @@ def main(argv=None):
         item = commands.add_parser(command)
         item.add_argument('model_id')
     commands.add_parser('download', help='Disabled until a reviewed acquisition stage')
+    for command in ('acquire-plan', 'acquire'):
+        item = commands.add_parser(command, help='Explicit owner pinned-data acquisition '+command)
+        item.add_argument('--manifest', required=True, type=Path)
+        item.add_argument('--name', required=True)
+        item.add_argument('--max-bytes', required=True, type=int)
+        item.add_argument('--cache-growth-bytes', type=int, default=0)
+        if command == 'acquire':
+            item.add_argument('--destination', required=True, type=Path)
+            item.add_argument('--plan-digest', required=True)
+            item.add_argument('--accept-license', action='store_true')
+            item.add_argument('--timeout-ms', type=int, default=120000)
     args = parser.parse_args(argv)
     try:
         config = load_config(args.config)
@@ -36,6 +47,19 @@ def main(argv=None):
             result = capabilities(config)
         elif args.command == 'download':
             raise ValueError('Downloads are disabled; no acquisition authorized by this local stage')
+        elif args.command in ('acquire-plan', 'acquire'):
+            from .acquisition import plan, acquire
+            manifest = read_json(args.manifest, MAX_MANIFEST_BYTES)
+            options = {'max_bytes': args.max_bytes, 'cache_growth': args.cache_growth_bytes}
+            if args.command == 'acquire-plan':
+                result = plan(manifest, args.name, **options)
+            else:
+                result = acquire(registry, args.destination, manifest, args.name,
+                                 plan_digest=args.plan_digest, accept_license=args.accept_license,
+                                 timeout_ms=args.timeout_ms, **options)
+                if not result['registered']:
+                    print(json.dumps(result, sort_keys=True, allow_nan=False))
+                    return 2
         elif args.command == 'plan':
             manifest = validate_manifest(read_json(args.manifest, MAX_MANIFEST_BYTES))
             result = {'version': 1, 'model_id': 'm_'+content_digest(manifest),

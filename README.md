@@ -45,13 +45,15 @@ Colors describe numerical transforms, not concepts, neuron importance, or causal
 
 ## Scope and privacy
 
-This is experimental local research software. Linux is the supported runtime; other platforms, arbitrary models, GPU inference, long sessions, and internet hosting are not qualified. The static reader uses one CPU and a 768 MiB address-space limit. Additional inference/analysis modes have their own admission and ownership limits; they may refuse work even when the viewer runs.
+This is experimental local research software. Linux is the supported runtime; other platforms, arbitrary models, GPU inference, long sessions, and internet hosting are not qualified. The static reader defaults to one CPU and a 768 MiB address-space limit. [Explicit resource budgets](docs/RESOURCES.md) support measured standalone configurations and bounded multicore rendering. Additional inference/analysis modes have their own admission and ownership limits; they may refuse work even when the viewer runs.
 
-Listeners bind to loopback and retain origin checks. Use them locally. Model paths and source metadata can appear in the local UI/API and caches, so review screenshots and exports before sharing. Optional experiment logging is off by default; including prompts requires a separate opt-in, and saving requires an explicit download. Model files and private prompts do not belong in this repository.
+Listeners bind to loopback and retain origin checks. Use them locally. Model paths and source metadata can appear in the local UI/API and caches, so review screenshots and exports before sharing. Optional experiment logging is off by default; including prompts requires a separate opt-in, and persistence requires explicit browser-storage consent, a supported user-selected file journal or a manual download. Model files and private prompts do not belong in this repository.
 
 ## Documentation and development
 
 [Launch/configuration](docs/LAUNCH.md) · [Architecture](docs/ARCHITECTURE.md) · [API](docs/API-PROGRESSIVE.md) · [Inference](docs/INFERENCE.md) · [Model preparation](docs/MODELS.md) · [Development and testing](docs/DEVELOPMENT.md)
+
+Data workflows: [original region exports](docs/REGION-EXPORT.md), [private experiment archives](docs/EXPERIMENT-ARCHIVES.md), [real Qwen window walkthrough](docs/WORKED-EXAMPLE.md), and [pending bounded qualification](docs/DATA-WORKFLOW-QUALIFICATION.md).
 
 CI runs offline Rust build/tests/clippy, Python and JavaScript syntax checks, portable contract tests, and the tiny synthetic smoke test. It needs no weights, secrets, browser, or GPU. CI does not certify real-model inference or visual correctness.
 

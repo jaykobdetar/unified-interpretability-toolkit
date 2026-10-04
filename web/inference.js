@@ -140,13 +140,67 @@ class AtlasExperimentLog {
   clear(){this.records=[];this.createdAt=new Date().toISOString();}
 }
 
-if(typeof module!=='undefined')module.exports={editRangeSummary,AtlasPlayback,draftEdit,sameSource,experimentRecord,AtlasExperimentLog,utf8Size,redactExperiment,observationSelection,pairPositions,sweepRequest};
+// The closed import codec is requested only by an explicit archive action.
+const AtlasExperimentImport=typeof module!=='undefined'?require('./inference-import.js'):null;
+let importCodecPromise=null;
+function loadExperimentImport(){
+  const ready=()=>{const c=globalThis.AtlasExperimentImport;if(!c||typeof c.read!=='function'||typeof c.append!=='function')throw new Error('Archive importer did not initialize');return c;};
+  if(importCodecPromise)return importCodecPromise;
+  importCodecPromise=new Promise((resolve,reject)=>{
+    const script=document.createElement('script');script.src='/inference-import.js';script.async=true;
+    const failed=()=>{clearTimeout(timeout);script.remove();reject(new Error('Archive importer unavailable; existing records unchanged. Retry explicitly.'));};
+    const timeout=setTimeout(failed,15000);
+    script.onload=()=>{clearTimeout(timeout);script.remove();try{resolve(ready());}catch(error){reject(error);}};
+    script.onerror=failed;
+    document.head.append(script);
+  }).catch(error=>{importCodecPromise=null;throw error;});
+  return importCodecPromise;
+}
+
+class AtlasLogStorage {
+  constructor(storage,tabStorage,makeOwner){this.storage=storage;this.tabStorage=tabStorage;this.makeOwner=makeOwner;this.expected=undefined;this.owner=null;}
+  key(){let owner=this.owner||this.tabStorage.getItem('weight-atlas.experiment-owner.v1');if(!owner){owner=this.makeOwner();if(!/^[a-zA-Z0-9-]{1,80}$/.test(owner))throw new Error('Invalid local log owner');this.owner=owner;}if(!/^[a-zA-Z0-9-]{1,80}$/.test(owner))throw new Error('Invalid local log owner');return 'weight-atlas.experiments.v1:'+owner;}
+  async mutate(locks,operation){if(!locks?.request)throw new Error('Browser archive writes require Web Locks');return locks.request('weight-atlas-experiment-storage-v1',()=>{this.key();this.tabStorage.setItem('weight-atlas.experiment-owner.v1',this.owner||this.key().split(':')[1]);return operation(this);});}
+  list(){const keys=[];for(let i=0;i<this.storage.length;i++){const k=this.storage.key(i);if(/^weight-atlas\.experiments\.v1:[a-zA-Z0-9-]{1,80}$/.test(k))keys.push(k);}if(keys.length>8)throw new Error('More than 8 saved archives; export/remove old browser data before creating another');return keys.sort();}
+  readKey(key){if(!/^weight-atlas\.experiments\.v1:[a-zA-Z0-9-]{1,80}$/.test(key))throw new Error('Invalid archive key');const text=this.storage.getItem(key);if(text!==null&&utf8Size(text)>EXPERIMENT_BYTES)throw new Error('Saved log exceeds 1 MiB');return text;}
+  save(text){if(utf8Size(text)>EXPERIMENT_BYTES)throw new Error('Durable log exceeds 1 MiB');const key=this.key(),current=this.readKey(key);if(this.expected===undefined&&current!==null)throw new Error('A saved log exists: explicitly restore or delete it before saving');if(this.expected!==undefined&&current!==this.expected)throw new Error('Saved archive changed in another tab; export your records and reload the archive before saving');if(current===null&&this.list().length>=8)throw new Error('8 browser archive slots are full');this.storage.setItem(key,text);this.expected=text;}
+  read(){return this.readKey(this.key());}
+  adopt(text){if(this.readKey(this.key())!==text)throw new Error('Saved archive changed during restore');this.expected=text;}
+  clear(){this.storage.removeItem(this.key());this.expected=null;}
+}
+class AtlasFileJournal {
+  constructor(handle){this.handle=handle;this.writing=false;}
+  async save(text){
+    if(this.writing)throw new Error('File journal write still pending');if(utf8Size(text)>EXPERIMENT_BYTES)throw new Error('File journal exceeds 1 MiB');this.writing=true;let writable;
+    try{writable=await this.handle.createWritable();await writable.write(text);await writable.close();}
+    catch(error){try{await writable?.abort();}catch{}throw error;}
+    finally{this.writing=false;}
+  }
+}
+
+if(typeof module!=='undefined')module.exports={AtlasExperimentImport,loadExperimentImport,AtlasLogStorage,AtlasFileJournal,editRangeSummary,AtlasPlayback,draftEdit,sameSource,experimentRecord,AtlasExperimentLog,utf8Size,redactExperiment,observationSelection,pairPositions,sweepRequest};
 if(typeof document!=='undefined'){
 (() => {
   const el=id=>document.getElementById('infer-'+id), play=new AtlasPlayback();
   let epoch=0, playbackEpoch=0, session=null, pending=false, timer=null, polling=null, enabled=false, details={}, architecture=null, contract=null, draft=[], selection=null, availability='Checking local inference availability…', acceptedRequest=null, loggingRun=false, promptConsent=false, loggedRun=false, pendingLog=null, logError='', lastWorkerAlive=null, observationModes=[], pairSupported=false, pairPreview=null, sweepSupported=false, sweepPlan=null, sweepKey=null, planEpoch=0, planning=false, cleanupAfterTransport=false, incompleteLog=false, logRecordIndex=null;
   let busyElsewhere=false,acceptedAt=null,readinessEpoch=0;
   const experimentLog=new AtlasExperimentLog();
+  let durableStorage=null,fileJournal=null,saving=false,durableError='',durableNote='Persistence off. No automatic restore or worker session adoption.',importing=false,durableDirty=false,archivePending=false,archiveEpoch=0;
+  const storage=()=>durableStorage||(durableStorage=new AtlasLogStorage(globalThis.localStorage,globalThis.sessionStorage,()=>globalThis.crypto.randomUUID()));
+  const archiveOptions=()=>({experimentRecord,redactExperiment,includePrompt:!!el('import-prompts').checked});
+  const durableText=()=>finiteJSON(experimentLog.envelope(el('durable-prompts').checked?experimentLog.records:experimentLog.records.map(redactExperiment)));
+  async function saveDurable(){
+    if(saving){durableDirty=true;return;}if(!el('persist').checked&&!fileJournal){durableError='';render();return;}
+    saving=true;durableError='';render();
+    try{durableDirty=false;const text=durableText();if(el('persist').checked){await storage().mutate(globalThis.navigator?.locks,s=>s.save(text));}if(fileJournal)await fileJournal.save(text);durableNote='Saved '+experimentLog.records.length+' bounded archived records'+(el('persist').checked?' in this tab’s browser slot':'')+(fileJournal?' and/or the selected file':'')+'.';}
+    catch(error){durableError='Private log persistence failed: '+error.message+'. Records remain in memory; export, retry or disable the failed sink before another run.';}
+    finally{saving=false;render();if(durableDirty&&!durableError){durableDirty=false;saveDurable();}}
+  }
+  async function appendArchive(text,adopt=false,id=archiveEpoch){const codec=await loadExperimentImport();if(id!==archiveEpoch)return;const records=codec.read(text,archiveOptions());codec.append(experimentLog,records,{beforeCommit:()=>{if(adopt)storage().adopt(text);}});write('import-status',records.length+' archived records appended locally. Historical provenance is unverified. Run inputs and worker ownership are unchanged.');saveDurable();render();}
+
+  function cancelArchive(){if(!archivePending)return;archiveEpoch++;archivePending=false;importing=false;write('import-status','Archive operation cancelled. Existing records and run inputs unchanged.');render();}
+  async function importArchive(getText,adopt=false){if(pending||play.active||saving||importing)return;const id=++archiveEpoch;archivePending=importing=true;render();try{const text=await getText();if(id===archiveEpoch)await appendArchive(text,adopt,id);}catch(error){if(id===archiveEpoch)write('import-status',error.message+' Existing records unchanged.');}finally{if(id===archiveEpoch){archivePending=importing=false;render();}}}
+
   const write=(id,value)=>{el(id).textContent=value;};
   async function api(action,data){
     const response=await fetch('/api/inference'+(action?'/'+action:''),action?{method:'POST',headers:{'Content-Type':'application/json','X-Atlas-Local':'1'},body:JSON.stringify(data)}:{});
@@ -203,11 +257,11 @@ if(typeof document!=='undefined'){
     lastWorkerAlive=snapshot.worker_alive??null;
     if(loggedRun&&incompleteLog&&workerCleanupConfirmed(snapshot)){
       if(pendingLog)pendingLog.worker_cleanup_confirmed=true;else if(logRecordIndex!==null)experimentLog.confirmCleanup(logRecordIndex);
-      incompleteLog=false;
+      incompleteLog=false;saveDurable();
     }
     if(!loggingRun||loggedRun||!acceptedRequest||['loading','running','stopping'].includes(snapshot.status))return;
     loggedRun=true;incompleteLog=snapshot.status==='connection_lost'&&!workerCleanupConfirmed(snapshot);
-    try{const record=experimentRecord(acceptedRequest,snapshot,{includePrompt:promptConsent});pendingLog=record;const index=experimentLog.records.length;experimentLog.append(record);logRecordIndex=index;pendingLog=null;logError='';}
+    try{const record=experimentRecord(acceptedRequest,snapshot,{includePrompt:promptConsent});pendingLog=record;const index=experimentLog.records.length;experimentLog.append(record);logRecordIndex=index;pendingLog=null;logError='';saveDurable();}
     catch(error){logError=error.message;}
   }
   function downloadExperiment(text,name){
@@ -274,19 +328,22 @@ if(typeof document!=='undefined'){
     if(step?.sweep){const v=step.sweep,m=v.metrics;write('baseline-output',`Argmax token ID: ${m.baseline_argmax_id}`);write('output',`Argmax token ID: ${m.edited_argmax_id}`);write('baseline-ids',`${v.record_id} · ${v.role}`);write('edited-ids',`${v.selected_cells} selected cells, ${v.changed_cells} changed; parameter Δ L2 ${v.parameter_delta_l2}; original bits restored.`);write('score-context',`Matched fixed original prompt · all-vocabulary RMS logit Δ ${m.logit_delta_rms}, max |Δ| ${m.logit_delta_max_abs}, softmax TV ${m.softmax_total_variation}. Table: top-five union only, raw FP32 logits. Prompt-set sensitivity; no inferred causal purpose or general head importance.`);const scores=el('scores');scores.replaceChildren();for(const c of v.candidates){const tr=document.createElement('tr');for(const text of [`${JSON.stringify(c.piece)} / ${c.id}`,c.baseline_logit.toFixed(6),c.edited_logit.toFixed(6),c.delta.toFixed(6)]){const td=document.createElement('td');td.textContent=text;tr.append(td);}scores.append(tr);}}
   }
   function renderLogging(){
-    const blocked=pending||play.active;
-    el('logging').disabled=blocked;el('include-prompt').disabled=blocked;
+    const blocked=pending||play.active||saving||importing;
+    el('cancel-import').disabled=!archivePending;el('logging').disabled=blocked;el('include-prompt').disabled=blocked;
     el('export-run').disabled=blocked||(!pendingLog&&(!acceptedRequest||acceptedRequest.mode==='prompt_pair_preview'));
     el('export-log').disabled=blocked||!experimentLog.records.length;
     el('clear-log').disabled=blocked||(!experimentLog.records.length&&!logError);
     write('clear-log',pendingLog||logError?'Clear log + discard pending record':'Clear session log');
+    for(const id of ['persist','durable-prompts','restore-log','delete-saved-log','choose-journal','detach-journal','save-durable','find-archives','archive-select','restore-archive','delete-archive','import-file','import-prompts','import-log'])el(id).disabled=blocked;
+    el('choose-journal').disabled=blocked||typeof globalThis.showSaveFilePicker!=='function';el('detach-journal').disabled=blocked||!fileJournal;
+    write('durable-status',durableError||(saving?'Saving bounded private log…':durableNote)+(typeof globalThis.showSaveFilePicker!=='function'?' Automatic filesystem journal unavailable in this browser; explicit downloads remain available.':''));
     write('log-status',logError||`${el('logging').checked?'Logging enabled for new accepted runs':'Logging off'} · ${experimentLog.records.length} / 8 records · ${experimentLog.bytes} / 1048576 UTF-8 bytes · browser-session memory only until downloaded.`);
   }
   function render(){
     const step=play.current, active=play.active, computeMs=details.compute_total_ms??play.steps.at(-1)?.compute_total_ms;
     renderDraft();renderLogging();
     write('run-inputs',acceptedRequest?JSON.stringify(acceptedRequest,null,2):'No accepted run.');
-    el('start').disabled=!enabled||busyElsewhere||pending||active||!!logError;
+    el('start').disabled=!enabled||busyElsewhere||pending||active||!!logError||saving||importing||!!durableError;
     el('check').disabled=pending||active;
     el('cancel').disabled=!session||pending||!active;
     el('reset').disabled=!session||pending;
@@ -359,7 +416,7 @@ if(typeof document!=='undefined'){
     }
   }
   async function start(event,previewOnly=false){
-    event.preventDefault();if(pending||play.active||!enabled||busyElsewhere||logError)return;
+    event.preventDefault();if(pending||play.active||!enabled||busyElsewhere||logError||saving||importing||durableError)return;
     const id=++epoch;clearTimeout(polling);clearPlayback();pending=true;play.paused=true;if(!session)availability='Starting local generation…';message('');render();
     try{
       let request;
@@ -385,6 +442,7 @@ if(typeof document!=='undefined'){
     finally{if(id===epoch){pending=false;render();}}
   }
   async function stop(reset){
+    if(reset)cancelArchive();
     if(pending||!session)return;
     const id=++epoch,target=session;pending=true;play.paused=true;clearPlayback();clearTimeout(polling);render();
     try{
@@ -411,7 +469,29 @@ if(typeof document!=='undefined'){
     try{const record=pendingLog||experimentRecord(acceptedRequest,{status:play.status,worker_alive:lastWorkerAlive,steps:play.steps,details},{includePrompt:!!el('include-prompt').checked});downloadExperiment(finiteJSON(el('include-prompt').checked?record:redactExperiment(record)),'weight-atlas-experiment.json');message('');}catch(error){message(error.message);}
   });
   el('export-log').addEventListener('click',()=>{if(!pending&&!play.active){try{downloadExperiment(finiteJSON(experimentLog.envelope(el('include-prompt').checked?experimentLog.records:experimentLog.records.map(redactExperiment))),'weight-atlas-session-log.json');message('');}catch(error){message(error.message);}}});
-  el('clear-log').addEventListener('click',()=>{if(!pending&&!play.active){experimentLog.clear();pendingLog=null;logError='';render();}});
+  el('clear-log').addEventListener('click',()=>{if(!pending&&!play.active&&!saving&&!importing){experimentLog.clear();pendingLog=null;logError='';saveDurable();render();}});
+  el('persist').addEventListener('change',()=>{if(!pending&&!play.active&&!saving){durableNote=el('persist').checked?'Browser persistence enabled for this tab.':'Browser persistence off; existing saved data remains until explicitly deleted.';saveDurable();}});
+  el('durable-prompts').addEventListener('change',()=>{if(!pending&&!play.active&&!saving)saveDurable();});
+  el('save-durable').addEventListener('click',()=>{if(!pending&&!play.active&&!saving&&!importing)saveDurable();});
+  el('choose-journal').addEventListener('click',async()=>{
+    if(pending||play.active||saving||importing||typeof globalThis.showSaveFilePicker!=='function')return;
+    importing=true;render();
+    try{const handle=await globalThis.showSaveFilePicker({suggestedName:'weight-atlas-session-log.json',types:[{description:'Private experiment log JSON',accept:{'application/json':['.json']}}]});fileJournal=new AtlasFileJournal(handle);durableNote='File journal selected; every terminal logged run updates this bounded file.';}
+    catch(error){if(error.name!=='AbortError')message(error.message);}
+    finally{importing=false;await saveDurable();render();}
+  });
+  el('detach-journal').addEventListener('click',()=>{if(!pending&&!play.active&&!saving&&!importing){fileJournal=null;durableNote='File journal updates stopped; the file remains on disk.';saveDurable();}});
+  el('import-log').addEventListener('click',async()=>{
+    if(pending||play.active||saving||importing)return;const file=el('import-file').files?.[0];if(!file){write('import-status','Select one archived JSON file first.');return;}if(file.size>EXPERIMENT_BYTES){write('import-status','Import exceeds 1 MiB; existing records unchanged.');return;}
+    await importArchive(()=>file.text());
+  });
+  el('cancel-import').addEventListener('click',cancelArchive);
+  el('restore-log').addEventListener('click',()=>importArchive(()=>{const text=storage().read();if(!text)throw new Error('No saved log for this tab');return text;},true));
+  el('find-archives').addEventListener('click',()=>{if(!pending&&!play.active&&!saving&&!importing){try{const select=el('archive-select');select.replaceChildren();for(const [i,key] of storage().list().entries()){const option=document.createElement('option');option.value=key;option.textContent='Private archive '+(i+1)+' · '+key.slice(-8);select.append(option);}write('import-status','Saved archive names listed locally. Choose one and explicitly restore; no worker is adopted.');}catch(error){write('import-status',error.message);}}});
+  el('restore-archive').addEventListener('click',()=>importArchive(()=>{const text=storage().readKey(el('archive-select').value);if(!text)throw new Error('Archive no longer exists');return text;}));
+  el('delete-archive').addEventListener('click',async()=>{if(pending||play.active||saving||importing)return;importing=true;render();try{const key=el('archive-select').value;storage().readKey(key);await storage().mutate(globalThis.navigator?.locks,s=>{if(key===s.key())s.clear();else s.storage.removeItem(key);});write('import-status','Selected browser archive deleted. Other tabs must reconcile a changed archive before saving; worker sessions and files are unchanged.');}catch(error){write('import-status',error.message);}finally{importing=false;render();}});
+  el('delete-saved-log').addEventListener('click',async()=>{if(pending||play.active||saving||importing)return;importing=true;render();try{await storage().mutate(globalThis.navigator?.locks,s=>s.clear());el('persist').checked=false;durableError='';durableNote='This tab’s browser log deleted. In-memory records and files remain.';}catch(error){durableError=error.message;}finally{importing=false;render();}});
+
   el('form').addEventListener('submit',start);
   window.atlasInferenceSelectionChanged=updateSelection;
   el('kind').addEventListener('change',()=>updateSelection(selection));

@@ -96,33 +96,55 @@
   function updateNote(notes,s,n){check(validNote(n,s),'Invalid note');const next=notes.filter(x=>x.id!==n.id);next.push({...n,region:[...n.region]});check(next.length<=MAX_NOTES,'100-note limit reached');return next;}
   function decodeBF16(hex){check(typeof hex==='string'&&/^[0-9a-fA-F]{4}$/.test(hex),'Invalid original BF16 bytes');const bits=parseInt(hex.slice(2)+hex.slice(0,2),16),b=new ArrayBuffer(4),v=new DataView(b);v.setUint32(0,bits*65536,true);return v.getFloat32(0,true);}
   function csvCell(v,text=false){let s=String(v);if(text&&/^[\s\u0000-\u001f]*[=+\-@]/.test(s))s="'"+s;return '"'+s.replace(/"/g,'""')+'"';}
-  function boundedCSV(s,b,values,binding){
-    check(binding&&identity(binding.model_identity),'Exact scalar binding required');
-    requireBinding(binding,bindingFromScope(s,binding.model_identity));
+  function decodeSource(dtype,hex){
+    check(['BF16','F16','F32'].includes(dtype),'Only original BF16/F16/F32 sources are supported');
+    const bytes=dtype==='F32'?4:2;check(typeof hex==='string'&&new RegExp('^[0-9a-fA-F]{'+bytes*2+'}$').test(hex),'Invalid original source bytes');
+    if(dtype==='BF16')return decodeBF16(hex);
+    const data=Uint8Array.from(hex.match(/../g),h=>parseInt(h,16)),view=new DataView(data.buffer);
+    if(dtype==='F32')return view.getFloat32(0,true);
+    const bits=view.getUint16(0,true),sign=bits&32768?-1:1,exponent=(bits>>>10)&31,fraction=bits&1023;
+    return sign*(exponent===0?fraction*2**-24:exponent===31?(fraction?NaN:Infinity):(1+fraction/1024)*2**(exponent-15));
+  }
+  function checkedRegion(s,b,values,binding){
+    check(binding&&identity(binding.model_identity),'Exact scalar binding required');requireBinding(binding,bindingFromScope(s,binding.model_identity));
     region(b,s);const rows=b[2]-b[0]+1,cols=b[3]-b[1]+1,count=rows*cols;
     check(count<=MAX_CELLS&&values.length===count,'Export requires 1–256 native cells');
-    const metadata={format:'weight-atlas-region-v1',...s,model_identity:binding.model_identity,region:b,dimensions:[rows,cols],native_indices:s.shape.length===1?'[column]':'[...leading_indices,row,column]',source_dtype:'BF16',decoded_dtype:'IEEE754 binary32 (exact BF16 widening)',values:'original, untransformed',scale:'none; no normalization or color transform',decimal:'exact source decimal; BF16 little-endian bytes retained'};
-    check(s.dtype==='BF16','Only original BF16 sources are supported by this exporter');
-    const lines=[['metadata',JSON.stringify(metadata)].map(v=>csvCell(v,true)).join(','),'row,column,native_indices,raw_exact,bf16_hex_le'];
-    for(let i=0;i<count;i++){
-      const v=values[i],row=b[0]+Math.floor(i/cols),col=b[1]+i%cols,native=nativeIndices(s,row,col);
-      requireBinding(v.source_binding,binding);
-      check(v.tensor===s.tensor&&v.row===row&&v.col===col&&JSON.stringify(v.native_indices)===JSON.stringify(native),'Export address mismatch');
-      const decoded=decodeBF16(v.bf16_hex_le);
-      check(Number.isFinite(decoded)&&boundedText(v.raw_exact,256)&&/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(v.raw_exact)&&Object.is(Number(v.raw_exact),decoded),'Exact decimal and BF16 bytes disagree');
-      lines.push([row,col,JSON.stringify(native),v.raw_exact,v.bf16_hex_le].map(v=>csvCell(v)).join(','));
-    }
+    check(['BF16','F16','F32'].includes(s.dtype),'Only original BF16/F16/F32 sources are supported');
+    const hex=values.map((v,i)=>{
+      const row=b[0]+Math.floor(i/cols),col=b[1]+i%cols;requireBinding(v.source_binding,binding);
+      check(v.tensor===s.tensor&&v.row===row&&v.col===col&&JSON.stringify(v.native_indices)===JSON.stringify(nativeIndices(s,row,col)),'Export address mismatch');
+      const h=v.raw_hex_le??(s.dtype==='BF16'?v.bf16_hex_le:undefined),decoded=decodeSource(s.dtype,h);
+      check((v.dtype===undefined||v.dtype===s.dtype)&&(v.element_bytes===undefined||v.element_bytes===(s.dtype==='F32'?4:2)),'Export storage dtype mismatch');
+      check(Number.isFinite(decoded)&&boundedText(v.raw_exact,256)&&/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(v.raw_exact)&&Object.is(Number(v.raw_exact),decoded),'Exact decimal and source bytes disagree');return h.toLowerCase();
+    });
+    const metadata={format:'weight-atlas-region-v1',...s,model_identity:binding.model_identity,region:b,dimensions:[rows,cols],native_indices:s.shape.length===1?'[column]':'[...leading_indices,row,column]',source_dtype:s.dtype,decoded_dtype:s.dtype==='F16'?'IEEE754 binary16':'IEEE754 binary32'+(s.dtype==='BF16'?' (exact BF16 widening)':''),values:'original, untransformed',scale:'none; no normalization or color transform',decimal:'exact source decimal; '+s.dtype+' little-endian bytes retained'};
+    return {rows,cols,hex,metadata};
+  }
+  function boundedCSV(s,b,values,binding){
+    const {hex,metadata}=checkedRegion(s,b,values,binding),field=s.dtype==='BF16'?'bf16_hex_le':'raw_hex_le';
+    const lines=[['metadata',JSON.stringify(metadata)].map(v=>csvCell(v,true)).join(','),'row,column,native_indices,raw_exact,'+field];
+    for(let i=0;i<values.length;i++){const v=values[i];lines.push([v.row,v.col,JSON.stringify(v.native_indices),v.raw_exact,hex[i]].map(v=>csvCell(v)).join(','));}
     const csv=lines.join('\r\n')+'\r\n';check(new TextEncoder().encode(csv).byteLength<=MAX_BYTES,'Export exceeds 256 KiB');return csv;
   }
-  async function collectRegion({model,tensor,bounds,read,signal,onProgress=()=>{}}){
-    const s=scope(model,tensor),binding=sourceBinding(model,tensor),b=region(bounds,tensor),count=(b[2]-b[0]+1)*(b[3]-b[1]+1);check(count<=MAX_CELLS,'Export is capped at 256 native cells');check(s.dtype==='BF16','Only BF16 export is available');
+  function boundedNPY(s,b,values,binding){
+    const {rows,cols,hex,metadata}=checkedRegion(s,b,values,binding),descr=s.dtype==='F16'?'<f2':'<f4';
+    // Numeric NPY v1: fixed ASCII header, C order; never object arrays/pickle.
+    const prefix="{'descr': '"+descr+"', 'fortran_order': False, 'shape': ("+rows+', '+cols+'), }';
+    const header=prefix+' '.repeat((64-(10+prefix.length+1)%64)%64)+'\n',bytes=descr==='<f2'?2:4;
+    const data=new Uint8Array(10+header.length+hex.length*bytes);data.set([147,78,85,77,80,89,1,0,header.length&255,header.length>>>8]);data.set(new TextEncoder().encode(header),10);
+    hex.forEach((h,i)=>{const original=Uint8Array.from(h.match(/../g),x=>parseInt(x,16));data.set(s.dtype==='BF16'?[0,0,...original]:original,10+header.length+i*bytes);});
+    check(data.byteLength<=MAX_BYTES,'Export exceeds 256 KiB');return {data,metadata:{...metadata,numpy:{format:'NPY v1.0',descr,fortran_order:false,shape:[rows,cols],allow_pickle:false},source_hex_le:hex}};
+  }
+  async function collectRegion({model,tensor,bounds,read,signal,onProgress=()=>{},format='csv'}){
+    check(['csv','npy'].includes(format),'Unsupported export format');
+    const s=scope(model,tensor),binding=sourceBinding(model,tensor),b=region(bounds,tensor),count=(b[2]-b[0]+1)*(b[3]-b[1]+1);check(count<=MAX_CELLS,'Export is capped at 256 native cells');check(['BF16','F16','F32'].includes(s.dtype),'Only original BF16/F16/F32 export is available');
     async function sameSource(){live(signal);const m=await read('/api/model',signal);live(signal);const t=m.catalog?.find(t=>t.id===s.tensor);check(t&&m.model_identity===binding.model_identity&&JSON.stringify(scope(m,withSlice(t,s.slice||[])))===JSON.stringify(s),'Source changed during export; no file was produced');}
     await sameSource();const values=[];
     for(let row=b[0];row<=b[2];row++)for(let col=b[1];col<=b[3];col++){live(signal);const value=await read('/api/inspect?'+new URLSearchParams({tensor:s.tensor,slice:(s.slice||[]).join(','),row,col,left:'tensor_linear',right:'tensor_asinh'}),signal);live(signal);requireBinding(value.source_binding,binding);values.push(value);onProgress(values.length,count);}
-    await sameSource();live(signal);return boundedCSV(s,b,values,binding);
+    await sameSource();live(signal);return format==='csv'?boundedCSV(s,b,values,binding):boundedNPY(s,b,values,binding);
   }
   // Observed native regions, bound to the exact local source snapshot. Evidence in
-  // docs/UI-POLISH-OBSERVATIONS.json. No model-name/shape-only layout inference.
+  // tests/fixtures/ui-polish-observations.json. No model-name/shape-only layout inference.
   const STARTER_SOURCE='2554a200ae640fd3b5bc7f91ffac1be0483efaf571b36dfac91f42eb5a40bc8d';
   const STARTER_REVISION='93efa2f097d58c2a74874c7e644dbc9b0cee75a2';
   const STARTERS=[
@@ -154,5 +176,5 @@
     const evidence=d.runtime_verified===true&&d.evidence==='loaded_builtin_layout'?'loaded built-in layout':'configuration-derived layout; runtime unverified';
     return `${key==='o_proj'?'Output input-column Q-head group':key==='q_proj'?'Query head':'KV '+m[2].toUpperCase()+' head'} ${index} · ${axis==='rows'?'row':'column'} offset ${coordinate%p.head_dim} (${evidence})`;
   }
-  return {sliceIndices,sliceQuery,withSlice,nativeIndices,guidedExamples,hoverHead,RULES,MAX_CELLS,MAX_BYTES,MAX_NOTES,MAX_NOTE_TEXT,region,viewport,parseBookmark,resolveBookmark,bookmark,delay,readJSON,scope,sourceBinding,requireBinding,sameModelContext,noteKey,loadNotes,saveNotes,updateNote,decodeBF16,csvCell,boundedCSV,collectRegion};
+  return {sliceIndices,sliceQuery,withSlice,nativeIndices,guidedExamples,hoverHead,RULES,MAX_CELLS,MAX_BYTES,MAX_NOTES,MAX_NOTE_TEXT,region,viewport,parseBookmark,resolveBookmark,bookmark,delay,readJSON,scope,sourceBinding,requireBinding,sameModelContext,noteKey,loadNotes,saveNotes,updateNote,decodeBF16,decodeSource,csvCell,boundedCSV,boundedNPY,collectRegion};
 });

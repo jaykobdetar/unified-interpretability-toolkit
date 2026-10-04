@@ -38,3 +38,27 @@ for name, selection in [('matrix', slice(None)), ('vector', slice(1, 4))]:
         assert json.loads(row[2]) == ([r, c] if name == 'matrix' else [c])
 print(json.dumps({'status': 'PASS', 'checks': 2, 'numpy': np.__version__,
                   'scope': 'BF16 matrix/vector CSV, signed zero, subnormal, max finite, exact original bytes, native indices and metadata'}))
+
+# Numeric NPY roundtrip uses NumPy's independent IEEE decoder with pickle disabled.
+script_npy = r"""
+const A=require('./web/atlas-tools.js');
+const hex={BF16:['0080','0100','7f7f','803f'],F16:['0080','0100','ff7b','003c'],F32:['00000080','01000000','ffff7f7f','0000803f']};
+const result={};
+for(const [dtype,entries] of Object.entries(hex)){
+ const t={id:0,name:'fixture',dtype,shape:[2,1,4],slice:[1],rows:1,cols:4},m={model_identity:'d'.repeat(64),source_identity:'a'.repeat(64),revision:'fixture',catalog:[t]},binding=A.sourceBinding(m,t);
+ const values=entries.map((h,col)=>({source_binding:binding,tensor:0,row:0,col,native_indices:[1,0,col],raw_hex_le:h,raw_exact:Object.is(A.decodeSource(dtype,h),-0)?'-0':String(A.decodeSource(dtype,h))}));
+ const output=A.boundedNPY(A.scope(m,t),[0,0,0,3],values,binding);result[dtype]={hex:entries,base64:Buffer.from(output.data).toString('base64'),metadata:output.metadata,csv:A.boundedCSV(A.scope(m,t),[0,0,0,3],values,binding)};
+}
+process.stdout.write(JSON.stringify(result));
+"""
+import base64
+outputs=json.loads(subprocess.check_output(['node','-e',script_npy],cwd=ROOT,text=True))
+for dtype, output in outputs.items():
+    raw=b''.join(bytes.fromhex(h) for h in output['hex'])
+    expected=(np.frombuffer(raw,dtype='<u2').astype('<u4') << 16).view('<f4') if dtype=='BF16' else np.frombuffer(raw,dtype='<f2' if dtype=='F16' else '<f4')
+    actual=np.load(io.BytesIO(base64.b64decode(output['base64'])),allow_pickle=False)
+    np.testing.assert_array_equal(actual.reshape(-1).view('<u2' if dtype=='F16' else '<u4'),expected.view('<u2' if dtype=='F16' else '<u4'))
+    csv_actual=np.array([r[3] for r in list(csv.reader(io.StringIO(output['csv'])))[2:]],dtype=expected.dtype)
+    np.testing.assert_array_equal(csv_actual.view('<u2' if dtype=='F16' else '<u4'),expected.view('<u2' if dtype=='F16' else '<u4'))
+    assert actual.shape==(1,4) and output['metadata']['slice']==[1]
+print('PASS: independent NumPy CSV/NPY bit roundtrip for BF16/F16/F32, allow_pickle=False, signed zero, subnormal, maximum finite and explicit rank-three slice.')

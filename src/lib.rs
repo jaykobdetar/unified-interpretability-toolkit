@@ -1,8 +1,9 @@
 pub mod comparison;
 pub mod comparison_http;
-pub mod profile_worker;
 pub mod hosted_renderer;
+pub mod profile_worker;
 pub mod render;
+pub mod resources;
 pub mod server;
 pub mod slice;
 pub mod source;
@@ -22,22 +23,31 @@ pub fn sha(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 pub fn headroom() -> Result<u64> {
-    let text = std::fs::read_to_string("/proc/meminfo")?;
-    let kb = text
-        .lines()
-        .find(|l| l.starts_with("MemAvailable:"))
-        .ok_or("MemAvailable missing")?
-        .split_whitespace()
-        .nth(1)
-        .ok_or("MemAvailable invalid")?
-        .parse::<u64>()?;
-    require(
-        kb >= 3 * 1024 * 1024,
-        "PAUSED: fewer than 3 GiB available RAM; retry when memory is available",
-    )?;
-    Ok(kb * 1024)
+    let available = if resources::standalone_active() {
+        resources::available_bytes()?
+    } else {
+        resources::host_available_bytes()?
+    };
+    if resources::standalone_active() {
+        require(
+            available >= resources::policy().available_floor_bytes,
+            "PAUSED: effective available RAM is below configured reserve",
+        )?;
+    } else {
+        resources::StartupScope::Legacy.admit(
+            resources::policy(),
+            1,
+            available,
+            available,
+            u64::MAX,
+        )?;
+    }
+    Ok(available)
 }
 pub fn disk_guard(path: &Path) -> Result<()> {
+    disk_guard_for(path, 0)
+}
+fn disk_guard_for(path: &Path, additional_bytes: u64) -> Result<()> {
     use std::os::unix::ffi::OsStrExt;
     let c = CString::new(path.as_os_str().as_bytes())?;
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
@@ -47,12 +57,19 @@ pub fn disk_guard(path: &Path) -> Result<()> {
         "Cannot check disk reserve",
     )?;
     let stat = unsafe { stat.assume_init() };
+    let additional_bytes = if resources::standalone_active() {
+        additional_bytes
+    } else {
+        0
+    };
     require(
-        stat.f_bavail as u128 * stat.f_frsize as u128 >= 25 * 1024u128.pow(3),
-        "PAUSED: fewer than 25 GiB disk reserve",
+        stat.f_bavail as u128 * stat.f_frsize as u128
+            >= resources::policy().disk_reserve_bytes as u128 + additional_bytes as u128,
+        "PAUSED: disk free space is below configured reserve",
     )
 }
 pub fn configure() -> Result<usize> {
+    resources::activate_scope(resources::StartupScope::Legacy);
     headroom()?;
     // SAFETY: initialized cpu_set_t/rlimit pointers, checked syscalls. All spawned threads inherit affinity.
     unsafe {
@@ -85,7 +102,68 @@ pub fn configure() -> Result<usize> {
             libc::getrlimit(libc::RLIMIT_AS, &mut lim) == 0,
             "Cannot read address-space limit",
         )?;
-        lim.rlim_cur = lim.rlim_max.min(768 * 1024 * 1024);
+        lim.rlim_cur = resources::legacy_address_space(lim.rlim_max);
+        require(
+            libc::setrlimit(libc::RLIMIT_AS, &lim) == 0,
+            "Cannot set address-space limit",
+        )?;
+        libc::nice(10);
+        Ok(cpu)
+    }
+}
+pub fn configure_standalone() -> Result<usize> {
+    resources::activate_scope(resources::StartupScope::Standalone);
+    headroom()?;
+    // SAFETY: initialized cpu_set_t/rlimit pointers, checked syscalls. All spawned threads inherit affinity.
+    unsafe {
+        let mut available: libc::cpu_set_t = std::mem::zeroed();
+        require(
+            libc::sched_getaffinity(0, std::mem::size_of_val(&available), &mut available) == 0,
+            "Cannot read affinity",
+        )?;
+        let default = (0..libc::CPU_SETSIZE as usize)
+            .find(|&i| libc::CPU_ISSET(i, &available))
+            .ok_or("No allowed CPU")?;
+        let cpu = std::env::var("ATLAS_CPU")
+            .ok()
+            .map(|s| s.parse())
+            .transpose()?
+            .unwrap_or(default);
+        require(
+            cpu < libc::CPU_SETSIZE as usize && libc::CPU_ISSET(cpu, &available),
+            "ATLAS_CPU is outside allowed affinity",
+        )?;
+        let limits = resources::policy();
+        let allowed = (0..libc::CPU_SETSIZE as usize)
+            .filter(|&i| libc::CPU_ISSET(i, &available))
+            .collect::<Vec<_>>();
+        let mut lim: libc::rlimit = std::mem::zeroed();
+        require(
+            libc::getrlimit(libc::RLIMIT_AS, &mut lim) == 0,
+            "Cannot read address-space limit",
+        )?;
+        resources::StartupScope::Standalone.admit(
+            limits,
+            allowed.len().min(resources::cpu_quota()?),
+            0,
+            resources::available_bytes()?,
+            lim.rlim_max,
+        )?;
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
+        libc::CPU_ZERO(&mut set);
+        libc::CPU_SET(cpu, &mut set);
+        for other in allowed
+            .into_iter()
+            .filter(|&i| i != cpu)
+            .take(limits.cpu_count - 1)
+        {
+            libc::CPU_SET(other, &mut set);
+        }
+        require(
+            libc::sched_setaffinity(0, std::mem::size_of_val(&set), &set) == 0,
+            "Cannot set configured CPU affinity",
+        )?;
+        lim.rlim_cur = limits.address_space_bytes;
         require(
             libc::setrlimit(libc::RLIMIT_AS, &lim) == 0,
             "Cannot set address-space limit",
@@ -103,7 +181,7 @@ pub fn peak_rss_mib() -> f64 {
 }
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
-    disk_guard(path.parent().ok_or("No output parent")?)?;
+    disk_guard_for(path.parent().ok_or("No output parent")?, bytes.len() as u64)?;
     atomic_replace(
         path,
         |f| {

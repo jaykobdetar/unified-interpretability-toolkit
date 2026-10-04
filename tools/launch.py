@@ -8,9 +8,21 @@ import shutil
 import subprocess
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from viewer_resources import encode as encode_resources
+
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = ROOT / 'target/release/weight-atlas-rust'
-FIELDS = {'model', 'cache', 'port', 'name', 'revision'}
+FIELDS = {'model', 'cache', 'port', 'name', 'revision', 'resources'}
+
+
+def unique_fields(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError('duplicate configuration field: ' + key)
+        value[key] = item
+    return value
 
 
 def main(argv=None):
@@ -31,14 +43,18 @@ def main(argv=None):
     if args.config:
         source = Path(args.config).expanduser().resolve()
         try:
-            config = json.loads(source.read_text())
+            config = json.loads(source.read_text(), object_pairs_hook=unique_fields)
         except (OSError, ValueError) as exc:
             parser.error(f'cannot read JSON configuration: {exc}')
         if not isinstance(config, dict) or set(config) - FIELDS:
-            parser.error('configuration must be an object containing only model, cache, port, name, revision')
-        if any(not isinstance(v, (str, int)) or isinstance(v, bool) for v in config.values()):
+            parser.error('configuration must be an object containing only model, cache, port, name, revision, resources')
+        if any(not isinstance(v, (str, int)) or isinstance(v, bool) for k, v in config.items() if k != 'resources'):
             parser.error('configuration values must be strings (port may also be an integer)')
         base = source.parent
+    try:
+        resources = encode_resources(config.get('resources', {}))
+    except ValueError as exc:
+        parser.error(str(exc))
     def value(field, default=None):
         explicit = getattr(args, field, None) or os.environ.get('ATLAS_' + field.upper())
         item = explicit if explicit is not None else config.get(field, default)
@@ -76,6 +92,8 @@ def main(argv=None):
     command = [str(BINARY), 'serve', '--model', str(model), '--cache', str(cache), '--port', str(port),
                '--name', str(value('name', 'Synthetic BF16 fixture' if args.demo else 'Local safetensors model')),
                '--revision', str(value('revision', 'synthetic fixture' if args.demo else 'local selection; revision not asserted'))]
+    if 'resources' in config:
+        command.extend(['--resources', resources])
     print(f'Viewer only: http://127.0.0.1:{port} — Ctrl-C to stop. Startup checks may refuse launch.', flush=True)
     os.execv(str(BINARY), command)
 

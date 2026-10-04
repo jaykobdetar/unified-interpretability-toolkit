@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Owner-only local CLI entry point; all acquisition is disabled."""
+"""Owner-only local CLI entry point; explicit pinned acquisition, never HTTP."""
 from atlas_host.cli import main
 
 if __name__ == '__main__':

@@ -10,6 +10,7 @@ use std::{
     collections::BTreeMap,
     io::{self, Read, Write},
     net::{TcpListener, TcpStream},
+    os::fd::AsRawFd,
     sync::{
         mpsc::{sync_channel, SyncSender, TryRecvError},
         Arc,
@@ -114,7 +115,12 @@ fn response_head(status: u16, mime: &str, length: usize, headers: &str) -> Strin
         503 => "Service Unavailable",
         _ => "Error",
     };
-    format!("HTTP/1.1 {status} {phrase}\r\nContent-Type: {mime}\r\nContent-Length: {length}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'\r\n{headers}\r\n")
+    let cache = if headers.contains("Cache-Control:") {
+        ""
+    } else {
+        "Cache-Control: no-store\r\n"
+    };
+    format!("HTTP/1.1 {status} {phrase}\r\nContent-Type: {mime}\r\nContent-Length: {length}\r\nConnection: close\r\n{cache}X-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'\r\n{headers}\r\n")
 }
 pub fn reply(mut socket: TcpStream, status: u16, mime: &str, body: &[u8], headers: &str) {
     let text = response_head(status, mime, body.len(), headers);
@@ -178,6 +184,7 @@ pub(crate) fn error(s: TcpStream, status: u16, e: impl std::fmt::Display) {
     json_reply(s, status, json!({"error":e.to_string(),"api_version":1}))
 }
 enum Job {
+    Wake,
     Calibrate(usize),
     Tile(TcpStream, Query),
 }
@@ -345,14 +352,59 @@ pub fn serve(state: Arc<State>, port: u16) -> Result<()> {
     let port = listener.local_addr()?.port();
     let (sender, receiver) = sync_channel::<Job>(8);
     let worker = state.clone();
-    std::thread::Builder::new().name("atlas-numeric-worker".into()).spawn(move||loop{
-  let job=match receiver.try_recv(){Ok(j)=>Some(j),Err(TryRecvError::Disconnected)=>break,Err(TryRecvError::Empty)=>None};
-  let job=if job.is_none(){let all=worker.progress.lock().unwrap().all_requested;let next=if all{worker.source.tensors.iter().find(|t|t.available && worker.stats(t.id).is_none()).map(|t|t.id)}else{None};if let Some(id)=next{Some(Job::Calibrate(id))}else{if all{worker.progress.lock().unwrap().all_requested=false}receiver.recv_timeout(Duration::from_millis(100)).ok()}}else{job};
-  match job {Some(Job::Calibrate(id))=>{if let Err(e)=worker.calibrate_one(id){eprintln!("Calibration paused: {e}");worker.progress.lock().unwrap().all_requested=false}},Some(Job::Tile(socket,q))=>{
-   if disconnected(&socket){continue}let start=Instant::now();let result=(||{worker.tile_slice(q.int("tensor","0")?,&parse_indices(q.get("slice",""))?,q.get("rule","global_linear"),q.int("level","0")?.try_into()?,q.int("x","0")?,q.int("y","0")?)})();
-   match result{Ok((png,cached,m))=>reply(socket,200,"image/png",&png,&format!("X-Atlas-Factor: {}\r\nX-Atlas-Cache: {}\r\nX-Atlas-Seconds: {:.6}\r\nX-Atlas-Source-Bytes: {}\r\n",m.factor,if cached{"hit"}else{"miss"},start.elapsed().as_secs_f64(),m.source_bytes_read)),Err(e)=>{let code=if e.to_string().contains("not ready"){503}else{400};error(socket,code,e)}}
-  },None=>{}}
- })?;
+    std::thread::Builder::new().name("atlas-numeric-worker".into()).spawn(move || loop {
+        let job = match receiver.try_recv() {
+            Ok(job) => Some(job),
+            Err(TryRecvError::Disconnected) => break,
+            Err(TryRecvError::Empty) => None,
+        };
+        let job = job.or_else(|| {
+            let all = worker.progress.lock().unwrap().all_requested;
+            let next = if all {
+                worker.source.tensors.iter().find(|t| t.available && worker.stats(t.id).is_none()).map(|t| t.id)
+            } else { None };
+            if let Some(id) = next { Some(Job::Calibrate(id)) }
+            else {
+                if all { worker.progress.lock().unwrap().all_requested = false; }
+                // OS channel wait; explicit calibration/tile sends wake the worker.
+                receiver.recv().ok()
+            }
+        });
+        match job {
+            Some(Job::Wake) => {},
+            Some(Job::Calibrate(id)) => {
+                if let Err(error) = worker.calibrate_one(id) {
+                    eprintln!("Calibration paused: {error}");
+                    worker.progress.lock().unwrap().all_requested = false;
+                }
+            }
+            Some(Job::Tile(socket, q)) => {
+                if disconnected(&socket) { continue; }
+                let start = Instant::now();
+                let result = (|| {
+                    let binding = q.get("binding", "");
+                    worker.tile_slice_bound(q.int("tensor", "0")?, &parse_indices(q.get("slice", ""))?,
+                        q.get("rule", "global_linear"), q.int("level", "0")?.try_into()?,
+                        q.int("x", "0")?, q.int("y", "0")?, (!binding.is_empty()).then_some(binding))
+                })();
+                match result {
+                    Ok((png, cached, metrics)) => {
+                        let mut headers = format!("X-Atlas-Factor: {}\r\nX-Atlas-Cache: {}\r\nX-Atlas-Seconds: {:.6}\r\nX-Atlas-Source-Bytes: {}\r\n",
+                            metrics.factor, if cached { "hit" } else { "miss" }, start.elapsed().as_secs_f64(), metrics.source_bytes_read);
+                        if !q.get("binding", "").is_empty() {
+                            headers.push_str("Cache-Control: private, max-age=86400, immutable\r\n");
+                        }
+                        reply(socket, 200, "image/png", &png, &headers);
+                    }
+                    Err(error_value) => {
+                        let code = if error_value.to_string().contains("not ready") { 503 } else { 400 };
+                        error(socket, code, error_value);
+                    }
+                }
+            }
+            None => break,
+        }
+    })?;
     let (dispatch_sender, dispatch_receiver) = sync_channel::<CompletedRequest>(DISPATCH_CAPACITY);
     let dispatch_state = state.clone();
     let numeric_sender = sender.clone();
@@ -366,7 +418,7 @@ pub fn serve(state: Arc<State>, port: u16) -> Result<()> {
         })?;
     println!(
         "{}",
-        json!({"listening":format!("http://127.0.0.1:{port}"),"metadata_ready_seconds":state.started.elapsed().as_secs_f64(),"header_bytes":state.source.header_bytes,"tensors":state.source.tensors.len(),"peak_rss_mib":crate::peak_rss_mib()})
+        json!({"listening":format!("http://127.0.0.1:{port}"),"metadata_ready_seconds":state.started.elapsed().as_secs_f64(),"header_bytes":state.source.header_bytes,"tensors":state.source.tensors.len(),"peak_rss_mib":crate::peak_rss_mib(),"resources":crate::resources::snapshot()?})
     );
     std::io::stdout().flush()?;
     run_transport(listener, dispatch_sender)
@@ -435,8 +487,63 @@ pub(crate) fn run_transport(
                 Err(e) => reject_now(socket, 400, "request_input", &e.to_string()),
             }
         }
-        std::thread::sleep(Duration::from_millis(10));
+        wait_transport(&listener, &pending, next_accept)?;
     }
+}
+
+// Wait for socket readiness or the nearest existing absolute deadline. No idle
+// timer and no extension of a header/accept deadline when readiness is spurious.
+fn poll_timeout(now: Instant, deadlines: impl Iterator<Item = Instant>) -> i32 {
+    deadlines
+        .min()
+        .map(|deadline| {
+            let remaining = deadline.saturating_duration_since(now);
+            remaining
+                .as_nanos()
+                .div_ceil(1_000_000)
+                .min(i32::MAX as u128) as i32
+        })
+        .unwrap_or(-1)
+}
+fn wait_transport(listener: &TcpListener, pending: &[PendingHeader], retry: Instant) -> Result<()> {
+    let now = Instant::now();
+    let retrying = retry > now;
+    let mut descriptors = Vec::with_capacity(pending.len() + 1);
+    if !retrying {
+        descriptors.push(libc::pollfd {
+            fd: listener.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        });
+    }
+    descriptors.extend(pending.iter().map(|p| libc::pollfd {
+        fd: p.socket.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    }));
+    let timeout = poll_timeout(
+        now,
+        pending
+            .iter()
+            .map(|p| p.reader.deadline)
+            .chain(retrying.then_some(retry)),
+    );
+    // SAFETY: all descriptors are owned for the entire call; poll writes only
+    // inside the initialized vector. EINTR returns to recheck absolute clocks.
+    let result = unsafe {
+        libc::poll(
+            descriptors.as_mut_ptr(),
+            descriptors.len() as libc::nfds_t,
+            timeout,
+        )
+    };
+    if result < 0 {
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error.into());
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn parse_request(raw: &[u8], port: u16) -> Result<Request> {
@@ -512,6 +619,15 @@ fn dispatch(
         }
         if q.get("all", "0") == "1" {
             let mut p = state.progress.lock().unwrap();
+            // Wake a sleeping worker without recurring polling. A full queue
+            // already wakes it; disconnected transport cannot accept work.
+            if matches!(
+                sender.try_send(Job::Wake),
+                Err(std::sync::mpsc::TrySendError::Disconnected(_))
+            ) {
+                error(socket, 503, "Numeric worker unavailable");
+                return;
+            }
             p.all_requested = true;
             p.error = None;
             json_reply(
@@ -612,7 +728,7 @@ fn dispatch(
                 q.get("right", "global_asinh"),
             )?;
             Ok(
-                json!({"api_version":1,"tensor":selected,"source_binding":state.slice_binding(&slice),"legends":l,"tile_size":256,"overlap":0,"source_values_unchanged":true}),
+                json!({"api_version":1,"tensor":selected,"source_binding":state.slice_binding(&slice),"legends":l,"tile_bindings":{"left":state.tile_binding_for(&slice,q.get("left","global_linear"),&l["left"]),"right":state.tile_binding_for(&slice,q.get("right","global_asinh"),&l["right"])},"tile_size":256,"overlap":0,"source_values_unchanged":true}),
             )
         })();
         match result {
@@ -638,6 +754,10 @@ fn dispatch(
             include_bytes!("../web/index.html"),
         )),
         "/inference.js" => Some(("text/javascript", include_bytes!("../web/inference.js"))),
+        "/inference-import.js" => Some((
+            "text/javascript",
+            include_bytes!("../web/inference-import.js"),
+        )),
         "/atlas-tools.js" => Some(("text/javascript", include_bytes!("../web/atlas-tools.js"))),
         "/workspace-tools.js" => Some((
             "text/javascript",
@@ -669,6 +789,43 @@ pub fn query(args: &[(String, String)]) -> Query {
 #[cfg(test)]
 mod query_tests {
     use super::*;
+
+    #[test]
+    fn immutable_cache_headers_require_explicit_validated_tile_policy() {
+        let legacy = response_head(200, "image/png", 10, "");
+        assert!(legacy.contains("Cache-Control: no-store\r\n"));
+        assert!(!legacy.contains("immutable"));
+        let bound = response_head(
+            200,
+            "image/png",
+            10,
+            "Cache-Control: private, max-age=86400, immutable\r\n",
+        );
+        assert_eq!(bound.matches("Cache-Control:").count(), 1);
+        assert!(bound.contains("private, max-age=86400, immutable"));
+    }
+
+    #[test]
+    fn os_wait_uses_the_earliest_absolute_deadline() {
+        let now = Instant::now();
+        assert_eq!(poll_timeout(now, std::iter::empty()), -1);
+        assert_eq!(
+            poll_timeout(
+                now,
+                [
+                    now + Duration::from_millis(500),
+                    now + Duration::from_millis(12)
+                ]
+                .into_iter()
+            ),
+            12
+        );
+        assert_eq!(
+            poll_timeout(now, [now + Duration::from_micros(1)].into_iter()),
+            1
+        );
+        assert_eq!(poll_timeout(now, [now].into_iter()), 0);
+    }
 
     #[test]
     fn startup_script_bundle_is_fixed_order_bounded_and_single_request() {

@@ -63,6 +63,25 @@ class LauncherTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 self.run_quiet(['--config', str(config), '--demo', '--check'])
 
+    def test_resource_configuration_is_validated_before_spawn(self):
+        with tempfile.TemporaryDirectory() as d:
+            config = Path(d) / 'config.json'
+            config.write_text(json.dumps({'resources': {'cpu_count': 4, 'tile_cache_files': 8000}}))
+            with patch.object(launch.os, 'access', return_value=True), patch.object(launch.os, 'execv') as start:
+                self.run_quiet(['--demo', '--config', str(config)])
+                argv = start.call_args.args[1]
+                resources = json.loads(argv[argv.index('--resources') + 1])
+                self.assertEqual(resources['cpu_count'], 4)
+                self.assertEqual(resources['disk_reserve_bytes'], 25*1024**3)
+            for raw in ['{"resources":{"disk_reserve_bytes":0}}',
+                        '{"resources":{"cpu_count":true}}',
+                        '{"resources":{"cpu_count":1,"cpu_count":2}}',
+                        '{"port":8775,"port":8776}']:
+                config.write_text(raw)
+                with patch.object(launch.os, 'execv') as start, self.assertRaises(SystemExit):
+                    self.run_quiet(['--demo', '--config', str(config), '--check'])
+                start.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -201,8 +201,8 @@ async function selectTensor(id){
   catch(e){if(e.name!=='AbortError'&&epoch===state.modelEpoch&&view===state.viewEpoch&&state.tensor?.id===id)showError(e.message);}
   if(window.innerWidth<=760)$('tensor-browser').open=false;
 }
-function tileSource(t,rule){return {width:t.cols,height:t.rows,tileSize:256,tileOverlap:0,minLevel:0,maxLevel:t.max_level,
-  getTileUrl:(level,x,y)=>apiURL('/tile?'+new URLSearchParams({tensor:t.id,...(t.slice?{slice:t.slice.join(',')}:{}),rule,level,x,y}))};}
+function tileSource(t,rule,binding){if(binding!==undefined)assert(typeof binding==='string'&&/^[a-f0-9]{64}$/.test(binding),'Invalid tile binding.');return {width:t.cols,height:t.rows,tileSize:256,tileOverlap:0,minLevel:0,maxLevel:t.max_level,
+  getTileUrl:(level,x,y)=>apiURL('/tile?'+new URLSearchParams({tensor:t.id,...(t.slice?{slice:t.slice.join(',')}:{}),rule,level,x,y,...(binding?{binding}:{})}))};}
 function createViewer(side,view,s,id,signal){
   const host=$(side+'-canvas'),stage=node('div','canvas-stage');stage.id=`${side}-stage-${id}`;host.replaceChildren(stage);
   const viewer=OpenSeadragon({element:stage,drawer:'canvas',showNavigationControl:false,showNavigator:false,
@@ -233,7 +233,7 @@ function createViewer(side,view,s,id,signal){
     queueHover(Math.floor(p.y),Math.floor(p.x));
   },{signal});
   host.addEventListener('pointerleave',()=>cancelHover(),{signal});
-  viewer.open(tileSource(view.tensor,s[side]));
+  viewer.open(tileSource(view.tensor,s[side],view.tile_bindings?.[side]));
   return {viewer,stage,opened};
 }
 function drawLegend(side,l){

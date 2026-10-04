@@ -487,6 +487,27 @@ pub fn region_fields(
     region: (usize, usize, usize, usize),
     f: usize,
 ) -> Result<(Vec<Vec<f64>>, Metrics)> {
+    region_fields_with_threads(
+        source,
+        t,
+        luts,
+        region,
+        f,
+        crate::resources::policy().cpu_count,
+    )
+}
+fn region_fields_with_threads(
+    source: &Source,
+    t: &Tensor,
+    luts: &[&Mapping],
+    region: (usize, usize, usize, usize),
+    f: usize,
+    requested_threads: usize,
+) -> Result<(Vec<Vec<f64>>, Metrics)> {
+    require(
+        (1..=8).contains(&requested_threads),
+        "Rendering threads must be 1–8",
+    )?;
     require(
         t.available && t.shape.len() <= 2,
         "Rendering requires an available explicit 2D slice",
@@ -504,6 +525,89 @@ pub fn region_fields(
     let (w, h) = ((c1 - c0).div_ceil(f), (r1 - r0).div_ceil(f));
     require(w * h <= 1048576, "Output exceeds bounded image limit")?;
     source.check()?;
+    let threads = requested_threads.min(h);
+    let parallel = threads > 1 && (r1 - r0).saturating_mul(c1 - c0) >= 65536;
+    let workspace = (w * h * luts.len() * if parallel { 16 } else { 8 }) as u64
+        + threads as u64 * (RAW_BAND_BYTES as u64 + 2 * 1024 * 1024);
+    let _permit = crate::resources::reserve(workspace.max(crate::resources::JOB_WORKSPACE_BYTES))?;
+    if !parallel {
+        return region_fields_serial(source, t, luts, region, f);
+    }
+    // Output-row partitions never split a pooling block. Every pixel retains
+    // the original row/chunk arithmetic order; all workers join before return.
+    let rows_per_worker = h.div_ceil(threads);
+    let results = std::thread::scope(|scope| -> Result<Vec<_>> {
+        let mut handles = Vec::new();
+        for output_row in (0..h).step_by(rows_per_worker) {
+            let begin = r0 + output_row * f;
+            let end = (r0 + (output_row + rows_per_worker).min(h) * f).min(r1);
+            handles.push(
+                std::thread::Builder::new()
+                    .name("atlas-render".into())
+                    .stack_size(2 * 1024 * 1024)
+                    .spawn_scoped(scope, move || {
+                        region_fields_serial(source, t, luts, (begin, end, c0, c1), f)
+                    })?,
+            );
+        }
+        // Consume ALL joins, including after any earlier worker error. Scoped
+        // ownership also joins previously spawned threads if a spawn fails.
+        let mut results = Vec::new();
+        let mut failure = None;
+        for handle in handles {
+            match handle.join() {
+                Ok(Ok(result)) => results.push(result),
+                Ok(Err(error)) => {
+                    if failure.is_none() {
+                        failure = Some(error);
+                    }
+                }
+                Err(_) => {
+                    if failure.is_none() {
+                        failure = Some("Render worker failed".into());
+                    }
+                }
+            }
+        }
+        if let Some(error) = failure {
+            Err(error)
+        } else {
+            Ok(results)
+        }
+    })?;
+    source.check()?;
+    let mut fields = (0..luts.len())
+        .map(|_| Vec::with_capacity(w * h))
+        .collect::<Vec<_>>();
+    let mut metrics = Metrics {
+        source_count: 0,
+        source_bytes_read: 0,
+        max_raw_band_values: 0,
+        factor: f,
+        width: w,
+        height: h,
+    };
+    for (mut parts, part) in results {
+        for (field, values) in fields.iter_mut().zip(parts.iter_mut()) {
+            field.append(values);
+        }
+        metrics.source_count += part.source_count;
+        metrics.source_bytes_read += part.source_bytes_read;
+        metrics.max_raw_band_values = metrics.max_raw_band_values.max(part.max_raw_band_values);
+    }
+    Ok((fields, metrics))
+}
+
+fn region_fields_serial(
+    source: &Source,
+    t: &Tensor,
+    luts: &[&Mapping],
+    region: (usize, usize, usize, usize),
+    f: usize,
+) -> Result<(Vec<Vec<f64>>, Metrics)> {
+    let (r0, r1, c0, c1) = region;
+    let dtype = Dtype::parse(&t.dtype)?;
+    let (w, h) = ((c1 - c0).div_ceil(f), (r1 - r0).div_ceil(f));
     let mut out = vec![vec![0.; w * h]; luts.len()];
     let mut max_raw = 0;
     let mut read = 0;
@@ -512,6 +616,7 @@ pub fn region_fields(
     // The entire span, including gaps, remains <=2 MiB.
     let width = c1 - c0;
     let capacity = RAW_BAND_BYTES / dtype.bytes();
+    require(width <= capacity, "Source row exceeds raw band budget")?;
     let band_rows = if t.cols <= width.saturating_mul(4) {
         (1 + (capacity - width) / t.cols).min(r1 - r0)
     } else {
@@ -554,6 +659,7 @@ pub fn region_fields(
             }
         }
     }
+
     source.check()?;
     for field in &mut out {
         for row in 0..h {
@@ -645,4 +751,194 @@ fn encode_png(pixels: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
     chunk(&mut out, b"IDAT", &compressed);
     chunk(&mut out, b"IEND", &[]);
     Ok(out)
+}
+
+#[cfg(test)]
+mod resource_numeric_tests {
+    use super::*;
+    use std::io::Write;
+
+    // This oracle has no Mapping/LUT dependency. It transforms each real address
+    // before pooling and counts the partial edges independently of band reads.
+    fn scalar_oracle(
+        values: &[f64; 6],
+        counts: &[u64; 6],
+        cols: usize,
+        region: (usize, usize, usize, usize),
+        factor: usize,
+        rule: &str,
+    ) -> Vec<f64> {
+        let (r0, r1, c0, c1) = region;
+        let (width, height) = ((c1 - c0).div_ceil(factor), (r1 - r0).div_ceil(factor));
+        let mut expected = vec![0.; width * height];
+        for row in r0..r1 {
+            for col in c0..c1 {
+                let v = values[(row * cols + col) % values.len()];
+                let transformed = match rule {
+                    "tensor_linear" => v / 2.,
+                    "tensor_asinh" => v.asinh() / 2f64.asinh(),
+                    "tensor_magnitude" => v.abs() / 2.,
+                    "tensor_robust99" => v.clamp(-1., 1.),
+                    "tensor_signed_percentile" if v == 0. => 0.,
+                    "tensor_signed_percentile" => {
+                        let (mut before, mut ties) = (0u64, 0u64);
+                        for (&other, &count) in values.iter().zip(counts) {
+                            if other.abs() < v.abs() {
+                                before += count;
+                            }
+                            if other.abs() == v.abs() {
+                                ties += count;
+                            }
+                        }
+                        v.signum() * (2 * before + ties) as f64
+                            / (2. * counts.iter().sum::<u64>() as f64)
+                    }
+                    _ => panic!("Unexpected oracle rule"),
+                };
+                expected[(row - r0) / factor * width + (col - c0) / factor] += transformed;
+            }
+        }
+        for y in 0..height {
+            for x in 0..width {
+                expected[y * width + x] /= ((r1 - r0 - y * factor).min(factor)
+                    * (c1 - c0 - x * factor).min(factor))
+                    as f64;
+            }
+        }
+        expected
+    }
+
+    #[test]
+    fn bounded_reads_and_scoped_rows_match_an_independent_scalar_oracle() {
+        let root = std::env::temp_dir().join(format!("atlas-render-bands-{}", std::process::id()));
+        // Total fixture payload: 5,773,320 bytes. The supported 131072-column
+        // F32 case reaches a real 2 MiB raw span; source axis limits stay intact.
+        for (trial, dtype, rows, cols, factor) in [
+            (0, Dtype::Bf16, 257, 513, 4),
+            (1, Dtype::F16, 257, 513, 4),
+            (2, Dtype::F32, 257, 513, 4),
+            (3, Dtype::F32, 9, 131072, 4),
+        ] {
+            let model = root.join(format!("model-{trial}"));
+            std::fs::create_dir_all(&model).unwrap();
+            let header = serde_json::json!({"matrix":{"dtype":dtype.name(),"shape":[rows,cols],
+                "data_offsets":[0,rows*cols*dtype.bytes()]}})
+            .to_string();
+            let mut file = std::fs::File::create(model.join("fixture.safetensors")).unwrap();
+            file.write_all(&(header.len() as u64).to_le_bytes())
+                .unwrap();
+            file.write_all(header.as_bytes()).unwrap();
+            // Exact signed values and subnormals exercise cancellation and finite
+            // dtype decoding. The independent oracle uses their mathematical values.
+            let (patterns, tiny): ([u32; 6], f64) = match dtype {
+                Dtype::Bf16 => ([0xbf80, 0x8001, 0x3f80, 1, 0, 0x4000], 2f64.powi(-133)),
+                Dtype::F16 => ([0xbc00, 0x8001, 0x3c00, 1, 0, 0x4000], 2f64.powi(-24)),
+                Dtype::F32 => (
+                    [0xbf800000, 0x80000001, 0x3f800000, 1, 0, 0x40000000],
+                    2f64.powi(-149),
+                ),
+            };
+            let values = [-1., -tiny, 1., tiny, 0., 2.];
+            let mut counts = [0u64; 6];
+            let mut bytes = Vec::with_capacity(rows * cols * dtype.bytes());
+            for index in 0..rows * cols {
+                bytes.extend_from_slice(
+                    &patterns[index % patterns.len()].to_le_bytes()[..dtype.bytes()],
+                );
+                counts[index % patterns.len()] += 1;
+            }
+            file.write_all(&bytes).unwrap();
+            drop(file);
+            drop(bytes);
+            let source = Source::open(&model).unwrap();
+            let tensor = source.tensor(0).unwrap();
+            assert!(
+                tensor.available,
+                "{}",
+                tensor
+                    .unavailable_reason
+                    .as_deref()
+                    .unwrap_or("unavailable")
+            );
+            let linear = mapping("tensor_linear", &serde_json::json!({"max":2.0}), dtype).unwrap();
+            let asinh = mapping(
+                "tensor_asinh",
+                &serde_json::json!({"max":2.0,"s":1.0}),
+                dtype,
+            )
+            .unwrap();
+            let magnitude =
+                mapping("tensor_magnitude", &serde_json::json!({"max":2.0}), dtype).unwrap();
+            let robust =
+                mapping("tensor_robust99", &serde_json::json!({"max":1.0}), dtype).unwrap();
+            let percentile = if dtype == Dtype::F32 {
+                assert!(validate_rule_dtype("tensor_signed_percentile", dtype).is_err());
+                None
+            } else {
+                let mut hist = vec![0u64; 65536];
+                for (&bits, &count) in patterns.iter().zip(&counts) {
+                    hist[bits as usize] += count;
+                }
+                Some(percentile_mapping(dtype, &hist, tensor.count).unwrap())
+            };
+            let mut groups = vec![
+                vec![&linear, &asinh],
+                vec![&linear, &asinh, &magnitude, &robust],
+            ];
+            if let Some(percentile) = &percentile {
+                groups.push(vec![&linear, &asinh, &magnitude, percentile]);
+            }
+            for region in [
+                (0, rows, 0, cols),
+                (0, rows, 4, 260),
+                (4, rows, 4, cols - 1),
+            ] {
+                let (r0, r1, c0, c1) = region;
+                for luts in &groups {
+                    let expected = luts
+                        .iter()
+                        .map(|lut| scalar_oracle(&values, &counts, cols, region, factor, &lut.rule))
+                        .collect::<Vec<_>>();
+                    let (serial, _) =
+                        region_fields_with_threads(&source, tensor, luts, region, factor, 1)
+                            .unwrap();
+                    for threads in [1, 2, 4, 8] {
+                        let (fields, metrics) = region_fields_with_threads(
+                            &source, tensor, luts, region, factor, threads,
+                        )
+                        .unwrap();
+                        for ((field, baseline), oracle) in fields.iter().zip(&serial).zip(&expected)
+                        {
+                            assert_eq!(
+                                field.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                                baseline.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+                            );
+                            for (&actual, &expected) in field.iter().zip(oracle) {
+                                assert!(
+                                    (actual - expected).abs() <= 1e-14,
+                                    "{actual} != {expected}"
+                                );
+                            }
+                        }
+                        assert!(metrics.max_raw_band_values * dtype.bytes() <= RAW_BAND_BYTES);
+                        if trial == 3 && region == (0, rows, 0, cols) {
+                            assert_eq!(metrics.max_raw_band_values * dtype.bytes(), RAW_BAND_BYTES);
+                        }
+                        assert!(
+                            metrics.source_bytes_read <= (r1 - r0) * (c1 - c0) * dtype.bytes() * 4
+                        );
+                        assert_eq!(metrics.source_count, (r1 - r0) * (c1 - c0));
+                        // Widely-strided narrow rows read exactly their selected addresses.
+                        if trial == 3 && region == (0, rows, 4, 260) {
+                            assert_eq!(
+                                metrics.source_bytes_read,
+                                metrics.source_count * dtype.bytes()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

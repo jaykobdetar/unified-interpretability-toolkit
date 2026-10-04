@@ -3,5 +3,15 @@
   "cache": "../cache",
   "port": 8775,
   "name": "My local model",
-  "revision": "local selection; revision not asserted"
+  "revision": "local selection; revision not asserted",
+  "resources": {
+    "version": 1,
+    "cpu_count": 1,
+    "address_space_bytes": 805306368,
+    "available_floor_bytes": 3221225472,
+    "disk_reserve_bytes": 26843545600,
+    "workspace_bytes": 67108864,
+    "tile_cache_bytes": 2147483648,
+    "tile_cache_files": 1000
+  }
 }
