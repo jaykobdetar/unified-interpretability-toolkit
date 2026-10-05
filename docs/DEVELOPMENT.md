@@ -79,6 +79,20 @@ The supplied Black wheel hashes target Linux x86_64 with CPython 3.12. The npm p
 
 Mechanical formatting covers first-party Python under `tools/` and `tests/`, Rust selected by `cargo fmt --all`, and first-party JavaScript/CSS under `web/` and `tests/`. The immutable supplied behaviour lock, vendored code, JSON snapshots and HTML are outside that formatter scope. These exclusions preserve supplied and held bytes; they do not disable any existing project check.
 
+## Version 2 behaviour lock
+
+`tools/behaviour_lock.py` is the supplied version 2 referee, preserved exactly with SHA-256 `d4419dfd13482ba626bf910018708e70fa5332a99165491b8ec8627ed26c8fef`. Wording, numeric results, images, data, statuses and headers are strict. Served page-file hashes are reported separately. The script uses synthetic checkpoints and the Python standard library; it needs no model, browser or GPU.
+
+For this quality pass, record a separately named v2 baseline from the already preserved original starting binary, SHA-256 `c26a328641736bd5805aa214255080c7e3dd63d1053a3f06be5103bb4ec7078a`. Keep the v1 script and baseline unchanged. Do not overwrite that binary with a rebuilt one or re-record a baseline to excuse differences.
+
+```bash
+python3 tools/behaviour_lock.py --binary ../atlas-before --record ../before-v2.json
+python3 tools/behaviour_lock.py --binary target/release/weight-atlas-rust \
+  --compare ../before-v2.json --old-binary ../atlas-before --full
+```
+
+Use the existing resource guards for qualification. Every commit touching `src/` must compare against that v2 baseline with `--old-binary`, including all eleven upgrade checks. Do not add allow flags without an explicitly agreed change. The lock does not cover Python services, browser interactions, non-default resource settings, simultaneous requests, speed or memory use; those require their separate existing checks.
+
 Existing syntax checks, contracts and Clippy warning enforcement remain required. Additional Python lint rules, unused-import removal, type-checking rules and structural cleanup are deferred to the separately reviewed Part 2; no new lint/type rule has been run and then suppressed in this pass.
 
 Prettier 3.9.6 reaches stable output after two passes for three chain-heavy test files. The initial safety trial also reported an AST serialization-order difference for `inference.js`; parsed structure, values and array order remained identical. Qualification retained that first failure, checked semantic AST equality in disposable copies, and required stable formatter output. The normal `format` check reports any later formatting drift.
