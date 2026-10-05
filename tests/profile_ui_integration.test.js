@@ -72,8 +72,13 @@ test('native binding and owner tuple reach only the private profile bridge; mism
  native={...binding,source_identity:'9'.repeat(64)};await host.setProfileSelection(binding);assert.equal(configured[0],'unavailable');
 });
 test('unconfirmed profile cleanup prevents model replacement before any acquire request',async()=>{
- let calls=0;const host=hosts.create({fetchImpl:async()=>{calls++;throw new Error('must not request');},schedule:()=>1,cancel:()=>{}});
+ let calls=0,initializing=true;const host=hosts.create({fetchImpl:async url=>{
+  if(initializing&&url==='/api/models')return {ok:true,json:async()=>({api_version:1,models:[{model_id:context.model_id,name:'fixture',fixture_eligible:true}]})};
+  if(initializing&&url==='/api/view-contexts')return {ok:true,json:async()=>({api_version:1,model_id:context.model_id,context_id:context.context_id,capability:context.tab_capability})};
+  calls++;throw new Error('must not request');},schedule:()=>1,cancel:()=>{}});
+ await host.initialize(async()=>{},()=>{});initializing=false;
  host.mountProfiles({}, {mount:()=>({reset:async()=>{},client:{snapshot:()=>({cleanup_pending:true})}})});
  await assert.rejects(host.select(context.model_id),/cleanup pending/);assert.equal(calls,0);
+ assert.equal(host.snapshot().context_id,context.context_id);
 });
 (async()=>{for(const {name,fn} of cases){await fn();console.log('PASS '+name);}console.log(cases.length+' profile UI integration checks passed');})().catch(e=>{console.error(e);process.exitCode=1;});
