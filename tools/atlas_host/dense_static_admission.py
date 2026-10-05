@@ -22,7 +22,7 @@ REVISION='93efa2f097d58c2a74874c7e644dbc9b0cee75a2'
 CONFIG_SHA='1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843'
 WEIGHTS_SHA='80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1'
 PRIOR_TINY_SHA='645285c4c06a3525ed02e85484e1ef08f566b614bd40ac7bb9af1b7767d74ccd'
-QUALIFIED_READER_SHA=None  # Combined reader qualification is pending.
+QUALIFIED_READER_SHA='44c36b079b3c3a6a9cc3eee3df2b0e7fa5cb703e2df749cca07c18ef9d25db5d'  # Combined reader qualification is pending.
 # Exact combined native inputs; matching bytes do not qualify a reader.
 NATIVE_SOURCE_PINS={'Cargo.lock': '36e31907d27773a3781dd6f012428204abe7da611625b20344e0572e67e06daf',
  'Cargo.toml': '179b96b488b8bda8dce3632708de2acdf1150641a0316979c87afaf6fe7c0004',
