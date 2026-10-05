@@ -1,0 +1,185 @@
+{
+  "source_commit": "9d99410f061c0130f2ed15be194a2f587a920060",
+  "excluded_headers": [
+    "Date",
+    "Server"
+  ],
+  "responses": {
+    "disabled_catalog": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "254",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"api_version\": 1, \"version\": 1, \"registry_revision\": 0, \"models\": [], \"reader_capacity\": 1, \"lease_capacity\": 4, \"static_views_enabled\": false, \"inference_enabled\": false, \"downloads_enabled\": false, \"profiles_enabled\": false, \"resume_available\": false}"
+    },
+    "disabled_start": {
+      "status_line": "HTTP/1.0 409 Conflict",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "95",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"version\": 1, \"code\": \"unavailable\", \"error\": \"Hosted request unavailable or cleanup pending\"}"
+    },
+    "owner_catalog": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "253",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"api_version\": 1, \"version\": 1, \"registry_revision\": 0, \"models\": [], \"reader_capacity\": 1, \"lease_capacity\": 4, \"static_views_enabled\": false, \"inference_enabled\": false, \"downloads_enabled\": false, \"profiles_enabled\": true, \"resume_available\": false}"
+    },
+    "full_start": {
+      "status_line": "HTTP/1.0 202 Accepted",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "356",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"version\": 1, \"model_id\": \"m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"context_id\": \"ctx\", \"job_id\": \"22222222222222222222222222222222\", \"state\": \"admitting\", \"accepted\": null, \"error\": null, \"cleanup_pending\": true, \"resume_available\": false, \"job_capability\": \"5555555555555555555555555555555555555555555555555555555555555555\"}"
+    },
+    "admitting_status": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "270",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"version\": 1, \"model_id\": \"m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"context_id\": \"ctx\", \"job_id\": \"22222222222222222222222222222222\", \"state\": \"admitting\", \"accepted\": null, \"error\": null, \"cleanup_pending\": true, \"resume_available\": false}"
+    },
+    "complete_status": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "406",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"version\": 1, \"model_id\": \"m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"context_id\": \"ctx\", \"job_id\": \"22222222222222222222222222222222\", \"state\": \"complete\", \"error\": null, \"accepted\": {\"revision\": \"5bcd3122a4f976fe2781b196ce858f0401ba223289f7f1cf58049870901b109f\", \"visited_values\": 12, \"total_values\": 12, \"complete\": true}, \"cleanup_pending\": false, \"resume_available\": false}"
+    },
+    "complete_rows": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "1216",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"revision\": \"5bcd3122a4f976fe2781b196ce858f0401ba223289f7f1cf58049870901b109f\", \"binding\": {\"version\": 2, \"model_identity\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"source_identity\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"tensor\": 0, \"name\": \"weights\", \"dtype\": \"F32\", \"shape\": [2, 3, 4], \"rows\": 3, \"cols\": 4, \"slice\": {\"leading_indices\": [1], \"display_axes\": [1, 2]}}, \"axis\": \"rows\", \"start\": 0, \"end\": 3, \"axis_length\": 3, \"visited_values\": 12, \"total_values\": 12, \"original\": [{\"index\": 0, \"sum_abs\": 1.25, \"visited_count\": 4, \"expected_count\": 4, \"mean_abs\": 0.3125, \"complete\": true}, {\"index\": 1, \"sum_abs\": 3.25, \"visited_count\": 4, \"expected_count\": 4, \"mean_abs\": 0.8125, \"complete\": true}, {\"index\": 2, \"sum_abs\": 5.25, \"visited_count\": 4, \"expected_count\": 4, \"mean_abs\": 1.3125, \"complete\": true}], \"control\": [{\"index\": 0, \"sum_abs\": 3.5, \"visited_count\": 4, \"expected_count\": 4, \"mean_abs\": 0.875, \"complete\": true}, {\"index\": 1, \"sum_abs\": 3.375, \"visited_count\": 4, \"expected_count\": 4, \"mean_abs\": 0.84375, \"complete\": true}, {\"index\": 2, \"sum_abs\": 2.875, \"visited_count\": 4, \"expected_count\": 4, \"mean_abs\": 0.71875, \"complete\": true}]}"
+    },
+    "complete_columns": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "1465",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"revision\": \"5bcd3122a4f976fe2781b196ce858f0401ba223289f7f1cf58049870901b109f\", \"binding\": {\"version\": 2, \"model_identity\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"source_identity\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"tensor\": 0, \"name\": \"weights\", \"dtype\": \"F32\", \"shape\": [2, 3, 4], \"rows\": 3, \"cols\": 4, \"slice\": {\"leading_indices\": [1], \"display_axes\": [1, 2]}}, \"axis\": \"columns\", \"start\": 0, \"end\": 4, \"axis_length\": 4, \"visited_values\": 12, \"total_values\": 12, \"original\": [{\"index\": 0, \"sum_abs\": 1.875, \"visited_count\": 3, \"expected_count\": 3, \"mean_abs\": 0.625, \"complete\": true}, {\"index\": 1, \"sum_abs\": 2.25, \"visited_count\": 3, \"expected_count\": 3, \"mean_abs\": 0.75, \"complete\": true}, {\"index\": 2, \"sum_abs\": 2.625, \"visited_count\": 3, \"expected_count\": 3, \"mean_abs\": 0.875, \"complete\": true}, {\"index\": 3, \"sum_abs\": 3.0, \"visited_count\": 3, \"expected_count\": 3, \"mean_abs\": 1.0, \"complete\": true}], \"control\": [{\"index\": 0, \"sum_abs\": 1.5, \"visited_count\": 3, \"expected_count\": 3, \"mean_abs\": 0.5, \"complete\": true}, {\"index\": 1, \"sum_abs\": 3.125, \"visited_count\": 3, \"expected_count\": 3, \"mean_abs\": 1.0416666666666667, \"complete\": true}, {\"index\": 2, \"sum_abs\": 2.375, \"visited_count\": 3, \"expected_count\": 3, \"mean_abs\": 0.7916666666666666, \"complete\": true}, {\"index\": 3, \"sum_abs\": 2.75, \"visited_count\": 3, \"expected_count\": 3, \"mean_abs\": 0.9166666666666666, \"complete\": true}]}"
+    },
+    "complete_heartbeat": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "406",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"version\": 1, \"model_id\": \"m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"context_id\": \"ctx\", \"job_id\": \"22222222222222222222222222222222\", \"state\": \"complete\", \"error\": null, \"accepted\": {\"revision\": \"5bcd3122a4f976fe2781b196ce858f0401ba223289f7f1cf58049870901b109f\", \"visited_values\": 12, \"total_values\": 12, \"complete\": true}, \"cleanup_pending\": false, \"resume_available\": false}"
+    },
+    "partial_restart": {
+      "status_line": "HTTP/1.0 202 Accepted",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "356",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"version\": 1, \"model_id\": \"m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"context_id\": \"ctx\", \"job_id\": \"44444444444444444444444444444444\", \"state\": \"admitting\", \"accepted\": null, \"error\": null, \"cleanup_pending\": true, \"resume_available\": false, \"job_capability\": \"7777777777777777777777777777777777777777777777777777777777777777\"}"
+    },
+    "stale_status": {
+      "status_line": "HTTP/1.0 409 Conflict",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "95",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"version\": 1, \"code\": \"unavailable\", \"error\": \"Hosted request unavailable or cleanup pending\"}"
+    },
+    "partial_status": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "405",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"version\": 1, \"model_id\": \"m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"context_id\": \"ctx\", \"job_id\": \"44444444444444444444444444444444\", \"state\": \"partial\", \"error\": null, \"accepted\": {\"revision\": \"19e463e37fc7e82a19504d126939b8ddc90ac4df5199ac888bd57bde8088300f\", \"visited_values\": 5, \"total_values\": 12, \"complete\": false}, \"cleanup_pending\": false, \"resume_available\": false}"
+    },
+    "partial_rows": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "1209",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"revision\": \"19e463e37fc7e82a19504d126939b8ddc90ac4df5199ac888bd57bde8088300f\", \"binding\": {\"version\": 2, \"model_identity\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"source_identity\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"tensor\": 0, \"name\": \"weights\", \"dtype\": \"F32\", \"shape\": [2, 3, 4], \"rows\": 3, \"cols\": 4, \"slice\": {\"leading_indices\": [1], \"display_axes\": [1, 2]}}, \"axis\": \"rows\", \"start\": 0, \"end\": 3, \"axis_length\": 3, \"visited_values\": 5, \"total_values\": 12, \"original\": [{\"index\": 0, \"sum_abs\": 1.25, \"visited_count\": 4, \"expected_count\": 4, \"mean_abs\": 0.3125, \"complete\": true}, {\"index\": 1, \"sum_abs\": 0.625, \"visited_count\": 1, \"expected_count\": 4, \"mean_abs\": 0.625, \"complete\": false}, {\"index\": 2, \"sum_abs\": 0.0, \"visited_count\": 0, \"expected_count\": 4, \"mean_abs\": null, \"complete\": false}], \"control\": [{\"index\": 0, \"sum_abs\": 0.5, \"visited_count\": 1, \"expected_count\": 4, \"mean_abs\": 0.5, \"complete\": false}, {\"index\": 1, \"sum_abs\": 0.875, \"visited_count\": 2, \"expected_count\": 4, \"mean_abs\": 0.4375, \"complete\": false}, {\"index\": 2, \"sum_abs\": 0.5, \"visited_count\": 2, \"expected_count\": 4, \"mean_abs\": 0.25, \"complete\": false}]}"
+    },
+    "cancel_pending": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "269",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"version\": 1, \"model_id\": \"m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"context_id\": \"ctx\", \"job_id\": \"44444444444444444444444444444444\", \"state\": \"stopping\", \"accepted\": null, \"error\": null, \"cleanup_pending\": true, \"resume_available\": false}"
+    },
+    "cancelled_status": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "271",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"version\": 1, \"model_id\": \"m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"context_id\": \"ctx\", \"job_id\": \"44444444444444444444444444444444\", \"state\": \"cancelled\", \"accepted\": null, \"error\": null, \"cleanup_pending\": false, \"resume_available\": false}"
+    },
+    "reconciled": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "98",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"state\": \"cancelled\", \"cleanup_pending\": false, \"resume_available\": false, \"no_owned_work\": true}"
+    }
+  }
+}
