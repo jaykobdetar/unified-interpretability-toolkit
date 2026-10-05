@@ -1,6 +1,6 @@
 # Architecture
 
-Weight Atlas has independent local entrypoints. The viewer is the default; optional coordinators add separate ownership and compute lifetimes.
+Unified Interpretability Toolkit has independent local entrypoints. The viewer is the default; optional coordinators add separate ownership and compute lifetimes.
 
 | Layer | Location | Responsibility |
 | --- | --- | --- |

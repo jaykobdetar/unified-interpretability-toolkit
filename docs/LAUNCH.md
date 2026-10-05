@@ -1,4 +1,6 @@
-# Launching Weight Atlas
+<a name="launching-weight-atlas"></a>
+
+# Launching Unified Interpretability Toolkit
 
 Run commands from the repository root. Linux is required by the current CPU, process, and memory guards. The launcher uses Python's standard library; Rust dependencies are vendored and builds use `--offline --locked -j 1`.
 

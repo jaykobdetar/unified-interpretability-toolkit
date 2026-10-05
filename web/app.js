@@ -153,7 +153,7 @@ function populateModel(model,prior){
   assert(new Set(model.catalog.map(t=>t.id)).size===model.catalog.length,'duplicate tensor IDs.');
   assert(model.catalog.reduce((sum,t)=>sum+t.count,0)===model.parameter_count,'catalog total differs from checkpoint parameter count.');
   const rules=model.rules.filter(r=>RULE_IDS.includes(r.id));assert(rules.length>=7&&new Set(rules.map(r=>r.id)).size===rules.length,'all supported pointwise rules required.');
-  state.model=model;drawExamples();text('model-name',model.name);document.title=`Weight Atlas · ${model.name}`;
+  state.model=model;drawExamples();text('model-name',model.name);document.title=`Unified Interpretability Toolkit · ${model.name}`;
   text('model-scope',`${number(model.parameter_count)} original values · ${number(model.catalog.length)} stored tensors · native tensor coordinates`);
   text('representation',model.representation);text('revision',model.revision);text('source-directory',model.content_digest||model.source_directory||model.source_identity);text('source-bytes',number(model.source_bytes));
   text('tensor-count',String(model.catalog.length));text('render-semantics',model.render_semantics);drawCoverage(model);

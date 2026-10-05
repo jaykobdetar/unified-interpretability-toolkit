@@ -2,7 +2,7 @@
 
 See [head sweeps](HEAD-SWEEPS.md) for output-column ablation and query-row intervention semantics.
 
-Weight Atlas includes bounded SmolLM2-135M generation and activation playback. The viewer is a Rust weight renderer; the inference path uses an isolated CPU-only PyTorch/Transformers process behind a Python standard-library loopback coordinator. No Rust inference crate was added: the project builds offline from its existing vendored dependencies, and the CPU runtime is installed separately.
+Unified Interpretability Toolkit includes bounded SmolLM2-135M generation and activation playback. The viewer is a Rust weight renderer; the inference path uses an isolated CPU-only PyTorch/Transformers process behind a Python standard-library loopback coordinator. No Rust inference crate was added: the project builds offline from its existing vendored dependencies, and the CPU runtime is installed separately.
 
 ## Run
 

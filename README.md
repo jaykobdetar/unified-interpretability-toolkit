@@ -1,6 +1,8 @@
-# Weight Atlas
+<a name="weight-atlas"></a>
 
-Explore the numbers inside a local safetensors checkpoint. Weight Atlas pairs a bounded Rust reader with a browser viewer: compare color rules at the same coordinates, zoom from block averages to individual weights, and inspect the original value, bytes, and file offset.
+# Unified Interpretability Toolkit
+
+Explore the numbers inside a local safetensors checkpoint. Unified Interpretability Toolkit pairs a bounded Rust reader with a browser viewer: compare color rules at the same coordinates, zoom from block averages to individual weights, and inspect the original value, bytes, and file offset.
 
 ![Synthetic matrix shown with two color rules](docs/screenshots/viewer-demo.png)
 
@@ -11,10 +13,12 @@ Explore the numbers inside a local safetensors checkpoint. Weight Atlas pairs a 
 You need **x86_64 Linux**, Python 3, and Rust/Cargo (tested with **Rust 1.92.0**). Build dependencies are vendored. Keep at least **5 GiB available RAM** and **25 GiB free disk** for the existing build guards; the tiny fixture itself is only 244 bytes.
 
 ```bash
-git clone https://github.com/jaykobdetar/weight-atlas.git
-cd weight-atlas
+git clone https://github.com/jaykobdetar/unified-interpretability-toolkit.git
+cd unified-interpretability-toolkit
 ./run-atlas.sh --demo --build
 ```
+
+The launcher `./run-atlas.sh`, executable/package `weight-atlas-rust`, and legacy CLI labels retain their existing names. Screenshots show the earlier project display name.
 
 Open **http://127.0.0.1:8775**. Select `matrix`, compare the two rules, then enter a row and column in the inspector. Stop with **Ctrl-C**. The first launch builds offline; later launches need only `./run-atlas.sh --demo`. While this repository is private, cloning requires an authorized GitHub account.
 
