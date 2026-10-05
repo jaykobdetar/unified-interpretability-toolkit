@@ -1,24 +1,182 @@
-'use strict';
+"use strict";
 // Future real acceptance only. Valid public fixtures; no response/fault injection.
-const {chromium,expect}=require('playwright/test'),assert=require('node:assert/strict'),fs=require('node:fs');
-const H=require('./acceptance/support.cjs');
-const base=process.env.ATLAS_TEST_URL,out=process.env.ATLAS_EVIDENCE_DIR;assert(/^http:\/\/127\.0\.0\.1:\d+$/.test(base));assert(out&&process.env.ATLAS_CHROMIUM);assert(!fs.existsSync(out),'Use a fresh evidence directory; prior receipts must not be overwritten');fs.mkdirSync(out,{recursive:true});
-(async()=>{
- const pins=await H.verifyPins(process.env.ATLAS_MODEL_DIR);
- const browser=await chromium.launch({headless:true,chromiumSandbox:true,executablePath:process.env.ATLAS_CHROMIUM,args:['--renderer-process-limit=1','--disable-gpu']});let page,w;
- try{
-  const context=await browser.newContext({viewport:{width:1440,height:1000},acceptDownloads:true});await context.route('**/*',r=>r.request().url().startsWith(base+'/')?r.continue():r.abort());page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));w=H.watch(page,base,out);const el=id=>page.locator('#infer-'+id);
-  await page.goto(base);await page.locator('#inference-panel > summary').click();await expect(el('start')).toBeEnabled();await el('mode').selectOption('step');await el('task').selectOption('prompt_pair');await el('layer').selectOption('7');await el('site').selectOption('attention');await el('prompt').fill('The capital of France is');await el('prompt-b').fill('Paris is the capital of France.');await expect(el('start')).toBeDisabled();
-  const preview=async()=>{w.latest=null;await el('pair-preview').click();const s=await H.settled(w,expect);assert.equal(s.status,'complete');assert.equal(s.details.preview.model_loaded,false);assert.equal(s.steps.length,0);assert(!s.details.runtime);return s.details.preview;};
-  await preview();await expect(el('preview-status')).toContainText('No model was loaded');await el('prompt-b').fill('Paris is the capital of France. Indeed.');await expect(el('start')).toBeDisabled();await expect(el('preview-b')).toHaveText('No current token preview.');const p=await preview();
-  for(const [i,key] of ['a','b'].entries()){assert(p.tokens[i].length>=2&&p.tokens[i].length<=128);await expect(el('preview-'+key)).toContainText(`0: ${p.tokens[i][0].id}`);}
-  const positions=[{a:1,b:1},{a:p.tokens[0].length-1,b:p.tokens[1].length-1}];await el('pairs').fill(positions.map(x=>`${x.a},${x.b}`).join('\n'));await el('logging').check();await expect(el('include-prompt')).not.toBeChecked();w.latest=null;await el('start').click();const snapshot=await H.settled(w,expect);assert.equal(snapshot.status,'complete');assert.equal(snapshot.details.record_count,2);assert(!Object.hasOwn(snapshot.details,'generated_tokens'));
-  await el('step').click();await expect(el('left-title')).toHaveText('Prompt A capture');await expect(el('right-title')).toHaveText('Prompt B capture');await expect(el('alignment')).toContainText('no generated or predicted tokens');await expect(el('score-context')).toContainText('not semantic alignment');
-  for(const [i,step] of snapshot.steps.entries()){const q=step.prompt_pair;for(const [side,key] of ['a','b'].entries()){assert.equal(q[key].position,positions[i][key]);assert.equal(q[key].token_id,p.tokens[side][positions[i][key]].id);}assert.equal(q.token_equal,q.a.token_id===q.b.token_id);const a=p.tokens[0].slice(0,q.a.position+1).map(x=>x.id),b=p.tokens[1].slice(0,q.b.position+1).map(x=>x.id);assert.equal(q.prefix_equal,JSON.stringify(a)===JSON.stringify(b));}
-  const record=await H.download(page,out,'prompt-pair-public-fixture.json');const numerical=H.pairCheck(record);H.redacted(record);assert.equal(record.worker_cleanup_confirmed,true);assert.deepEqual(record.request.positions,positions);assert(w.owners.every(owner=>!JSON.stringify(record).includes(owner)));await el('replay').click();await expect(el('baseline-output')).toContainText('No prompt A capture');await el('step').click();await page.setViewportSize({width:390,height:844});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await el('score-context').scrollIntoViewIfNeeded();await page.screenshot({path:out+'/prompt-pair-mobile.jpg',type:'jpeg',quality:82,fullPage:false});await el('reset').click();await expect(el('start')).toBeDisabled();assert.deepEqual(errors,[]);
-  assert.deepEqual(w.starts,['prompt_pair_preview','prompt_pair_preview','prompt_pair']);
-  assert.deepEqual(await H.verifyPins(process.env.ATLAS_MODEL_DIR),pins);
-  H.save(out,'prompt-pair-browser.json',{status:'PASS',disk_hashes_unchanged:true,numerical,positions,prompt_token_lengths:p.tokens.map(x=>x.length),starts:w.starts,maximum_worker_rss_mib:w.maximum_worker_rss_mib,tokenizer_only_preview:true,preview_freshness:true,private_download_redacted:true,page_errors:errors,scope:'Two valid previews, one layer7 attention pair run with two positions; short public prompts; no generation; physical phone and maximum8-pair workload unrun'});
- }catch(e){H.save(out,'failure.json',{status:'FAIL',message:e.message,last_status:w?.latest?.status,received_records:w?.latest?.steps?.length||0});throw e;}
- finally{let cleanupError=null;if(page&&w)try{await H.cleanup(page,base,w);}catch(e){cleanupError=e.message;}H.save(out,'cleanup.json',{confirmed:w?H.clean(w.latest):null,last_status:w?.latest?.status||null,error:cleanupError});await browser.close();}
-})().catch(e=>{console.error(e);process.exitCode=1;});
+const { chromium, expect } = require("playwright/test"),
+  assert = require("node:assert/strict"),
+  fs = require("node:fs");
+const H = require("./acceptance/support.cjs");
+const base = process.env.ATLAS_TEST_URL,
+  out = process.env.ATLAS_EVIDENCE_DIR;
+assert(/^http:\/\/127\.0\.0\.1:\d+$/.test(base));
+assert(out && process.env.ATLAS_CHROMIUM);
+assert(
+  !fs.existsSync(out),
+  "Use a fresh evidence directory; prior receipts must not be overwritten",
+);
+fs.mkdirSync(out, { recursive: true });
+(async () => {
+  const pins = await H.verifyPins(process.env.ATLAS_MODEL_DIR);
+  const browser = await chromium.launch({
+    headless: true,
+    chromiumSandbox: true,
+    executablePath: process.env.ATLAS_CHROMIUM,
+    args: ["--renderer-process-limit=1", "--disable-gpu"],
+  });
+  let page, w;
+  try {
+    const context = await browser.newContext({
+      viewport: { width: 1440, height: 1000 },
+      acceptDownloads: true,
+    });
+    await context.route("**/*", (r) =>
+      r
+        .request()
+        .url()
+        .startsWith(base + "/")
+        ? r.continue()
+        : r.abort(),
+    );
+    page = await context.newPage();
+    const errors = [];
+    page.on("pageerror", (e) => errors.push(e.message));
+    w = H.watch(page, base, out);
+    const el = (id) => page.locator("#infer-" + id);
+    await page.goto(base);
+    await page.locator("#inference-panel > summary").click();
+    await expect(el("start")).toBeEnabled();
+    await el("mode").selectOption("step");
+    await el("task").selectOption("prompt_pair");
+    await el("layer").selectOption("7");
+    await el("site").selectOption("attention");
+    await el("prompt").fill("The capital of France is");
+    await el("prompt-b").fill("Paris is the capital of France.");
+    await expect(el("start")).toBeDisabled();
+    const preview = async () => {
+      w.latest = null;
+      await el("pair-preview").click();
+      const s = await H.settled(w, expect);
+      assert.equal(s.status, "complete");
+      assert.equal(s.details.preview.model_loaded, false);
+      assert.equal(s.steps.length, 0);
+      assert(!s.details.runtime);
+      return s.details.preview;
+    };
+    await preview();
+    await expect(el("preview-status")).toContainText("No model was loaded");
+    await el("prompt-b").fill("Paris is the capital of France. Indeed.");
+    await expect(el("start")).toBeDisabled();
+    await expect(el("preview-b")).toHaveText("No current token preview.");
+    const p = await preview();
+    for (const [i, key] of ["a", "b"].entries()) {
+      assert(p.tokens[i].length >= 2 && p.tokens[i].length <= 128);
+      await expect(el("preview-" + key)).toContainText(
+        `0: ${p.tokens[i][0].id}`,
+      );
+    }
+    const positions = [
+      { a: 1, b: 1 },
+      { a: p.tokens[0].length - 1, b: p.tokens[1].length - 1 },
+    ];
+    await el("pairs").fill(positions.map((x) => `${x.a},${x.b}`).join("\n"));
+    await el("logging").check();
+    await expect(el("include-prompt")).not.toBeChecked();
+    w.latest = null;
+    await el("start").click();
+    const snapshot = await H.settled(w, expect);
+    assert.equal(snapshot.status, "complete");
+    assert.equal(snapshot.details.record_count, 2);
+    assert(!Object.hasOwn(snapshot.details, "generated_tokens"));
+    await el("step").click();
+    await expect(el("left-title")).toHaveText("Prompt A capture");
+    await expect(el("right-title")).toHaveText("Prompt B capture");
+    await expect(el("alignment")).toContainText(
+      "no generated or predicted tokens",
+    );
+    await expect(el("score-context")).toContainText("not semantic alignment");
+    for (const [i, step] of snapshot.steps.entries()) {
+      const q = step.prompt_pair;
+      for (const [side, key] of ["a", "b"].entries()) {
+        assert.equal(q[key].position, positions[i][key]);
+        assert.equal(q[key].token_id, p.tokens[side][positions[i][key]].id);
+      }
+      assert.equal(q.token_equal, q.a.token_id === q.b.token_id);
+      const a = p.tokens[0].slice(0, q.a.position + 1).map((x) => x.id),
+        b = p.tokens[1].slice(0, q.b.position + 1).map((x) => x.id);
+      assert.equal(q.prefix_equal, JSON.stringify(a) === JSON.stringify(b));
+    }
+    const record = await H.download(
+      page,
+      out,
+      "prompt-pair-public-fixture.json",
+    );
+    const numerical = H.pairCheck(record);
+    H.redacted(record);
+    assert.equal(record.worker_cleanup_confirmed, true);
+    assert.deepEqual(record.request.positions, positions);
+    assert(w.owners.every((owner) => !JSON.stringify(record).includes(owner)));
+    await el("replay").click();
+    await expect(el("baseline-output")).toContainText("No prompt A capture");
+    await el("step").click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    );
+    await el("score-context").scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: out + "/prompt-pair-mobile.jpg",
+      type: "jpeg",
+      quality: 82,
+      fullPage: false,
+    });
+    await el("reset").click();
+    await expect(el("start")).toBeDisabled();
+    assert.deepEqual(errors, []);
+    assert.deepEqual(w.starts, [
+      "prompt_pair_preview",
+      "prompt_pair_preview",
+      "prompt_pair",
+    ]);
+    assert.deepEqual(await H.verifyPins(process.env.ATLAS_MODEL_DIR), pins);
+    H.save(out, "prompt-pair-browser.json", {
+      status: "PASS",
+      disk_hashes_unchanged: true,
+      numerical,
+      positions,
+      prompt_token_lengths: p.tokens.map((x) => x.length),
+      starts: w.starts,
+      maximum_worker_rss_mib: w.maximum_worker_rss_mib,
+      tokenizer_only_preview: true,
+      preview_freshness: true,
+      private_download_redacted: true,
+      page_errors: errors,
+      scope:
+        "Two valid previews, one layer7 attention pair run with two positions; short public prompts; no generation; physical phone and maximum8-pair workload unrun",
+    });
+  } catch (e) {
+    H.save(out, "failure.json", {
+      status: "FAIL",
+      message: e.message,
+      last_status: w?.latest?.status,
+      received_records: w?.latest?.steps?.length || 0,
+    });
+    throw e;
+  } finally {
+    let cleanupError = null;
+    if (page && w)
+      try {
+        await H.cleanup(page, base, w);
+      } catch (e) {
+        cleanupError = e.message;
+      }
+    H.save(out, "cleanup.json", {
+      confirmed: w ? H.clean(w.latest) : null,
+      last_status: w?.latest?.status || null,
+      error: cleanupError,
+    });
+    await browser.close();
+  }
+})().catch((e) => {
+  console.error(e);
+  process.exitCode = 1;
+});

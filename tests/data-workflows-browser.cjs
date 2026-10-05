@@ -1,66 +1,495 @@
-'use strict';
+"use strict";
 // Ordinary synthetic UI acceptance. No model jobs, fault responses or permission bypass.
-const {chromium,expect}=require('playwright/test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
-const base=process.env.ATLAS_TEST_URL,out=process.env.ATLAS_EVIDENCE_DIR,phase=process.env.ATLAS_DATA_PHASE;
-assert(/^http:\/\/127\.0\.0\.1:\d+$/.test(base));assert(out&&process.env.ATLAS_CHROMIUM);assert(['exports','archives'].includes(phase));
-const sha=x=>crypto.createHash('sha256').update(x).digest('hex'),save=(name,data)=>fs.writeFileSync(path.join(out,name),JSON.stringify(data,null,2)+'\n');
-const fixture=JSON.parse(fs.readFileSync(path.join(out,'fixture','fixture-manifest.json'),'utf8'));
-(async()=>{
- let browser;const checks=[],errors=[],requests=[],downloads=[],files=[];let downloadCase='unplanned';
- try{
-  browser=await chromium.launch({headless:true,chromiumSandbox:true,executablePath:process.env.ATLAS_CHROMIUM,args:['--renderer-process-limit=1','--disable-gpu']});
-  const context=await browser.newContext({viewport:{width:1280,height:900},acceptDownloads:true});
-  await context.route('**/*',r=>r.request().url().startsWith(base+'/')?r.continue():r.abort());
-  const observe=page=>{page.setDefaultTimeout(7000);page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{requests.push({method:r.method(),path:new URL(r.url()).pathname});assert.equal(r.method(),'GET','Archive qualification must never mutate server state');});page.on('download',d=>{const label=downloadCase,promise=(async()=>{const filename=d.suggestedFilename(),target=path.join(out,label+'-'+filename);await d.saveAs(target);const raw=fs.readFileSync(target);assert(raw.length<=1048576);files.push({case:label,file:path.basename(target),filename,bytes:raw.length,sha256:sha(raw)});})();downloads.push(promise);});};
-  const page=await context.newPage();observe(page);const el=id=>page.locator('#infer-'+id),control=id=>page.locator('#'+id);
-  const settle=async()=>{await expect(control('comparison')).toHaveAttribute('aria-busy','false');await expect(control('region-controls')).toBeEnabled();};
-  const openArchive=async p=>{await expect(p.locator('#inference-panel')).toBeVisible();await p.locator('#inference-panel > summary').click();await p.locator('#infer-import-file').scrollIntoViewIfNeeded();};
-  const download=async(p,button,label,count)=>{downloadCase=label;const before=downloads.length;await p.locator('#'+button).click();await expect.poll(()=>downloads.length-before,{timeout:7000}).toBe(count);await Promise.all(downloads.slice(before));};
-  await page.goto(base);await expect(el('model')).toContainText('metadata-only qualification adapter');
-  assert(!requests.some(r=>r.path==='/inference-import.js'),'No startup importer load');
-  const model=await (await context.request.get(base+'/api/model')).json();assert.equal(model.revision,fixture.revision);assert.equal(model.catalog.length,6);
-  const startup=await context.request.get(base+'/viewer.js'),bundle=await startup.body();
-  const parts=['vendor/openseadragon.min.js','atlas-tools.js','app.js','workspace-tools.js','inference.js'];const expected=Buffer.concat(parts.flatMap((f,i)=>[...(i?[Buffer.from('\n;\n')]:[]),fs.readFileSync('web/'+f)]));assert.equal(sha(bundle),sha(expected));assert(bundle.length<600*1024);assert(startup.headers()['content-security-policy'].includes("script-src 'self'"));
-  save('served-source-binding.json',{source_identity:model.source_identity,model_identity:model.model_identity,revision:model.revision,viewer_sha256:sha(bundle),viewer_bytes:bundle.length,CSP:startup.headers()['content-security-policy'],fixture_file_sha256:fixture.sha256,scope:'Actual rebuilt renderer through metadata-only fixture adapter; no inference integration'});
-  checks.push('Actual rebuilt fixed viewer bundle and real same-origin CSP match exact accepted production sources; codec absent at startup');
-  if(phase==='exports'){
-   await page.locator('.workspace-tools > summary').click();
-   for(const dtype of ['BF16','F16','F32']){
-    const name=dtype.toLowerCase()+'_rank3';await page.getByRole('button',{name:'Select '+name,exact:true}).click();await expect(control('slice-picker')).toBeVisible();await control('slice-picker').locator('input').fill('1');await control('slice-picker').getByRole('button',{name:'Apply 2D slice',exact:true}).click();await settle();
-    await control('row').fill('2');await control('col').fill('3');await control('inspect-submit').click();await expect(page.locator('.native-index')).toContainText('[1, 2, 3]');
-    const scalar=await (await context.request.get(base+'/api/inspect?'+new URLSearchParams({tensor:model.catalog.find(t=>t.name===name).id,slice:'1',row:'2',col:'3'}))).json();assert.equal(scalar.raw_hex_le||scalar.bf16_hex_le,fixture.tensors[name].source_hex_le[23]);assert.deepEqual(scalar.native_indices,[1,2,3]);
-    for(const [id,value] of Object.entries({'region-r0':'1','region-c0':'0','region-r1':'2','region-c1':'3'}))await control(id).fill(value);
-    await control('region-format').selectOption('csv');await download(page,'region-export',name+'-csv',1);await control('region-format').selectOption('npy');await download(page,'region-export',name+'-npy',2);
-    await expect(control('region-status')).toContainText('Numeric NumPy');
-    await control('slice-picker').locator('input').fill('0');await control('slice-picker').getByRole('button',{name:'Apply 2D slice',exact:true}).click();await settle();assert.deepEqual(await page.evaluate(()=>state.tensor.slice),[0]);await control('row').fill('2');await control('col').fill('3');await control('inspect-submit').click();await expect(page.locator('.native-index')).toContainText('[0, 2, 3]');
-    const vector=dtype.toLowerCase()+'_vector';await page.getByRole('button',{name:'Select '+vector,exact:true}).click();await settle();for(const [id,value] of Object.entries({'region-r0':'0','region-c0':'0','region-r1':'0','region-c1':'3'}))await control(id).fill(value);await control('region-format').selectOption('csv');await download(page,'region-export',vector+'-csv',1);await control('region-format').selectOption('npy');await download(page,'region-export',vector+'-npy',2);
-    checks.push(dtype+' actual rank3 slice/native inspection, slice switch, eight-cell CSV + numeric NPY/sidecar and four-cell vector downloads');
-   }
-   await control('region-controls').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(out,'exports-controls.png')});
-  }else{
-   await openArchive(page);await expect(el('logging')).not.toBeChecked();await expect(el('persist')).not.toBeChecked();await expect(el('include-prompt')).not.toBeChecked();await expect(el('durable-prompts')).not.toBeChecked();await expect(el('import-prompts')).not.toBeChecked();
-   const codec=require('../web/inference.js'),req={layer:7,activation_site:'mlp',max_new_tokens:1,prompt:'Atlas synthetic archive consent fixture.',edits:[],source_model:{}},record=codec.experimentRecord(req,{status:'complete',worker_alive:false,steps:[{index:0,activation:[.5],token_id:2,top_logits:[{id:2,value:1}]}]},{includePrompt:true}),archive=path.join(out,'synthetic-archive.json');fs.writeFileSync(archive,JSON.stringify(record));
-   const beforeInputs=await el('run-inputs').textContent();
-   const choose=async p=>{const chooser=p.waitForEvent('filechooser');await p.locator('#infer-import-file').click();await (await chooser).setFiles(archive);};
-   await choose(page);const loaded=page.waitForResponse(r=>r.url()===base+'/inference-import.js');await el('import-log').click();const response=await loaded;assert.equal(response.status(),200);assert(response.headers()['content-type'].startsWith('text/javascript'));assert.equal(sha(await response.body()),sha(fs.readFileSync('web/inference-import.js')));await expect(el('log-status')).toContainText('1 / 8');assert.equal(await el('run-inputs').textContent(),beforeInputs);
-   await download(page,'infer-export-log','redacted-import',1);const exported=JSON.parse(fs.readFileSync(path.join(out,'redacted-import-weight-atlas-session-log.json'),'utf8'));assert.equal(exported.records[0].privacy.prompt_included,false);assert(!JSON.stringify(exported).includes(req.prompt));
-   await el('persist').check();await expect(el('durable-status')).toContainText('Saved');await page.reload();await openArchive(page);await expect(el('log-status')).toContainText('0 / 8');await expect(el('logging')).not.toBeChecked();await expect(el('persist')).not.toBeChecked();await el('restore-log').click();await expect(el('log-status')).toContainText('1 / 8');
-   // A same-origin opener copies the tab owner by normal browser semantics.
-   const popupEvent=page.waitForEvent('popup');await page.evaluate(()=>window.open(location.href,'_blank'));const duplicate=await popupEvent;observe(duplicate);await openArchive(duplicate);assert.equal(await page.evaluate(()=>sessionStorage.getItem('weight-atlas.experiment-owner.v1')),await duplicate.evaluate(()=>sessionStorage.getItem('weight-atlas.experiment-owner.v1')));assert.equal(await page.evaluate(()=>typeof navigator.locks.request),'function');
-   await duplicate.locator('#infer-restore-log').click();await expect(duplicate.locator('#infer-log-status')).toContainText('1 / 8');const hold=async()=>{await page.evaluate(()=>{globalThis.__atlasLockHeld=false;globalThis.__atlasHeldLock=navigator.locks.request('weight-atlas-experiment-storage-v1',()=>new Promise(r=>{globalThis.__atlasReleaseLock=r;globalThis.__atlasLockHeld=true;}));});await page.waitForFunction(()=>__atlasLockHeld);};
-   const release=async()=>{await expect.poll(()=>page.evaluate(async()=>(await navigator.locks.query()).pending.filter(l=>l.name==='weight-atlas-experiment-storage-v1').length)).toBe(2);await page.evaluate(()=>__atlasReleaseLock());};
-   await hold();await el('persist').check();await duplicate.locator('#infer-delete-saved-log').click();await expect(el('start')).toBeDisabled();await expect(duplicate.locator('#infer-import-log')).toBeDisabled();await release();await expect(el('durable-status')).toContainText('Saved');await expect(duplicate.locator('#infer-durable-status')).toContainText('deleted');await el('save-durable').click();await expect(el('durable-status')).toContainText('another tab');await expect(el('log-status')).toContainText('1 / 8');assert.equal(await page.evaluate(()=>Object.keys(localStorage).filter(k=>k.startsWith('weight-atlas.experiments.v1:')).length),0);
-   await el('persist').uncheck();await expect(el('start')).toBeEnabled();
-   await duplicate.locator('#infer-persist').check();await expect(duplicate.locator('#infer-durable-status')).toContainText('Saved');await el('restore-log').click();await expect(el('log-status')).toContainText('2 / 8');
-   await hold();await duplicate.locator('#infer-delete-saved-log').click();await el('persist').check();await expect(el('start')).toBeDisabled();await release();await expect(duplicate.locator('#infer-durable-status')).toContainText('deleted');await expect(el('durable-status')).toContainText('another tab');assert.equal(await page.evaluate(()=>Object.keys(localStorage).filter(k=>k.startsWith('weight-atlas.experiments.v1:')).length),0);await el('persist').uncheck();await duplicate.close();
-   // Real OPFS FileSystemFileHandle/writable mechanics. The picker is explicitly
-   // replaced by this task-owned handle; no native permission result is claimed.
-   const opfs=await page.evaluate(async()=>{if(!navigator.storage?.getDirectory)return false;const root=await navigator.storage.getDirectory();globalThis.__atlasJournal=await root.getFileHandle('atlas-qualification-journal.json',{create:true});globalThis.showSaveFilePicker=async()=>globalThis.__atlasJournal;return typeof globalThis.__atlasJournal.createWritable==='function';});
-   assert(opfs,'Real task-owned OPFS writable support required for this phase');await el('choose-journal').click();await expect(el('durable-status')).toContainText('Saved');let journal=JSON.parse(await page.evaluate(async()=>(await __atlasJournal.getFile()).text()));assert.equal(journal.records.length,2);assert(!JSON.stringify(journal).includes(req.prompt));
-   await el('import-prompts').check();await choose(page);await el('import-log').click();await expect(el('log-status')).toContainText('3 / 8');await expect(el('durable-status')).toContainText('Saved 3');await el('durable-prompts').check();await expect(el('durable-status')).toContainText('Saved 3');journal=JSON.parse(await page.evaluate(async()=>(await __atlasJournal.getFile()).text()));assert(journal.records.some(r=>r.request.prompt===req.prompt));await el('durable-prompts').uncheck();await expect(el('durable-status')).toContainText('Saved 3');journal=JSON.parse(await page.evaluate(async()=>(await __atlasJournal.getFile()).text()));assert(!JSON.stringify(journal).includes(req.prompt));
-   await el('detach-journal').click();await expect(el('detach-journal')).toBeDisabled();await page.reload();await openArchive(page);await expect(el('detach-journal')).toBeDisabled();await expect(el('log-status')).toContainText('0 / 8');assert(!requests.some(r=>r.path==='/api/inference/start'));
-   await page.locator('.experiment-log').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(out,'archive-controls.png')});checks.push('Actual file input, fixed lazy codec/CSP, default redaction, no imported execution/input adoption, explicit browser save/reload/restore; real Web Lock FIFO contention in both orders; copied-owner stale save refuses after ordinary deletion; real OPFS write/close, separate prompt consent, detach and forgotten journal handle');
+const { chromium, expect } = require("playwright/test"),
+  assert = require("node:assert/strict"),
+  fs = require("node:fs"),
+  path = require("node:path"),
+  crypto = require("node:crypto");
+const base = process.env.ATLAS_TEST_URL,
+  out = process.env.ATLAS_EVIDENCE_DIR,
+  phase = process.env.ATLAS_DATA_PHASE;
+assert(/^http:\/\/127\.0\.0\.1:\d+$/.test(base));
+assert(out && process.env.ATLAS_CHROMIUM);
+assert(["exports", "archives"].includes(phase));
+const sha = (x) => crypto.createHash("sha256").update(x).digest("hex"),
+  save = (name, data) =>
+    fs.writeFileSync(
+      path.join(out, name),
+      JSON.stringify(data, null, 2) + "\n",
+    );
+const fixture = JSON.parse(
+  fs.readFileSync(path.join(out, "fixture", "fixture-manifest.json"), "utf8"),
+);
+(async () => {
+  let browser;
+  const checks = [],
+    errors = [],
+    requests = [],
+    downloads = [],
+    files = [];
+  let downloadCase = "unplanned";
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      chromiumSandbox: true,
+      executablePath: process.env.ATLAS_CHROMIUM,
+      args: ["--renderer-process-limit=1", "--disable-gpu"],
+    });
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 900 },
+      acceptDownloads: true,
+    });
+    await context.route("**/*", (r) =>
+      r
+        .request()
+        .url()
+        .startsWith(base + "/")
+        ? r.continue()
+        : r.abort(),
+    );
+    const observe = (page) => {
+      page.setDefaultTimeout(7000);
+      page.on("pageerror", (e) => errors.push(e.message));
+      page.on("request", (r) => {
+        requests.push({ method: r.method(), path: new URL(r.url()).pathname });
+        assert.equal(
+          r.method(),
+          "GET",
+          "Archive qualification must never mutate server state",
+        );
+      });
+      page.on("download", (d) => {
+        const label = downloadCase,
+          promise = (async () => {
+            const filename = d.suggestedFilename(),
+              target = path.join(out, label + "-" + filename);
+            await d.saveAs(target);
+            const raw = fs.readFileSync(target);
+            assert(raw.length <= 1048576);
+            files.push({
+              case: label,
+              file: path.basename(target),
+              filename,
+              bytes: raw.length,
+              sha256: sha(raw),
+            });
+          })();
+        downloads.push(promise);
+      });
+    };
+    const page = await context.newPage();
+    observe(page);
+    const el = (id) => page.locator("#infer-" + id),
+      control = (id) => page.locator("#" + id);
+    const settle = async () => {
+      await expect(control("comparison")).toHaveAttribute("aria-busy", "false");
+      await expect(control("region-controls")).toBeEnabled();
+    };
+    const openArchive = async (p) => {
+      await expect(p.locator("#inference-panel")).toBeVisible();
+      await p.locator("#inference-panel > summary").click();
+      await p.locator("#infer-import-file").scrollIntoViewIfNeeded();
+    };
+    const download = async (p, button, label, count) => {
+      downloadCase = label;
+      const before = downloads.length;
+      await p.locator("#" + button).click();
+      await expect
+        .poll(() => downloads.length - before, { timeout: 7000 })
+        .toBe(count);
+      await Promise.all(downloads.slice(before));
+    };
+    await page.goto(base);
+    await expect(el("model")).toContainText(
+      "metadata-only qualification adapter",
+    );
+    assert(
+      !requests.some((r) => r.path === "/inference-import.js"),
+      "No startup importer load",
+    );
+    const model = await (await context.request.get(base + "/api/model")).json();
+    assert.equal(model.revision, fixture.revision);
+    assert.equal(model.catalog.length, 6);
+    const startup = await context.request.get(base + "/viewer.js"),
+      bundle = await startup.body();
+    const parts = [
+      "vendor/openseadragon.min.js",
+      "atlas-tools.js",
+      "app.js",
+      "workspace-tools.js",
+      "inference.js",
+    ];
+    const expected = Buffer.concat(
+      parts.flatMap((f, i) => [
+        ...(i ? [Buffer.from("\n;\n")] : []),
+        fs.readFileSync("web/" + f),
+      ]),
+    );
+    assert.equal(sha(bundle), sha(expected));
+    assert(bundle.length < 600 * 1024);
+    assert(
+      startup
+        .headers()
+        ["content-security-policy"].includes("script-src 'self'"),
+    );
+    save("served-source-binding.json", {
+      source_identity: model.source_identity,
+      model_identity: model.model_identity,
+      revision: model.revision,
+      viewer_sha256: sha(bundle),
+      viewer_bytes: bundle.length,
+      CSP: startup.headers()["content-security-policy"],
+      fixture_file_sha256: fixture.sha256,
+      scope:
+        "Actual rebuilt renderer through metadata-only fixture adapter; no inference integration",
+    });
+    checks.push(
+      "Actual rebuilt fixed viewer bundle and real same-origin CSP match exact accepted production sources; codec absent at startup",
+    );
+    if (phase === "exports") {
+      await page.locator(".workspace-tools > summary").click();
+      for (const dtype of ["BF16", "F16", "F32"]) {
+        const name = dtype.toLowerCase() + "_rank3";
+        await page
+          .getByRole("button", { name: "Select " + name, exact: true })
+          .click();
+        await expect(control("slice-picker")).toBeVisible();
+        await control("slice-picker").locator("input").fill("1");
+        await control("slice-picker")
+          .getByRole("button", { name: "Apply 2D slice", exact: true })
+          .click();
+        await settle();
+        await control("row").fill("2");
+        await control("col").fill("3");
+        await control("inspect-submit").click();
+        await expect(page.locator(".native-index")).toContainText("[1, 2, 3]");
+        const scalar = await (
+          await context.request.get(
+            base +
+              "/api/inspect?" +
+              new URLSearchParams({
+                tensor: model.catalog.find((t) => t.name === name).id,
+                slice: "1",
+                row: "2",
+                col: "3",
+              }),
+          )
+        ).json();
+        assert.equal(
+          scalar.raw_hex_le || scalar.bf16_hex_le,
+          fixture.tensors[name].source_hex_le[23],
+        );
+        assert.deepEqual(scalar.native_indices, [1, 2, 3]);
+        for (const [id, value] of Object.entries({
+          "region-r0": "1",
+          "region-c0": "0",
+          "region-r1": "2",
+          "region-c1": "3",
+        }))
+          await control(id).fill(value);
+        await control("region-format").selectOption("csv");
+        await download(page, "region-export", name + "-csv", 1);
+        await control("region-format").selectOption("npy");
+        await download(page, "region-export", name + "-npy", 2);
+        await expect(control("region-status")).toContainText("Numeric NumPy");
+        await control("slice-picker").locator("input").fill("0");
+        await control("slice-picker")
+          .getByRole("button", { name: "Apply 2D slice", exact: true })
+          .click();
+        await settle();
+        assert.deepEqual(await page.evaluate(() => state.tensor.slice), [0]);
+        await control("row").fill("2");
+        await control("col").fill("3");
+        await control("inspect-submit").click();
+        await expect(page.locator(".native-index")).toContainText("[0, 2, 3]");
+        const vector = dtype.toLowerCase() + "_vector";
+        await page
+          .getByRole("button", { name: "Select " + vector, exact: true })
+          .click();
+        await settle();
+        for (const [id, value] of Object.entries({
+          "region-r0": "0",
+          "region-c0": "0",
+          "region-r1": "0",
+          "region-c1": "3",
+        }))
+          await control(id).fill(value);
+        await control("region-format").selectOption("csv");
+        await download(page, "region-export", vector + "-csv", 1);
+        await control("region-format").selectOption("npy");
+        await download(page, "region-export", vector + "-npy", 2);
+        checks.push(
+          dtype +
+            " actual rank3 slice/native inspection, slice switch, eight-cell CSV + numeric NPY/sidecar and four-cell vector downloads",
+        );
+      }
+      await control("region-controls").scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(out, "exports-controls.png") });
+    } else {
+      await openArchive(page);
+      await expect(el("logging")).not.toBeChecked();
+      await expect(el("persist")).not.toBeChecked();
+      await expect(el("include-prompt")).not.toBeChecked();
+      await expect(el("durable-prompts")).not.toBeChecked();
+      await expect(el("import-prompts")).not.toBeChecked();
+      const codec = require("../web/inference.js"),
+        req = {
+          layer: 7,
+          activation_site: "mlp",
+          max_new_tokens: 1,
+          prompt: "Atlas synthetic archive consent fixture.",
+          edits: [],
+          source_model: {},
+        },
+        record = codec.experimentRecord(
+          req,
+          {
+            status: "complete",
+            worker_alive: false,
+            steps: [
+              {
+                index: 0,
+                activation: [0.5],
+                token_id: 2,
+                top_logits: [{ id: 2, value: 1 }],
+              },
+            ],
+          },
+          { includePrompt: true },
+        ),
+        archive = path.join(out, "synthetic-archive.json");
+      fs.writeFileSync(archive, JSON.stringify(record));
+      const beforeInputs = await el("run-inputs").textContent();
+      const choose = async (p) => {
+        const chooser = p.waitForEvent("filechooser");
+        await p.locator("#infer-import-file").click();
+        await (await chooser).setFiles(archive);
+      };
+      await choose(page);
+      const loaded = page.waitForResponse(
+        (r) => r.url() === base + "/inference-import.js",
+      );
+      await el("import-log").click();
+      const response = await loaded;
+      assert.equal(response.status(), 200);
+      assert(response.headers()["content-type"].startsWith("text/javascript"));
+      assert.equal(
+        sha(await response.body()),
+        sha(fs.readFileSync("web/inference-import.js")),
+      );
+      await expect(el("log-status")).toContainText("1 / 8");
+      assert.equal(await el("run-inputs").textContent(), beforeInputs);
+      await download(page, "infer-export-log", "redacted-import", 1);
+      const exported = JSON.parse(
+        fs.readFileSync(
+          path.join(out, "redacted-import-weight-atlas-session-log.json"),
+          "utf8",
+        ),
+      );
+      assert.equal(exported.records[0].privacy.prompt_included, false);
+      assert(!JSON.stringify(exported).includes(req.prompt));
+      await el("persist").check();
+      await expect(el("durable-status")).toContainText("Saved");
+      await page.reload();
+      await openArchive(page);
+      await expect(el("log-status")).toContainText("0 / 8");
+      await expect(el("logging")).not.toBeChecked();
+      await expect(el("persist")).not.toBeChecked();
+      await el("restore-log").click();
+      await expect(el("log-status")).toContainText("1 / 8");
+      // A same-origin opener copies the tab owner by normal browser semantics.
+      const popupEvent = page.waitForEvent("popup");
+      await page.evaluate(() => window.open(location.href, "_blank"));
+      const duplicate = await popupEvent;
+      observe(duplicate);
+      await openArchive(duplicate);
+      assert.equal(
+        await page.evaluate(() =>
+          sessionStorage.getItem("weight-atlas.experiment-owner.v1"),
+        ),
+        await duplicate.evaluate(() =>
+          sessionStorage.getItem("weight-atlas.experiment-owner.v1"),
+        ),
+      );
+      assert.equal(
+        await page.evaluate(() => typeof navigator.locks.request),
+        "function",
+      );
+      await duplicate.locator("#infer-restore-log").click();
+      await expect(duplicate.locator("#infer-log-status")).toContainText(
+        "1 / 8",
+      );
+      const hold = async () => {
+        await page.evaluate(() => {
+          globalThis.__atlasLockHeld = false;
+          globalThis.__atlasHeldLock = navigator.locks.request(
+            "weight-atlas-experiment-storage-v1",
+            () =>
+              new Promise((r) => {
+                globalThis.__atlasReleaseLock = r;
+                globalThis.__atlasLockHeld = true;
+              }),
+          );
+        });
+        await page.waitForFunction(() => __atlasLockHeld);
+      };
+      const release = async () => {
+        await expect
+          .poll(() =>
+            page.evaluate(
+              async () =>
+                (await navigator.locks.query()).pending.filter(
+                  (l) => l.name === "weight-atlas-experiment-storage-v1",
+                ).length,
+            ),
+          )
+          .toBe(2);
+        await page.evaluate(() => __atlasReleaseLock());
+      };
+      await hold();
+      await el("persist").check();
+      await duplicate.locator("#infer-delete-saved-log").click();
+      await expect(el("start")).toBeDisabled();
+      await expect(duplicate.locator("#infer-import-log")).toBeDisabled();
+      await release();
+      await expect(el("durable-status")).toContainText("Saved");
+      await expect(duplicate.locator("#infer-durable-status")).toContainText(
+        "deleted",
+      );
+      await el("save-durable").click();
+      await expect(el("durable-status")).toContainText("another tab");
+      await expect(el("log-status")).toContainText("1 / 8");
+      assert.equal(
+        await page.evaluate(
+          () =>
+            Object.keys(localStorage).filter((k) =>
+              k.startsWith("weight-atlas.experiments.v1:"),
+            ).length,
+        ),
+        0,
+      );
+      await el("persist").uncheck();
+      await expect(el("start")).toBeEnabled();
+      await duplicate.locator("#infer-persist").check();
+      await expect(duplicate.locator("#infer-durable-status")).toContainText(
+        "Saved",
+      );
+      await el("restore-log").click();
+      await expect(el("log-status")).toContainText("2 / 8");
+      await hold();
+      await duplicate.locator("#infer-delete-saved-log").click();
+      await el("persist").check();
+      await expect(el("start")).toBeDisabled();
+      await release();
+      await expect(duplicate.locator("#infer-durable-status")).toContainText(
+        "deleted",
+      );
+      await expect(el("durable-status")).toContainText("another tab");
+      assert.equal(
+        await page.evaluate(
+          () =>
+            Object.keys(localStorage).filter((k) =>
+              k.startsWith("weight-atlas.experiments.v1:"),
+            ).length,
+        ),
+        0,
+      );
+      await el("persist").uncheck();
+      await duplicate.close();
+      // Real OPFS FileSystemFileHandle/writable mechanics. The picker is explicitly
+      // replaced by this task-owned handle; no native permission result is claimed.
+      const opfs = await page.evaluate(async () => {
+        if (!navigator.storage?.getDirectory) return false;
+        const root = await navigator.storage.getDirectory();
+        globalThis.__atlasJournal = await root.getFileHandle(
+          "atlas-qualification-journal.json",
+          { create: true },
+        );
+        globalThis.showSaveFilePicker = async () => globalThis.__atlasJournal;
+        return typeof globalThis.__atlasJournal.createWritable === "function";
+      });
+      assert(
+        opfs,
+        "Real task-owned OPFS writable support required for this phase",
+      );
+      await el("choose-journal").click();
+      await expect(el("durable-status")).toContainText("Saved");
+      let journal = JSON.parse(
+        await page.evaluate(async () =>
+          (await __atlasJournal.getFile()).text(),
+        ),
+      );
+      assert.equal(journal.records.length, 2);
+      assert(!JSON.stringify(journal).includes(req.prompt));
+      await el("import-prompts").check();
+      await choose(page);
+      await el("import-log").click();
+      await expect(el("log-status")).toContainText("3 / 8");
+      await expect(el("durable-status")).toContainText("Saved 3");
+      await el("durable-prompts").check();
+      await expect(el("durable-status")).toContainText("Saved 3");
+      journal = JSON.parse(
+        await page.evaluate(async () =>
+          (await __atlasJournal.getFile()).text(),
+        ),
+      );
+      assert(journal.records.some((r) => r.request.prompt === req.prompt));
+      await el("durable-prompts").uncheck();
+      await expect(el("durable-status")).toContainText("Saved 3");
+      journal = JSON.parse(
+        await page.evaluate(async () =>
+          (await __atlasJournal.getFile()).text(),
+        ),
+      );
+      assert(!JSON.stringify(journal).includes(req.prompt));
+      await el("detach-journal").click();
+      await expect(el("detach-journal")).toBeDisabled();
+      await page.reload();
+      await openArchive(page);
+      await expect(el("detach-journal")).toBeDisabled();
+      await expect(el("log-status")).toContainText("0 / 8");
+      assert(!requests.some((r) => r.path === "/api/inference/start"));
+      await page.locator(".experiment-log").scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(out, "archive-controls.png") });
+      checks.push(
+        "Actual file input, fixed lazy codec/CSP, default redaction, no imported execution/input adoption, explicit browser save/reload/restore; real Web Lock FIFO contention in both orders; copied-owner stale save refuses after ordinary deletion; real OPFS write/close, separate prompt consent, detach and forgotten journal handle",
+      );
+    }
+    await Promise.all(downloads);
+    assert.deepEqual(errors, []);
+    assert(requests.every((r) => r.method === "GET"));
+    save("browser-result.json", {
+      status: "PASS",
+      phase,
+      browser: browser.version(),
+      checks,
+      page_errors: errors,
+      downloads: files,
+      request_count: requests.length,
+      inference_mutations: 0,
+      adapter_scope:
+        "Metadata-only synthetic fixture; no actual inference integration claim",
+      native_filepicker_permission_qualified: false,
+      multiple_download_permission_qualified: false,
+      opfs_picker_shim: phase === "archives",
+      deterministic_failure_cancel_reset:
+        "Retained pure doubles only; no live fault injection",
+    });
+    console.log(JSON.stringify({ status: "PASS", phase, checks }));
+  } catch (error) {
+    save("browser-failure.json", {
+      status: "FAIL_OR_PARTIAL",
+      phase,
+      error: error.stack,
+      checks,
+      page_errors: errors,
+      downloads: files,
+    });
+    throw error;
+  } finally {
+    if (browser) await browser.close();
   }
-  await Promise.all(downloads);assert.deepEqual(errors,[]);assert(requests.every(r=>r.method==='GET'));save('browser-result.json',{status:'PASS',phase,browser:browser.version(),checks,page_errors:errors,downloads:files,request_count:requests.length,inference_mutations:0,adapter_scope:'Metadata-only synthetic fixture; no actual inference integration claim',native_filepicker_permission_qualified:false,multiple_download_permission_qualified:false,opfs_picker_shim:phase==='archives',deterministic_failure_cancel_reset:'Retained pure doubles only; no live fault injection'});console.log(JSON.stringify({status:'PASS',phase,checks}));
- }catch(error){save('browser-failure.json',{status:'FAIL_OR_PARTIAL',phase,error:error.stack,checks,page_errors:errors,downloads:files});throw error;}finally{if(browser)await browser.close();}
-})().catch(e=>{console.error(e);process.exitCode=1;});
+})().catch((e) => {
+  console.error(e);
+  process.exitCode = 1;
+});

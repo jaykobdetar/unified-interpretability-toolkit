@@ -1,19 +1,164 @@
-'use strict';
+"use strict";
 // Two explicit bounded reports on the combined inference-enabled coordinator.
-const {chromium,expect}=require('playwright/test'),assert=require('node:assert/strict'),fs=require('node:fs'),H=require('./acceptance/support.cjs');
-const base=process.env.ATLAS_TEST_URL,out=process.env.ATLAS_EVIDENCE_DIR;assert(/^http:\/\/127\.0\.0\.1:\d+$/.test(base));assert(!fs.existsSync(out));fs.mkdirSync(out,{recursive:true});
-(async()=>{
- const pins=await H.verifyPins(process.env.ATLAS_MODEL_DIR);const browser=await chromium.launch({headless:true,chromiumSandbox:true,executablePath:process.env.ATLAS_CHROMIUM,args:['--renderer-process-limit=1','--disable-gpu']});let page,owner=null;
- try{
-  const context=await browser.newContext({viewport:{width:1280,height:900}});await context.route('**/*',r=>r.request().url().startsWith(base+'/')?r.continue():r.abort());page=await context.newPage();const errors=[],reports=[],starts=[];page.on('pageerror',e=>errors.push(e.message));
-  page.on('response',async response=>{if(![base+'/api/analytics/start',base+'/api/analytics/poll',base+'/api/analytics/cancel'].includes(response.url())||!response.ok())return;try{const raw=await response.body();assert(raw.length<=2*1024**2);const value=JSON.parse(raw);if(response.url().endsWith('/start')){owner=value.job;starts.push(response.request().postDataJSON());}if(value.job===owner&&!value.worker_alive&&!value.cleanup_pending){owner=null;if(value.status==='complete')reports.push(value.result);}}catch(e){errors.push(e.message);}});
-  const host=page.locator('section[aria-label="Bounded weight analytics"]'),widget=host.locator('section.atlas-analytics');await page.goto(base);await expect(page.locator('#infer-start')).toBeEnabled();await expect(host).toBeVisible();await expect(page.locator('#tensor-name')).toContainText('q_proj.weight');
-  await host.getByLabel('Rows',{exact:true}).fill('64');await host.getByLabel('Columns',{exact:true}).fill('8');await widget.getByRole('button',{name:'Compare original / shuffle',exact:true}).click();await expect.poll(()=>reports.length,{timeout:15000}).toBe(1);
-  let report=reports[0];assert.equal(report.coverage.visited_values,512);assert.equal(report.heads.head_count,9);assert.deepEqual([...report.control.position_to_source].sort((a,b)=>a-b),Array.from({length:512},(_,i)=>i));
-  await widget.getByLabel('Sort strips').check();const expected=report.original.row_order[0],canvas=widget.locator('.analytics-pair canvas').first();await canvas.scrollIntoViewIfNeeded();const rect=await canvas.boundingBox();await page.mouse.click(rect.x+1,rect.y+30);await expect(page.locator('#row')).toHaveValue(String(expected));await expect(page.locator('#inspection')).toContainText('Original BF16');
-  await widget.getByLabel('View',{exact:true}).selectOption('heads');await expect(widget.getByRole('heading',{name:'Q heads',exact:true})).toBeVisible();
-  await host.getByLabel('Rows',{exact:true}).fill('8');await widget.getByLabel('View',{exact:true}).selectOption('svd');await widget.getByRole('button',{name:'Compute bounded SVD comparison',exact:true}).click();await expect.poll(()=>reports.length,{timeout:15000}).toBe(2);assert(reports[1].svd.available);assert.equal(reports[1].coverage.visited_values,64);await expect(widget).toContainText('separately fitted shuffled control');
-  await host.scrollIntoViewIfNeeded();await page.screenshot({path:out+'/analytics-desktop.jpg',type:'jpeg',quality:82});await page.setViewportSize({width:390,height:844});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await host.scrollIntoViewIfNeeded();await page.screenshot({path:out+'/analytics-mobile.jpg',type:'jpeg',quality:82});
-  assert.equal(starts.length,2);assert.equal(owner,null);assert.deepEqual(errors,[]);assert.deepEqual(await H.verifyPins(process.env.ATLAS_MODEL_DIR),pins);H.save(out,'combined-analytics-browser.json',{status:'PASS',reports:reports.length,visited_values:reports.map(r=>r.coverage.visited_values),inference_controls_available:true,native_sorted_row_jump:true,source_map_permutation:true,svd:true,disk_hashes_unchanged:true,owned_cleanup_confirmed:true,page_errors:errors,scope:'64x8 strength/head view,8x8 SVD,desktop/mobile emulation; full analytics workflow and maximum sweep browser remain separately limited'});
- }finally{if(owner&&page){await page.request.post(base+'/api/analytics/cancel',{headers:{Origin:base,'X-Atlas-Local':'1'},data:{job:owner},timeout:2000}).catch(()=>{});}await browser.close();}
-})().catch(e=>{H.save(out,'failure.json',{status:'FAIL',message:e.message});console.error(e);process.exitCode=1;});
+const { chromium, expect } = require("playwright/test"),
+  assert = require("node:assert/strict"),
+  fs = require("node:fs"),
+  H = require("./acceptance/support.cjs");
+const base = process.env.ATLAS_TEST_URL,
+  out = process.env.ATLAS_EVIDENCE_DIR;
+assert(/^http:\/\/127\.0\.0\.1:\d+$/.test(base));
+assert(!fs.existsSync(out));
+fs.mkdirSync(out, { recursive: true });
+(async () => {
+  const pins = await H.verifyPins(process.env.ATLAS_MODEL_DIR);
+  const browser = await chromium.launch({
+    headless: true,
+    chromiumSandbox: true,
+    executablePath: process.env.ATLAS_CHROMIUM,
+    args: ["--renderer-process-limit=1", "--disable-gpu"],
+  });
+  let page,
+    owner = null;
+  try {
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 900 },
+    });
+    await context.route("**/*", (r) =>
+      r
+        .request()
+        .url()
+        .startsWith(base + "/")
+        ? r.continue()
+        : r.abort(),
+    );
+    page = await context.newPage();
+    const errors = [],
+      reports = [],
+      starts = [];
+    page.on("pageerror", (e) => errors.push(e.message));
+    page.on("response", async (response) => {
+      if (
+        ![
+          base + "/api/analytics/start",
+          base + "/api/analytics/poll",
+          base + "/api/analytics/cancel",
+        ].includes(response.url()) ||
+        !response.ok()
+      )
+        return;
+      try {
+        const raw = await response.body();
+        assert(raw.length <= 2 * 1024 ** 2);
+        const value = JSON.parse(raw);
+        if (response.url().endsWith("/start")) {
+          owner = value.job;
+          starts.push(response.request().postDataJSON());
+        }
+        if (
+          value.job === owner &&
+          !value.worker_alive &&
+          !value.cleanup_pending
+        ) {
+          owner = null;
+          if (value.status === "complete") reports.push(value.result);
+        }
+      } catch (e) {
+        errors.push(e.message);
+      }
+    });
+    const host = page.locator('section[aria-label="Bounded weight analytics"]'),
+      widget = host.locator("section.atlas-analytics");
+    await page.goto(base);
+    await expect(page.locator("#infer-start")).toBeEnabled();
+    await expect(host).toBeVisible();
+    await expect(page.locator("#tensor-name")).toContainText("q_proj.weight");
+    await host.getByLabel("Rows", { exact: true }).fill("64");
+    await host.getByLabel("Columns", { exact: true }).fill("8");
+    await widget
+      .getByRole("button", { name: "Compare original / shuffle", exact: true })
+      .click();
+    await expect.poll(() => reports.length, { timeout: 15000 }).toBe(1);
+    let report = reports[0];
+    assert.equal(report.coverage.visited_values, 512);
+    assert.equal(report.heads.head_count, 9);
+    assert.deepEqual(
+      [...report.control.position_to_source].sort((a, b) => a - b),
+      Array.from({ length: 512 }, (_, i) => i),
+    );
+    await widget.getByLabel("Sort strips").check();
+    const expected = report.original.row_order[0],
+      canvas = widget.locator(".analytics-pair canvas").first();
+    await canvas.scrollIntoViewIfNeeded();
+    const rect = await canvas.boundingBox();
+    await page.mouse.click(rect.x + 1, rect.y + 30);
+    await expect(page.locator("#row")).toHaveValue(String(expected));
+    await expect(page.locator("#inspection")).toContainText("Original BF16");
+    await widget.getByLabel("View", { exact: true }).selectOption("heads");
+    await expect(
+      widget.getByRole("heading", { name: "Q heads", exact: true }),
+    ).toBeVisible();
+    await host.getByLabel("Rows", { exact: true }).fill("8");
+    await widget.getByLabel("View", { exact: true }).selectOption("svd");
+    await widget
+      .getByRole("button", {
+        name: "Compute bounded SVD comparison",
+        exact: true,
+      })
+      .click();
+    await expect.poll(() => reports.length, { timeout: 15000 }).toBe(2);
+    assert(reports[1].svd.available);
+    assert.equal(reports[1].coverage.visited_values, 64);
+    await expect(widget).toContainText("separately fitted shuffled control");
+    await host.scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: out + "/analytics-desktop.jpg",
+      type: "jpeg",
+      quality: 82,
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    );
+    await host.scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: out + "/analytics-mobile.jpg",
+      type: "jpeg",
+      quality: 82,
+    });
+    assert.equal(starts.length, 2);
+    assert.equal(owner, null);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(await H.verifyPins(process.env.ATLAS_MODEL_DIR), pins);
+    H.save(out, "combined-analytics-browser.json", {
+      status: "PASS",
+      reports: reports.length,
+      visited_values: reports.map((r) => r.coverage.visited_values),
+      inference_controls_available: true,
+      native_sorted_row_jump: true,
+      source_map_permutation: true,
+      svd: true,
+      disk_hashes_unchanged: true,
+      owned_cleanup_confirmed: true,
+      page_errors: errors,
+      scope:
+        "64x8 strength/head view,8x8 SVD,desktop/mobile emulation; full analytics workflow and maximum sweep browser remain separately limited",
+    });
+  } finally {
+    if (owner && page) {
+      await page.request
+        .post(base + "/api/analytics/cancel", {
+          headers: { Origin: base, "X-Atlas-Local": "1" },
+          data: { job: owner },
+          timeout: 2000,
+        })
+        .catch(() => {});
+    }
+    await browser.close();
+  }
+})().catch((e) => {
+  H.save(out, "failure.json", { status: "FAIL", message: e.message });
+  console.error(e);
+  process.exitCode = 1;
+});

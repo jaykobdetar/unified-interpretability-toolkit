@@ -1,68 +1,620 @@
-'use strict';
+"use strict";
 // Actual Chromium UI checks on an owned 26-value fixture server only. No inference.
-const {chromium,expect}=require('playwright/test');
-const {spawn}=require('node:child_process'),net=require('node:net');
-const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),crypto=require('node:crypto');
-const root=path.resolve(__dirname,'..'),out=path.resolve(process.env.ATLAS_EVIDENCE_DIR||path.join(root,'results/qol-v2/browser-attempt-1'));
-const bin=path.join(root,'target/release/weight-atlas-rust'),fixture=path.join(root,'fixtures/tiny-bf16');
-assert(process.env.ATLAS_CHROMIUM,'Explicit installed Chromium executable required');
-fs.mkdirSync(out,{recursive:true});const cache=fs.mkdtempSync(path.join(out,'cache-'));
-const checks=[],errors=[],requests=[],shots=[],injected=[],downloads=[],assetResponses=[];
-let browser,context,page,server,base,port;
-const within=async(p,ms,label)=>{let timer;try{return await Promise.race([p,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(label+' timed out')),ms);})]);}finally{clearTimeout(timer);}};
-function command(args,label){return new Promise((resolve,reject)=>{const p=spawn(bin,args,{cwd:root,stdio:['ignore','pipe','pipe']}),chunks=[];p.stdout.on('data',x=>chunks.push(x));p.stderr.on('data',x=>chunks.push(x));p.on('error',reject);p.on('close',(code,signal)=>{const text=Buffer.concat(chunks).toString();fs.writeFileSync(path.join(out,label+'.log'),text);code===0?resolve(text):reject(Error(`${label}: ${code||signal}: ${text}`));});});}
-async function stopServer(){if(server){const s=server;server=null;if(s.child.exitCode===null&&s.child.signalCode===null)s.child.kill('SIGTERM');await within(s.exited,5000,'owned fixture server stop');}}
-async function startServer(revision){
- const child=spawn(bin,['serve','--model',fixture,'--cache',cache,'--revision',revision,'--name','26-value fixture','--port',String(port)],{cwd:root,stdio:['ignore','pipe','pipe']});
- const log=fs.createWriteStream(path.join(out,'server-'+revision+'.log'));child.stdout.pipe(log,{end:false});child.stderr.pipe(log,{end:false});
- const exited=new Promise(resolve=>child.once('exit',(...args)=>{log.end();resolve(args);}));server={child,exited};
- await within(new Promise((resolve,reject)=>{let text='';child.on('error',reject);child.stdout.on('data',b=>{text+=b;for(const line of text.split('\n')){try{const v=JSON.parse(line);if(v.listening===base)resolve();}catch{}}});child.once('exit',(code,signal)=>reject(Error(`owned fixture server exited before readiness: ${code||signal}`)));}),5000,'fixture server readiness');
+const { chromium, expect } = require("playwright/test");
+const { spawn } = require("node:child_process"),
+  net = require("node:net");
+const fs = require("node:fs"),
+  path = require("node:path"),
+  assert = require("node:assert/strict"),
+  crypto = require("node:crypto");
+const root = path.resolve(__dirname, ".."),
+  out = path.resolve(
+    process.env.ATLAS_EVIDENCE_DIR ||
+      path.join(root, "results/qol-v2/browser-attempt-1"),
+  );
+const bin = path.join(root, "target/release/weight-atlas-rust"),
+  fixture = path.join(root, "fixtures/tiny-bf16");
+assert(
+  process.env.ATLAS_CHROMIUM,
+  "Explicit installed Chromium executable required",
+);
+fs.mkdirSync(out, { recursive: true });
+const cache = fs.mkdtempSync(path.join(out, "cache-"));
+const checks = [],
+  errors = [],
+  requests = [],
+  shots = [],
+  injected = [],
+  downloads = [],
+  assetResponses = [];
+let browser, context, page, server, base, port;
+const within = async (p, ms, label) => {
+  let timer;
+  try {
+    return await Promise.race([
+      p,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(Error(label + " timed out")), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
+function command(args, label) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(bin, args, {
+        cwd: root,
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+      chunks = [];
+    p.stdout.on("data", (x) => chunks.push(x));
+    p.stderr.on("data", (x) => chunks.push(x));
+    p.on("error", reject);
+    p.on("close", (code, signal) => {
+      const text = Buffer.concat(chunks).toString();
+      fs.writeFileSync(path.join(out, label + ".log"), text);
+      code === 0
+        ? resolve(text)
+        : reject(Error(`${label}: ${code || signal}: ${text}`));
+    });
+  });
 }
-const locator=id=>page.locator('#'+id);
-const settled=async()=>{await expect(locator('comparison')).toHaveAttribute('aria-busy','false');await expect(locator('left-resolution')).toContainText('cells');await expect(locator('region-controls')).toBeEnabled();};
-const select=async id=>{await page.locator(`[data-tensor-id="${id}"]`).click();await settled();};
-const bounds=async b=>{for(const [i,id] of ['region-r0','region-c0','region-r1','region-c1'].entries())await locator(id).fill(String(b[i]));};
-const takeShot=async name=>{const filename=path.join(out,name+'.jpg');await page.screenshot({path:filename,type:'jpeg',quality:82,fullPage:false});shots.push({path:filename,sha256:crypto.createHash('sha256').update(fs.readFileSync(filename)).digest('hex'),viewport:page.viewportSize()});};
-async function csvDownload(name){const d=page.waitForEvent('download');await locator('region-export').click();const dl=await d;const target=path.join(out,name+'.csv');await dl.saveAs(target);const text=fs.readFileSync(target,'utf8');assert(Buffer.byteLength(text)<=262144);assert(text.includes('bf16_hex_le'));return text;}
-async function run(){
- port=await new Promise((resolve,reject)=>{const s=net.createServer();s.on('error',reject);s.listen(0,'127.0.0.1',()=>{const value=s.address().port;s.close(()=>resolve(value));});});assert.notEqual(port,8775);base='http://127.0.0.1:'+port;
- await command(['calibrate','--model',fixture,'--cache',cache,'--revision','fixture-A'],'fixture-calibration');await startServer('fixture-A');
- browser=await chromium.launch({headless:true,chromiumSandbox:true,executablePath:process.env.ATLAS_CHROMIUM,args:['--renderer-process-limit=1','--disable-gpu']});
- context=await browser.newContext({viewport:{width:1440,height:1000},acceptDownloads:true});
- await context.route('**/*',route=>route.request().url().startsWith(base+'/')?route.continue():route.abort());
- page=await context.newPage();page.setDefaultTimeout(6000);page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>requests.push({url:r.url(),method:r.method()}));page.on('download',d=>downloads.push(d.suggestedFilename()));page.on('response',r=>{const path=new URL(r.url()).pathname;if(/\.(js|css)$/.test(path)&&assetResponses.length<64)assetResponses.push({path,status:r.status()});});
- await page.goto(base);await settled();await expect(locator('inference-panel')).toBeHidden();await expect(locator('mode-status')).toContainText('inference unavailable');await page.locator('.workspace-tools > summary').click();
- const original=await (await context.request.get(base+'/api/model')).json(),matrix=original.catalog.find(t=>t.name==='matrix'),vector=original.catalog.find(t=>t.name==='vector');
- const scalar=await (await context.request.get(base+`/api/inspect?tensor=${matrix.id}&row=0&col=0`)).json();assert.equal(scalar.source_binding.model_identity,original.model_identity);assert.equal(original.model_identity,crypto.createHash('sha256').update(JSON.stringify(['weight-atlas-model-v1',original.source_identity,'fixture-A'])).digest('hex'));assert(!JSON.stringify(scalar.source_binding).includes(fixture));checks.push('Real fixture model/scalar identity matches the specified revision digest; unavailable inference stays unavailable without generation');
- await select(matrix.id);await bounds([0,0,1,1]);await locator('note-text').fill('Fixture note A — local browser only');await locator('note-save').click();await expect(locator('note-list')).toContainText('Fixture note A');await page.reload();await settled();await page.locator('.workspace-tools > summary').click();await expect(locator('note-list')).toContainText('Fixture note A');checks.push('Browser localStorage note creation and harmless reload persist in the exact source/revision/tensor scope');
- await bounds([0,0,1,1]);const csv=await csvDownload('matrix-region');assert(csv.includes('"0","0","[0,0]","-1"'));checks.push('Actual bounded matrix CSV download contains native coordinates, exact decimals, original bytes and revision metadata');
- await locator('left-rule').selectOption('tensor_linear');await settled();await locator('right-rule').selectOption('global_asinh');await settled();await locator('region-focus').click();const savedBounds=await page.evaluate(()=>{const b=state.viewers.left.viewport.getBounds(true);return [b.x,b.y,b.width,b.height];});await locator('bookmark-save').click();const saved=page.url();assert(saved.includes('#wa=2'));assert(!saved.includes('Fixture%20note'));assert(!saved.includes('fixture-A'));const historyBefore=await page.evaluate(()=>history.length);await locator('bookmark-save').click();assert.equal(await page.evaluate(()=>history.length),historyBefore);
- await locator('bookmark-reset').click();await settled();await page.goBack();await settled();await expect(locator('tensor-name')).toHaveText('matrix');await expect(locator('region-r1')).toHaveValue('1');await expect(locator('left-rule')).toHaveValue('tensor_linear');await expect(locator('right-rule')).toHaveValue('global_asinh');const restoredBounds=await page.evaluate(()=>{const b=state.viewers.left.viewport.getBounds(true);return [b.x,b.y,b.width,b.height];});assert(restoredBounds.every((n,i)=>Math.abs(n-savedBounds[i])<1e-6));await page.goForward();await settled();await select(vector.id);await bounds([0,1,0,1]);await locator('bookmark-save').click();const vectorURL=page.url();assert.notEqual(vectorURL,saved);
- const vectorCSV=await csvDownload('vector-signed-zero');assert(vectorCSV.includes('"0","1","[1]","-0.0","0080"'));await locator('bookmark-reset').click();await settled();assert.equal(new URL(page.url()).hash,'');await expect(locator('tensor-name')).toHaveText('matrix');checks.push('Actual browser bookmark history/reset restores native matrix/vector selection, zoom and both color rules; vector export retains negative zero');
- const numeric=await page.evaluate(()=>{const b=AtlasTools.parseBookmark(AtlasTools.bookmark({...settings(),region:[0,0,0,0],viewport:[1e-8,-1e-8,2,2]},state.model));return b?.viewport;});assert.deepEqual(numeric,[1e-8,-1e-8,2,2]);checks.push('Browser parser roundtrips tiny signed pan coordinates without exponent notation');
- let retryCount=0;const retryRoute=async route=>{retryCount++;if(retryCount<=2){injected.push('coded-503 model read');await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({code:'backend_unavailable',error:'Synthetic unavailable response'})});}else await route.continue();};
- await page.route(base+'/api/model',retryRoute);await locator('refresh-model').click();await expect(locator('read-retry')).toContainText('Retry');await settled();assert.equal(retryCount,3);await expect(locator('read-retry')).toHaveText('');await page.unroute(base+'/api/model',retryRoute);checks.push('Real browser read recovery shows bounded retry state and completes on exactly the third attempt (client response fixture)');
- let parallelCount=0;const parallelRoute=async route=>{if(++parallelCount===1)await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({code:'backend_unavailable',error:'Synthetic first request failure'})});else await route.continue();};
- await page.route(base+'/api/model',parallelRoute);
- await page.evaluate(()=>{globalThis.__qolFirst=AtlasTools.readJSON('/api/model',{wait:()=>new Promise(r=>globalThis.__qolRelease=r),onState:e=>atlasWorkspace.retry(e,'/api/model',undefined,'parallel-browser')});});await expect(locator('read-retry')).toContainText('Retry 1/2');
- await page.evaluate(()=>AtlasTools.readJSON('/api/model',{onState:e=>atlasWorkspace.retry(e,'/api/model',undefined,'parallel-browser')}));await expect(locator('read-retry')).toContainText('Retry 1/2');await page.evaluate(()=>{__qolRelease();return __qolFirst;});await expect(locator('read-retry')).toHaveText('');await page.unroute(base+'/api/model',parallelRoute);checks.push('Concurrent same-URL success cannot erase another browser request retry state');
- await locator('row').fill('1');await locator('col').fill('1');await locator('inspect-submit').click();await expect(page.locator('.raw-value')).toHaveText('-0.25');
- for(const action of [()=>locator('region-use-cell').click(),()=>locator('note-list').getByRole('button',{name:'Show pin',exact:true}).click(),()=>locator('note-list').getByRole('button',{name:'Edit',exact:true}).click()]){
-  let release,arrive,done;const intercepted=new Promise(r=>arrive=r),finished=new Promise(r=>done=r),gate=new Promise(r=>release=r);const routeFn=async route=>{try{const upstream=await route.fetch();arrive();await gate;await route.fulfill({response:upstream});}catch(e){injected.push('cancelled held scalar response');}finally{done();}};
-  await page.route(base+'/api/inspect?*',routeFn);const before=downloads.length;await locator('region-export').click();await within(intercepted,5000,'held scalar');await action();release();await within(finished,5000,'released scalar');await expect(locator('region-export')).toBeEnabled();await page.waitForTimeout(100);assert.equal(downloads.length,before);await page.unroute(base+'/api/inspect?*',routeFn);
- }
- checks.push('Inspected-cell selection, Show pin and Edit all cancel a real pending browser export with no download');
- const foreignRoute=async route=>{const upstream=await route.fetch(),data=await upstream.json();data.source_binding.model_identity='f'.repeat(64);injected.push('foreign scalar identity');await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(data)});};
- await page.route(base+'/api/inspect?*',foreignRoute);const beforeForeign=downloads.length;await locator('region-export').click();await expect(locator('region-status')).toContainText('binding mismatch');assert.equal(downloads.length,beforeForeign);await page.unroute(base+'/api/inspect?*',foreignRoute);await csvDownload('matrix-recovered');await expect(locator('region-status')).toContainText('Raw CSV exported');checks.push('Manual export recovery succeeds after a rejected foreign scalar binding');checks.push('A foreign per-scalar model binding produces a visible error and no file (client response fixture)');
- await locator('bookmark-save').click();const revisionALink=page.url();await stopServer();await startServer('fixture-B');await page.evaluate(()=>pollStatus());await settled();await expect(locator('revision')).toHaveText('fixture-A');await expect(locator('error')).toContainText('API contract: status source identity changed.');await expect(locator('note-list')).toContainText('Fixture note A');await locator('refresh-model').click();await settled();await expect(locator('revision')).toHaveText('fixture-B');await expect(locator('note-list')).not.toContainText('Fixture note A');await expect(locator('bookmark-status')).toContainText('different source identity or model revision');
- const changed=await (await context.request.get(base+'/api/model')).json();assert.equal(changed.source_identity,original.source_identity);assert.notEqual(changed.model_identity,original.model_identity);await locator('bookmark-reset').click();await settled();await locator('note-text').fill('Fixture note B — separate revision');await locator('note-save').click();
- await stopServer();await startServer('fixture-A');await locator('refresh-model').click();await settled();await expect(locator('note-list')).toContainText('Fixture note A');await expect(locator('note-list')).not.toContainText('Fixture note B');checks.push('Actual owned-server restart with identical files/geometry but a different revision invalidates polling context and rejects old bookmarks; both note scopes remain separate');
- await locator('note-list').getByRole('button',{name:'Edit',exact:true}).click();await locator('note-text').fill('Fixture note A edited');await locator('note-save').click();const nd=page.waitForEvent('download');await locator('note-export').click();const notesDownload=await nd;await notesDownload.saveAs(path.join(out,'notes.json'));const notes=JSON.parse(fs.readFileSync(path.join(out,'notes.json'),'utf8'));assert.equal(notes.scope.revision,'fixture-A');assert.equal(notes.notes[0].text,'Fixture note A edited');checks.push('Visible note edit and JSON export preserve exact revision scope');
- await page.locator('.workspace-heading').evaluate(e=>e.scrollIntoView({block:'start'}));await takeShot('desktop-view');await page.locator('.workspace-tools').evaluate(e=>e.scrollIntoView({block:'start'}));await takeShot('desktop-tools');
- const viewportBefore=await page.evaluate(()=>{const b=state.viewers.left.viewport.getBounds(true);return [b.x,b.y,b.width,b.height];});await takeShot('desktop-viewport-stable');const viewportAfter=await page.evaluate(()=>{const b=state.viewers.left.viewport.getBounds(true);return [b.x,b.y,b.width,b.height];});assert.deepEqual(viewportAfter,viewportBefore);
- await page.setViewportSize({width:390,height:844});await page.locator('.workspace-tools').evaluate(e=>e.scrollIntoView({block:'start'}));assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await takeShot('mobile-tools');await locator('note-controls').evaluate(e=>e.scrollIntoView({block:'start'}));await takeShot('mobile-notes');await locator('note-list').getByRole('button',{name:'Delete',exact:true}).click();await expect(locator('note-list')).toHaveText('');checks.push('1440px desktop and 390px mobile controls fit without horizontal overflow; viewport-sized capture preserves OSD bounds; visible note deletion works');
- assert.deepEqual(errors,[]);assert(requests.every(r=>r.url.startsWith(base+'/')));assert(requests.every(r=>r.method==='GET'));assert(!requests.some(r=>r.url.includes('/api/inference/start')));assert(!requests.some(r=>r.url.includes('Fixture%20note')));
- const evidence={status:'PASS',assetResponses,browser:browser.version(),base,checks,check_count:checks.length,page_errors:errors,external_page_requests:0,inference_start_requests:0,requests:requests.length,client_response_fixtures:injected,source_identity:original.source_identity,model_identities:{A:original.model_identity,B:changed.model_identity},screenshots:shots,screenshot_scope:'Viewport-sized actual desktop and mobile emulation; physical phone untested',revision_bookmark_hash_only:new URL(revisionALink).hash};
- fs.writeFileSync(path.join(out,'workspace-browser.json'),JSON.stringify(evidence,null,2)+'\n');console.log(JSON.stringify(evidence,null,2));
+async function stopServer() {
+  if (server) {
+    const s = server;
+    server = null;
+    if (s.child.exitCode === null && s.child.signalCode === null)
+      s.child.kill("SIGTERM");
+    await within(s.exited, 5000, "owned fixture server stop");
+  }
 }
-(async()=>{try{await run();}catch(e){fs.writeFileSync(path.join(out,'failure.json'),JSON.stringify({status:'FAIL',message:e.stack,checks,page_errors:errors,base,screenshots:shots,assetResponses},null,2)+'\n');throw e;}finally{if(browser)await browser.close();await stopServer();}})().catch(e=>{console.error(e);process.exitCode=1;});
+async function startServer(revision) {
+  const child = spawn(
+    bin,
+    [
+      "serve",
+      "--model",
+      fixture,
+      "--cache",
+      cache,
+      "--revision",
+      revision,
+      "--name",
+      "26-value fixture",
+      "--port",
+      String(port),
+    ],
+    { cwd: root, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  const log = fs.createWriteStream(
+    path.join(out, "server-" + revision + ".log"),
+  );
+  child.stdout.pipe(log, { end: false });
+  child.stderr.pipe(log, { end: false });
+  const exited = new Promise((resolve) =>
+    child.once("exit", (...args) => {
+      log.end();
+      resolve(args);
+    }),
+  );
+  server = { child, exited };
+  await within(
+    new Promise((resolve, reject) => {
+      let text = "";
+      child.on("error", reject);
+      child.stdout.on("data", (b) => {
+        text += b;
+        for (const line of text.split("\n")) {
+          try {
+            const v = JSON.parse(line);
+            if (v.listening === base) resolve();
+          } catch {}
+        }
+      });
+      child.once("exit", (code, signal) =>
+        reject(
+          Error(
+            `owned fixture server exited before readiness: ${code || signal}`,
+          ),
+        ),
+      );
+    }),
+    5000,
+    "fixture server readiness",
+  );
+}
+const locator = (id) => page.locator("#" + id);
+const settled = async () => {
+  await expect(locator("comparison")).toHaveAttribute("aria-busy", "false");
+  await expect(locator("left-resolution")).toContainText("cells");
+  await expect(locator("region-controls")).toBeEnabled();
+};
+const select = async (id) => {
+  await page.locator(`[data-tensor-id="${id}"]`).click();
+  await settled();
+};
+const bounds = async (b) => {
+  for (const [i, id] of [
+    "region-r0",
+    "region-c0",
+    "region-r1",
+    "region-c1",
+  ].entries())
+    await locator(id).fill(String(b[i]));
+};
+const takeShot = async (name) => {
+  const filename = path.join(out, name + ".jpg");
+  await page.screenshot({
+    path: filename,
+    type: "jpeg",
+    quality: 82,
+    fullPage: false,
+  });
+  shots.push({
+    path: filename,
+    sha256: crypto
+      .createHash("sha256")
+      .update(fs.readFileSync(filename))
+      .digest("hex"),
+    viewport: page.viewportSize(),
+  });
+};
+async function csvDownload(name) {
+  const d = page.waitForEvent("download");
+  await locator("region-export").click();
+  const dl = await d;
+  const target = path.join(out, name + ".csv");
+  await dl.saveAs(target);
+  const text = fs.readFileSync(target, "utf8");
+  assert(Buffer.byteLength(text) <= 262144);
+  assert(text.includes("bf16_hex_le"));
+  return text;
+}
+async function run() {
+  port = await new Promise((resolve, reject) => {
+    const s = net.createServer();
+    s.on("error", reject);
+    s.listen(0, "127.0.0.1", () => {
+      const value = s.address().port;
+      s.close(() => resolve(value));
+    });
+  });
+  assert.notEqual(port, 8775);
+  base = "http://127.0.0.1:" + port;
+  await command(
+    [
+      "calibrate",
+      "--model",
+      fixture,
+      "--cache",
+      cache,
+      "--revision",
+      "fixture-A",
+    ],
+    "fixture-calibration",
+  );
+  await startServer("fixture-A");
+  browser = await chromium.launch({
+    headless: true,
+    chromiumSandbox: true,
+    executablePath: process.env.ATLAS_CHROMIUM,
+    args: ["--renderer-process-limit=1", "--disable-gpu"],
+  });
+  context = await browser.newContext({
+    viewport: { width: 1440, height: 1000 },
+    acceptDownloads: true,
+  });
+  await context.route("**/*", (route) =>
+    route
+      .request()
+      .url()
+      .startsWith(base + "/")
+      ? route.continue()
+      : route.abort(),
+  );
+  page = await context.newPage();
+  page.setDefaultTimeout(6000);
+  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("request", (r) =>
+    requests.push({ url: r.url(), method: r.method() }),
+  );
+  page.on("download", (d) => downloads.push(d.suggestedFilename()));
+  page.on("response", (r) => {
+    const path = new URL(r.url()).pathname;
+    if (/\.(js|css)$/.test(path) && assetResponses.length < 64)
+      assetResponses.push({ path, status: r.status() });
+  });
+  await page.goto(base);
+  await settled();
+  await expect(locator("inference-panel")).toBeHidden();
+  await expect(locator("mode-status")).toContainText("inference unavailable");
+  await page.locator(".workspace-tools > summary").click();
+  const original = await (
+      await context.request.get(base + "/api/model")
+    ).json(),
+    matrix = original.catalog.find((t) => t.name === "matrix"),
+    vector = original.catalog.find((t) => t.name === "vector");
+  const scalar = await (
+    await context.request.get(
+      base + `/api/inspect?tensor=${matrix.id}&row=0&col=0`,
+    )
+  ).json();
+  assert.equal(scalar.source_binding.model_identity, original.model_identity);
+  assert.equal(
+    original.model_identity,
+    crypto
+      .createHash("sha256")
+      .update(
+        JSON.stringify([
+          "weight-atlas-model-v1",
+          original.source_identity,
+          "fixture-A",
+        ]),
+      )
+      .digest("hex"),
+  );
+  assert(!JSON.stringify(scalar.source_binding).includes(fixture));
+  checks.push(
+    "Real fixture model/scalar identity matches the specified revision digest; unavailable inference stays unavailable without generation",
+  );
+  await select(matrix.id);
+  await bounds([0, 0, 1, 1]);
+  await locator("note-text").fill("Fixture note A — local browser only");
+  await locator("note-save").click();
+  await expect(locator("note-list")).toContainText("Fixture note A");
+  await page.reload();
+  await settled();
+  await page.locator(".workspace-tools > summary").click();
+  await expect(locator("note-list")).toContainText("Fixture note A");
+  checks.push(
+    "Browser localStorage note creation and harmless reload persist in the exact source/revision/tensor scope",
+  );
+  await bounds([0, 0, 1, 1]);
+  const csv = await csvDownload("matrix-region");
+  assert(csv.includes('"0","0","[0,0]","-1"'));
+  checks.push(
+    "Actual bounded matrix CSV download contains native coordinates, exact decimals, original bytes and revision metadata",
+  );
+  await locator("left-rule").selectOption("tensor_linear");
+  await settled();
+  await locator("right-rule").selectOption("global_asinh");
+  await settled();
+  await locator("region-focus").click();
+  const savedBounds = await page.evaluate(() => {
+    const b = state.viewers.left.viewport.getBounds(true);
+    return [b.x, b.y, b.width, b.height];
+  });
+  await locator("bookmark-save").click();
+  const saved = page.url();
+  assert(saved.includes("#wa=2"));
+  assert(!saved.includes("Fixture%20note"));
+  assert(!saved.includes("fixture-A"));
+  const historyBefore = await page.evaluate(() => history.length);
+  await locator("bookmark-save").click();
+  assert.equal(await page.evaluate(() => history.length), historyBefore);
+  await locator("bookmark-reset").click();
+  await settled();
+  await page.goBack();
+  await settled();
+  await expect(locator("tensor-name")).toHaveText("matrix");
+  await expect(locator("region-r1")).toHaveValue("1");
+  await expect(locator("left-rule")).toHaveValue("tensor_linear");
+  await expect(locator("right-rule")).toHaveValue("global_asinh");
+  const restoredBounds = await page.evaluate(() => {
+    const b = state.viewers.left.viewport.getBounds(true);
+    return [b.x, b.y, b.width, b.height];
+  });
+  assert(restoredBounds.every((n, i) => Math.abs(n - savedBounds[i]) < 1e-6));
+  await page.goForward();
+  await settled();
+  await select(vector.id);
+  await bounds([0, 1, 0, 1]);
+  await locator("bookmark-save").click();
+  const vectorURL = page.url();
+  assert.notEqual(vectorURL, saved);
+  const vectorCSV = await csvDownload("vector-signed-zero");
+  assert(vectorCSV.includes('"0","1","[1]","-0.0","0080"'));
+  await locator("bookmark-reset").click();
+  await settled();
+  assert.equal(new URL(page.url()).hash, "");
+  await expect(locator("tensor-name")).toHaveText("matrix");
+  checks.push(
+    "Actual browser bookmark history/reset restores native matrix/vector selection, zoom and both color rules; vector export retains negative zero",
+  );
+  const numeric = await page.evaluate(() => {
+    const b = AtlasTools.parseBookmark(
+      AtlasTools.bookmark(
+        { ...settings(), region: [0, 0, 0, 0], viewport: [1e-8, -1e-8, 2, 2] },
+        state.model,
+      ),
+    );
+    return b?.viewport;
+  });
+  assert.deepEqual(numeric, [1e-8, -1e-8, 2, 2]);
+  checks.push(
+    "Browser parser roundtrips tiny signed pan coordinates without exponent notation",
+  );
+  let retryCount = 0;
+  const retryRoute = async (route) => {
+    retryCount++;
+    if (retryCount <= 2) {
+      injected.push("coded-503 model read");
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          code: "backend_unavailable",
+          error: "Synthetic unavailable response",
+        }),
+      });
+    } else await route.continue();
+  };
+  await page.route(base + "/api/model", retryRoute);
+  await locator("refresh-model").click();
+  await expect(locator("read-retry")).toContainText("Retry");
+  await settled();
+  assert.equal(retryCount, 3);
+  await expect(locator("read-retry")).toHaveText("");
+  await page.unroute(base + "/api/model", retryRoute);
+  checks.push(
+    "Real browser read recovery shows bounded retry state and completes on exactly the third attempt (client response fixture)",
+  );
+  let parallelCount = 0;
+  const parallelRoute = async (route) => {
+    if (++parallelCount === 1)
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          code: "backend_unavailable",
+          error: "Synthetic first request failure",
+        }),
+      });
+    else await route.continue();
+  };
+  await page.route(base + "/api/model", parallelRoute);
+  await page.evaluate(() => {
+    globalThis.__qolFirst = AtlasTools.readJSON("/api/model", {
+      wait: () => new Promise((r) => (globalThis.__qolRelease = r)),
+      onState: (e) =>
+        atlasWorkspace.retry(e, "/api/model", undefined, "parallel-browser"),
+    });
+  });
+  await expect(locator("read-retry")).toContainText("Retry 1/2");
+  await page.evaluate(() =>
+    AtlasTools.readJSON("/api/model", {
+      onState: (e) =>
+        atlasWorkspace.retry(e, "/api/model", undefined, "parallel-browser"),
+    }),
+  );
+  await expect(locator("read-retry")).toContainText("Retry 1/2");
+  await page.evaluate(() => {
+    __qolRelease();
+    return __qolFirst;
+  });
+  await expect(locator("read-retry")).toHaveText("");
+  await page.unroute(base + "/api/model", parallelRoute);
+  checks.push(
+    "Concurrent same-URL success cannot erase another browser request retry state",
+  );
+  await locator("row").fill("1");
+  await locator("col").fill("1");
+  await locator("inspect-submit").click();
+  await expect(page.locator(".raw-value")).toHaveText("-0.25");
+  for (const action of [
+    () => locator("region-use-cell").click(),
+    () =>
+      locator("note-list")
+        .getByRole("button", { name: "Show pin", exact: true })
+        .click(),
+    () =>
+      locator("note-list")
+        .getByRole("button", { name: "Edit", exact: true })
+        .click(),
+  ]) {
+    let release, arrive, done;
+    const intercepted = new Promise((r) => (arrive = r)),
+      finished = new Promise((r) => (done = r)),
+      gate = new Promise((r) => (release = r));
+    const routeFn = async (route) => {
+      try {
+        const upstream = await route.fetch();
+        arrive();
+        await gate;
+        await route.fulfill({ response: upstream });
+      } catch (e) {
+        injected.push("cancelled held scalar response");
+      } finally {
+        done();
+      }
+    };
+    await page.route(base + "/api/inspect?*", routeFn);
+    const before = downloads.length;
+    await locator("region-export").click();
+    await within(intercepted, 5000, "held scalar");
+    await action();
+    release();
+    await within(finished, 5000, "released scalar");
+    await expect(locator("region-export")).toBeEnabled();
+    await page.waitForTimeout(100);
+    assert.equal(downloads.length, before);
+    await page.unroute(base + "/api/inspect?*", routeFn);
+  }
+  checks.push(
+    "Inspected-cell selection, Show pin and Edit all cancel a real pending browser export with no download",
+  );
+  const foreignRoute = async (route) => {
+    const upstream = await route.fetch(),
+      data = await upstream.json();
+    data.source_binding.model_identity = "f".repeat(64);
+    injected.push("foreign scalar identity");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(data),
+    });
+  };
+  await page.route(base + "/api/inspect?*", foreignRoute);
+  const beforeForeign = downloads.length;
+  await locator("region-export").click();
+  await expect(locator("region-status")).toContainText("binding mismatch");
+  assert.equal(downloads.length, beforeForeign);
+  await page.unroute(base + "/api/inspect?*", foreignRoute);
+  await csvDownload("matrix-recovered");
+  await expect(locator("region-status")).toContainText("Raw CSV exported");
+  checks.push(
+    "Manual export recovery succeeds after a rejected foreign scalar binding",
+  );
+  checks.push(
+    "A foreign per-scalar model binding produces a visible error and no file (client response fixture)",
+  );
+  await locator("bookmark-save").click();
+  const revisionALink = page.url();
+  await stopServer();
+  await startServer("fixture-B");
+  await page.evaluate(() => pollStatus());
+  await settled();
+  await expect(locator("revision")).toHaveText("fixture-A");
+  await expect(locator("error")).toContainText(
+    "API contract: status source identity changed.",
+  );
+  await expect(locator("note-list")).toContainText("Fixture note A");
+  await locator("refresh-model").click();
+  await settled();
+  await expect(locator("revision")).toHaveText("fixture-B");
+  await expect(locator("note-list")).not.toContainText("Fixture note A");
+  await expect(locator("bookmark-status")).toContainText(
+    "different source identity or model revision",
+  );
+  const changed = await (await context.request.get(base + "/api/model")).json();
+  assert.equal(changed.source_identity, original.source_identity);
+  assert.notEqual(changed.model_identity, original.model_identity);
+  await locator("bookmark-reset").click();
+  await settled();
+  await locator("note-text").fill("Fixture note B — separate revision");
+  await locator("note-save").click();
+  await stopServer();
+  await startServer("fixture-A");
+  await locator("refresh-model").click();
+  await settled();
+  await expect(locator("note-list")).toContainText("Fixture note A");
+  await expect(locator("note-list")).not.toContainText("Fixture note B");
+  checks.push(
+    "Actual owned-server restart with identical files/geometry but a different revision invalidates polling context and rejects old bookmarks; both note scopes remain separate",
+  );
+  await locator("note-list")
+    .getByRole("button", { name: "Edit", exact: true })
+    .click();
+  await locator("note-text").fill("Fixture note A edited");
+  await locator("note-save").click();
+  const nd = page.waitForEvent("download");
+  await locator("note-export").click();
+  const notesDownload = await nd;
+  await notesDownload.saveAs(path.join(out, "notes.json"));
+  const notes = JSON.parse(
+    fs.readFileSync(path.join(out, "notes.json"), "utf8"),
+  );
+  assert.equal(notes.scope.revision, "fixture-A");
+  assert.equal(notes.notes[0].text, "Fixture note A edited");
+  checks.push(
+    "Visible note edit and JSON export preserve exact revision scope",
+  );
+  await page
+    .locator(".workspace-heading")
+    .evaluate((e) => e.scrollIntoView({ block: "start" }));
+  await takeShot("desktop-view");
+  await page
+    .locator(".workspace-tools")
+    .evaluate((e) => e.scrollIntoView({ block: "start" }));
+  await takeShot("desktop-tools");
+  const viewportBefore = await page.evaluate(() => {
+    const b = state.viewers.left.viewport.getBounds(true);
+    return [b.x, b.y, b.width, b.height];
+  });
+  await takeShot("desktop-viewport-stable");
+  const viewportAfter = await page.evaluate(() => {
+    const b = state.viewers.left.viewport.getBounds(true);
+    return [b.x, b.y, b.width, b.height];
+  });
+  assert.deepEqual(viewportAfter, viewportBefore);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page
+    .locator(".workspace-tools")
+    .evaluate((e) => e.scrollIntoView({ block: "start" }));
+  assert(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  );
+  await takeShot("mobile-tools");
+  await locator("note-controls").evaluate((e) =>
+    e.scrollIntoView({ block: "start" }),
+  );
+  await takeShot("mobile-notes");
+  await locator("note-list")
+    .getByRole("button", { name: "Delete", exact: true })
+    .click();
+  await expect(locator("note-list")).toHaveText("");
+  checks.push(
+    "1440px desktop and 390px mobile controls fit without horizontal overflow; viewport-sized capture preserves OSD bounds; visible note deletion works",
+  );
+  assert.deepEqual(errors, []);
+  assert(requests.every((r) => r.url.startsWith(base + "/")));
+  assert(requests.every((r) => r.method === "GET"));
+  assert(!requests.some((r) => r.url.includes("/api/inference/start")));
+  assert(!requests.some((r) => r.url.includes("Fixture%20note")));
+  const evidence = {
+    status: "PASS",
+    assetResponses,
+    browser: browser.version(),
+    base,
+    checks,
+    check_count: checks.length,
+    page_errors: errors,
+    external_page_requests: 0,
+    inference_start_requests: 0,
+    requests: requests.length,
+    client_response_fixtures: injected,
+    source_identity: original.source_identity,
+    model_identities: { A: original.model_identity, B: changed.model_identity },
+    screenshots: shots,
+    screenshot_scope:
+      "Viewport-sized actual desktop and mobile emulation; physical phone untested",
+    revision_bookmark_hash_only: new URL(revisionALink).hash,
+  };
+  fs.writeFileSync(
+    path.join(out, "workspace-browser.json"),
+    JSON.stringify(evidence, null, 2) + "\n",
+  );
+  console.log(JSON.stringify(evidence, null, 2));
+}
+(async () => {
+  try {
+    await run();
+  } catch (e) {
+    fs.writeFileSync(
+      path.join(out, "failure.json"),
+      JSON.stringify(
+        {
+          status: "FAIL",
+          message: e.stack,
+          checks,
+          page_errors: errors,
+          base,
+          screenshots: shots,
+          assetResponses,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    throw e;
+  } finally {
+    if (browser) await browser.close();
+    await stopServer();
+  }
+})().catch((e) => {
+  console.error(e);
+  process.exitCode = 1;
+});

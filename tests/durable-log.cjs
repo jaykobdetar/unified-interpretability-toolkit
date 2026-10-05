@@ -1,24 +1,197 @@
-'use strict';
-const assert=require('node:assert/strict'),{AtlasLogStorage,AtlasFileJournal}=require('../web/inference.js');
-class Storage{constructor(){this.data=new Map();}get length(){return this.data.size;}key(i){return [...this.data.keys()][i];}getItem(k){return this.data.get(k)??null;}setItem(k,v){this.data.set(k,v);}removeItem(k){this.data.delete(k);}}
-(async()=>{
- const immediate={request:async(name,fn)=>{assert.equal(name,'weight-atlas-experiment-storage-v1');return fn();}},change=(s,fn)=>s.mutate(immediate,fn);
- const disk=new Storage(),tab=new Storage(),a=new AtlasLogStorage(disk,tab,()=> 'tab-a');assert.equal(disk.length,0);await change(a,s=>s.save('first'));const originalKey=a.key();
- const reloaded=new AtlasLogStorage(disk,tab,()=> 'must-not-use');assert.equal(reloaded.key(),originalKey);assert.throws(()=>reloaded.save('empty'),/restore or delete/);assert.equal(reloaded.read(),'first');reloaded.adopt('first');await change(reloaded,s=>s.save('after explicit restore'));assert.throws(()=>a.save('stale'),/another tab/);assert.equal(reloaded.read(),'after explicit restore');
- const b=new AtlasLogStorage(disk,new Storage(),()=> 'tab-b');await change(b,s=>s.save('private-b'));assert.equal(a.list().length,2);assert.equal(a.readKey(b.key()),'private-b');assert.equal(a.key(),originalKey);await change(b,s=>s.clear());assert.equal(disk.length,1);assert.equal(a.readKey('weight-atlas.experiments.v1:tab-b'),null);assert.throws(()=>a.readKey('session:capability'));
- const failed=new AtlasLogStorage({setItem(){throw new Error('quota');},getItem(){return null;},length:0},new Storage(),()=> 'quota');assert.throws(()=>failed.save('result'),/quota/);assert.throws(()=>a.save('x'.repeat(1048577)),/1 MiB/);
- const slots=new Storage();for(let i=0;i<8;i++)slots.setItem('weight-atlas.experiments.v1:tab-'+i,'saved');assert.throws(()=>new AtlasLogStorage(slots,new Storage(),()=> 'ninth').save('new'),/slots/);assert.equal(slots.length,8);
- // Controlled FIFO Web Locks double: every mutation waits its turn, including
- // owner persistence and own/foreign deletion. No live tab or execution surface.
- class Locks{constructor(){this.queue=[];this.active=false;}request(name,fn){assert.equal(name,'weight-atlas-experiment-storage-v1');return new Promise((resolve,reject)=>{this.queue.push({fn,resolve,reject});});}async run(){assert(!this.active);const task=this.queue.shift();assert(task);this.active=true;try{task.resolve(await task.fn());}catch(e){task.reject(e);}finally{this.active=false;}}}
- const shared=new Storage(),owners=new Storage();owners.setItem('weight-atlas.experiment-owner.v1','shared');const writer=new AtlasLogStorage(shared,owners,()=> 'unused'),deleter=new AtlasLogStorage(shared,owners,()=> 'unused'),locks=new Locks();
- await change(writer,s=>s.save('private old'));deleter.adopt('private old');
- const write=writer.mutate(locks,s=>s.save('private new')),deletion=deleter.mutate(locks,s=>s.clear());assert.equal(shared.getItem(writer.key()),'private old');assert.equal(locks.queue.length,2);await locks.run();await write;assert.equal(shared.getItem(writer.key()),'private new');await locks.run();await deletion;assert.equal(shared.getItem(writer.key()),null);
- const stale=writer.mutate(locks,s=>s.save('private resurrected'));const refused=assert.rejects(stale,/another tab/);await locks.run();await refused;assert.equal(shared.getItem(writer.key()),null);
- // Delete first also refuses a queued stale writer, while independent slots survive.
- await change(deleter,s=>s.save('private restored'));writer.adopt('private restored');shared.setItem('weight-atlas.experiments.v1:foreign','keep');const firstDelete=deleter.mutate(locks,s=>s.clear()),lateWrite=writer.mutate(locks,s=>s.save('stale'));const lateRefusal=assert.rejects(lateWrite,/another tab/);await locks.run();await firstDelete;await locks.run();await lateRefusal;assert.equal(shared.getItem(writer.key()),null);assert.equal(shared.getItem('weight-atlas.experiments.v1:foreign'),'keep');
- const noOwner=new Storage(),fresh=new AtlasLogStorage(shared,noOwner,()=> 'fresh');fresh.key();fresh.list();assert.equal(noOwner.length,0);await assert.rejects(fresh.mutate(null,s=>s.clear()),/Web Locks/);assert.equal(noOwner.length,0);const ownerWrite=fresh.mutate(locks,s=>s.clear());assert.equal(noOwner.length,0);await locks.run();await ownerWrite;assert.equal(noOwner.length,1);
- let writes=[],closed=0,aborted=0,release;const journal=new AtlasFileJournal({createWritable:async()=>({write:async text=>{writes.push(text);await new Promise(r=>release=r);},close:async()=>closed++,abort:async()=>aborted++})});const first=journal.save('bounded record');await Promise.resolve();await assert.rejects(journal.save('overlap'),/pending/);release();await first;assert.deepEqual(writes,['bounded record']);assert.equal(closed,1);assert.equal(journal.writing,false);
- const broken=new AtlasFileJournal({createWritable:async()=>({write:async()=>{throw new Error('permission revoked');},close:async()=>closed++,abort:async()=>aborted++})});await assert.rejects(broken.save('result'),/permission/);assert.equal(aborted,1);assert.equal(broken.writing,false);await assert.rejects(broken.save('x'.repeat(1048577)),/1 MiB/);
- console.log('PASS: consent-driven bounded browser storage helpers, explicit reload adoption, stale cross-tab refusal, origin archive discovery without ownership changes, quota/slot caps; serialized selected file journal, write rejection/abort recovery. Safe doubles only.');
-})().catch(e=>{console.error(e);process.exitCode=1;});
+"use strict";
+const assert = require("node:assert/strict"),
+  { AtlasLogStorage, AtlasFileJournal } = require("../web/inference.js");
+class Storage {
+  constructor() {
+    this.data = new Map();
+  }
+  get length() {
+    return this.data.size;
+  }
+  key(i) {
+    return [...this.data.keys()][i];
+  }
+  getItem(k) {
+    return this.data.get(k) ?? null;
+  }
+  setItem(k, v) {
+    this.data.set(k, v);
+  }
+  removeItem(k) {
+    this.data.delete(k);
+  }
+}
+(async () => {
+  const immediate = {
+      request: async (name, fn) => {
+        assert.equal(name, "weight-atlas-experiment-storage-v1");
+        return fn();
+      },
+    },
+    change = (s, fn) => s.mutate(immediate, fn);
+  const disk = new Storage(),
+    tab = new Storage(),
+    a = new AtlasLogStorage(disk, tab, () => "tab-a");
+  assert.equal(disk.length, 0);
+  await change(a, (s) => s.save("first"));
+  const originalKey = a.key();
+  const reloaded = new AtlasLogStorage(disk, tab, () => "must-not-use");
+  assert.equal(reloaded.key(), originalKey);
+  assert.throws(() => reloaded.save("empty"), /restore or delete/);
+  assert.equal(reloaded.read(), "first");
+  reloaded.adopt("first");
+  await change(reloaded, (s) => s.save("after explicit restore"));
+  assert.throws(() => a.save("stale"), /another tab/);
+  assert.equal(reloaded.read(), "after explicit restore");
+  const b = new AtlasLogStorage(disk, new Storage(), () => "tab-b");
+  await change(b, (s) => s.save("private-b"));
+  assert.equal(a.list().length, 2);
+  assert.equal(a.readKey(b.key()), "private-b");
+  assert.equal(a.key(), originalKey);
+  await change(b, (s) => s.clear());
+  assert.equal(disk.length, 1);
+  assert.equal(a.readKey("weight-atlas.experiments.v1:tab-b"), null);
+  assert.throws(() => a.readKey("session:capability"));
+  const failed = new AtlasLogStorage(
+    {
+      setItem() {
+        throw new Error("quota");
+      },
+      getItem() {
+        return null;
+      },
+      length: 0,
+    },
+    new Storage(),
+    () => "quota",
+  );
+  assert.throws(() => failed.save("result"), /quota/);
+  assert.throws(() => a.save("x".repeat(1048577)), /1 MiB/);
+  const slots = new Storage();
+  for (let i = 0; i < 8; i++)
+    slots.setItem("weight-atlas.experiments.v1:tab-" + i, "saved");
+  assert.throws(
+    () => new AtlasLogStorage(slots, new Storage(), () => "ninth").save("new"),
+    /slots/,
+  );
+  assert.equal(slots.length, 8);
+  // Controlled FIFO Web Locks double: every mutation waits its turn, including
+  // owner persistence and own/foreign deletion. No live tab or execution surface.
+  class Locks {
+    constructor() {
+      this.queue = [];
+      this.active = false;
+    }
+    request(name, fn) {
+      assert.equal(name, "weight-atlas-experiment-storage-v1");
+      return new Promise((resolve, reject) => {
+        this.queue.push({ fn, resolve, reject });
+      });
+    }
+    async run() {
+      assert(!this.active);
+      const task = this.queue.shift();
+      assert(task);
+      this.active = true;
+      try {
+        task.resolve(await task.fn());
+      } catch (e) {
+        task.reject(e);
+      } finally {
+        this.active = false;
+      }
+    }
+  }
+  const shared = new Storage(),
+    owners = new Storage();
+  owners.setItem("weight-atlas.experiment-owner.v1", "shared");
+  const writer = new AtlasLogStorage(shared, owners, () => "unused"),
+    deleter = new AtlasLogStorage(shared, owners, () => "unused"),
+    locks = new Locks();
+  await change(writer, (s) => s.save("private old"));
+  deleter.adopt("private old");
+  const write = writer.mutate(locks, (s) => s.save("private new")),
+    deletion = deleter.mutate(locks, (s) => s.clear());
+  assert.equal(shared.getItem(writer.key()), "private old");
+  assert.equal(locks.queue.length, 2);
+  await locks.run();
+  await write;
+  assert.equal(shared.getItem(writer.key()), "private new");
+  await locks.run();
+  await deletion;
+  assert.equal(shared.getItem(writer.key()), null);
+  const stale = writer.mutate(locks, (s) => s.save("private resurrected"));
+  const refused = assert.rejects(stale, /another tab/);
+  await locks.run();
+  await refused;
+  assert.equal(shared.getItem(writer.key()), null);
+  // Delete first also refuses a queued stale writer, while independent slots survive.
+  await change(deleter, (s) => s.save("private restored"));
+  writer.adopt("private restored");
+  shared.setItem("weight-atlas.experiments.v1:foreign", "keep");
+  const firstDelete = deleter.mutate(locks, (s) => s.clear()),
+    lateWrite = writer.mutate(locks, (s) => s.save("stale"));
+  const lateRefusal = assert.rejects(lateWrite, /another tab/);
+  await locks.run();
+  await firstDelete;
+  await locks.run();
+  await lateRefusal;
+  assert.equal(shared.getItem(writer.key()), null);
+  assert.equal(shared.getItem("weight-atlas.experiments.v1:foreign"), "keep");
+  const noOwner = new Storage(),
+    fresh = new AtlasLogStorage(shared, noOwner, () => "fresh");
+  fresh.key();
+  fresh.list();
+  assert.equal(noOwner.length, 0);
+  await assert.rejects(
+    fresh.mutate(null, (s) => s.clear()),
+    /Web Locks/,
+  );
+  assert.equal(noOwner.length, 0);
+  const ownerWrite = fresh.mutate(locks, (s) => s.clear());
+  assert.equal(noOwner.length, 0);
+  await locks.run();
+  await ownerWrite;
+  assert.equal(noOwner.length, 1);
+  let writes = [],
+    closed = 0,
+    aborted = 0,
+    release;
+  const journal = new AtlasFileJournal({
+    createWritable: async () => ({
+      write: async (text) => {
+        writes.push(text);
+        await new Promise((r) => (release = r));
+      },
+      close: async () => closed++,
+      abort: async () => aborted++,
+    }),
+  });
+  const first = journal.save("bounded record");
+  await Promise.resolve();
+  await assert.rejects(journal.save("overlap"), /pending/);
+  release();
+  await first;
+  assert.deepEqual(writes, ["bounded record"]);
+  assert.equal(closed, 1);
+  assert.equal(journal.writing, false);
+  const broken = new AtlasFileJournal({
+    createWritable: async () => ({
+      write: async () => {
+        throw new Error("permission revoked");
+      },
+      close: async () => closed++,
+      abort: async () => aborted++,
+    }),
+  });
+  await assert.rejects(broken.save("result"), /permission/);
+  assert.equal(aborted, 1);
+  assert.equal(broken.writing, false);
+  await assert.rejects(broken.save("x".repeat(1048577)), /1 MiB/);
+  console.log(
+    "PASS: consent-driven bounded browser storage helpers, explicit reload adoption, stale cross-tab refusal, origin archive discovery without ownership changes, quota/slot caps; serialized selected file journal, write rejection/abort recovery. Safe doubles only.",
+  );
+})().catch((e) => {
+  console.error(e);
+  process.exitCode = 1;
+});
