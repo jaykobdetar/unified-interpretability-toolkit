@@ -149,19 +149,21 @@ test("cancel during pending Restart with late success cancels exact replacement"
   assert.equal(client.snapshot().cleanup_pending, false);
   await client.start(binding, 0, 12);
 });
-(async () => {
-  let failed = 0;
-  for (const { name, fn } of cases) {
-    try {
-      await fn();
-      console.log("PASS " + name);
-    } catch (e) {
-      failed++;
-      console.error("FAIL " + name + ": " + e.message);
+require("./support/async-completion.cjs").requireCompletion(
+  (async () => {
+    let failed = 0;
+    for (const { name, fn } of cases) {
+      try {
+        await fn();
+        console.log("PASS " + name);
+      } catch (e) {
+        failed++;
+        console.error("FAIL " + name + ": " + e.message);
+      }
     }
-  }
-  console.log(
-    `${cases.length - failed}/${cases.length} restart uncertainty cases passed`,
-  );
-  process.exitCode = failed ? 1 : 0;
-})();
+    console.log(
+      `${cases.length - failed}/${cases.length} restart uncertainty cases passed`,
+    );
+    process.exitCode = failed ? 1 : 0;
+  })(),
+);

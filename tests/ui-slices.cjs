@@ -104,66 +104,71 @@ async function openSlice(p) {
   for (const v of viewers.slice(before)) v.emit("open");
   await p;
 }
-(async () => {
-  run("state.model=fixture;state.tensor=fixture.catalog[0]");
-  await run("prepareTensor()");
-  assert.equal(pending.length, 0);
-  assert.match(get("status").textContent, /Choose every leading index/);
-  assert(get("inspect-submit").disabled);
-  assert.equal(get("slice-picker").hidden, false);
-  run("state.tensor=AtlasTools.withSlice(state.tensor,[1])");
-  await openSlice(run("prepareTensor()"));
-  assert.match(viewers.at(-1).source.getTileUrl(2, 0, 0), /slice=1/);
-  run(
-    "$('overview-image').hidden=false;$('overview-viewport').style={};updateOverview()",
-  );
-  assert.match(get("tensor-overview").attrs["aria-label"], /Selected 2D slice/);
-  assert(get("tensor-overview").attrs["aria-label"].includes("[1]"));
-  const pin = run("inspectAt(2,3)"),
-    r = take("/api/inspect");
-  assert.match(r.url, /slice=1/);
-  const raw = {
-    api_version: 1,
-    source_binding: copy(
-      run("AtlasTools.sourceBinding(state.model,state.tensor)"),
-    ),
-    tensor: 21,
-    row: 2,
-    col: 3,
-    dtype: "BF16",
-    element_bytes: 2,
-    raw_hex_le: "803f",
-    raw_exact: "1",
-    native_indices: [1, 2, 3],
-    shard: "fixture.safetensors",
-    byte_offset: 54,
-    transformed: { left: 1 / 12, right: 0.2 },
-  };
-  r.resolve(raw);
-  await pin;
-  assert.equal(context.window.atlasInferenceSelection, null);
-  assert.match(get("inspection").children[2].textContent, /1, 2, 3/);
-  const stale = run("inspectAt(0,0)"),
-    old = take("/api/inspect");
-  run("state.tensor=AtlasTools.withSlice(fixture.catalog[0],[0])");
-  await openSlice(run("prepareTensor()"));
-  assert(old.options.signal.aborted);
-  old.resolve({ ...raw, row: 0, col: 0, native_indices: [1, 0, 0] });
-  await stale;
-  assert.equal(run("state.inspectionData"), null);
-  assert.equal(context.window.atlasInferenceSelection, null);
-  assert.match(viewers.at(-1).source.getTileUrl(2, 0, 0), /slice=0/);
-  run(
-    'state.tensor={...fixture.catalog[0],available:false,unavailable_reason:"Quantization scale semantics unavailable"}',
-  );
-  await run("prepareTensor()");
-  assert.equal(pending.length, 0);
-  assert.match(get("status").textContent, /Quantization/);
-  assert(get("inspect-submit").disabled);
-  console.log(
-    "PASS: explicit slice picker gate; slice-bound view/tile/inspect; full native indices; no higher-rank inference handoff; stale slice reply rejection; unavailable tensor leaves no fabricated view. Pure DOM doubles only.",
-  );
-})().catch((e) => {
-  console.error(e);
-  process.exitCode = 1;
-});
+require("./support/async-completion.cjs").requireCompletion(
+  (async () => {
+    run("state.model=fixture;state.tensor=fixture.catalog[0]");
+    await run("prepareTensor()");
+    assert.equal(pending.length, 0);
+    assert.match(get("status").textContent, /Choose every leading index/);
+    assert(get("inspect-submit").disabled);
+    assert.equal(get("slice-picker").hidden, false);
+    run("state.tensor=AtlasTools.withSlice(state.tensor,[1])");
+    await openSlice(run("prepareTensor()"));
+    assert.match(viewers.at(-1).source.getTileUrl(2, 0, 0), /slice=1/);
+    run(
+      "$('overview-image').hidden=false;$('overview-viewport').style={};updateOverview()",
+    );
+    assert.match(
+      get("tensor-overview").attrs["aria-label"],
+      /Selected 2D slice/,
+    );
+    assert(get("tensor-overview").attrs["aria-label"].includes("[1]"));
+    const pin = run("inspectAt(2,3)"),
+      r = take("/api/inspect");
+    assert.match(r.url, /slice=1/);
+    const raw = {
+      api_version: 1,
+      source_binding: copy(
+        run("AtlasTools.sourceBinding(state.model,state.tensor)"),
+      ),
+      tensor: 21,
+      row: 2,
+      col: 3,
+      dtype: "BF16",
+      element_bytes: 2,
+      raw_hex_le: "803f",
+      raw_exact: "1",
+      native_indices: [1, 2, 3],
+      shard: "fixture.safetensors",
+      byte_offset: 54,
+      transformed: { left: 1 / 12, right: 0.2 },
+    };
+    r.resolve(raw);
+    await pin;
+    assert.equal(context.window.atlasInferenceSelection, null);
+    assert.match(get("inspection").children[2].textContent, /1, 2, 3/);
+    const stale = run("inspectAt(0,0)"),
+      old = take("/api/inspect");
+    run("state.tensor=AtlasTools.withSlice(fixture.catalog[0],[0])");
+    await openSlice(run("prepareTensor()"));
+    assert(old.options.signal.aborted);
+    old.resolve({ ...raw, row: 0, col: 0, native_indices: [1, 0, 0] });
+    await stale;
+    assert.equal(run("state.inspectionData"), null);
+    assert.equal(context.window.atlasInferenceSelection, null);
+    assert.match(viewers.at(-1).source.getTileUrl(2, 0, 0), /slice=0/);
+    run(
+      'state.tensor={...fixture.catalog[0],available:false,unavailable_reason:"Quantization scale semantics unavailable"}',
+    );
+    await run("prepareTensor()");
+    assert.equal(pending.length, 0);
+    assert.match(get("status").textContent, /Quantization/);
+    assert(get("inspect-submit").disabled);
+    console.log(
+      "PASS: explicit slice picker gate; slice-bound view/tile/inspect; full native indices; no higher-rank inference handoff; stale slice reply rejection; unavailable tensor leaves no fabricated view. Pure DOM doubles only.",
+    );
+  })().catch((e) => {
+    console.error(e);
+    process.exitCode = 1;
+  }),
+);

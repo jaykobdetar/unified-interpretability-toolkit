@@ -108,153 +108,155 @@ function fixture() {
   ];
   return { get, click, scripts, requests, timers, context, load, take };
 }
-(async () => {
-  assert(
-    asset.length < 65536,
-    "separate trusted codec has a finite 64 KiB source cap",
-  );
-  const server = fs.readFileSync("src/server.rs", "utf8");
-  assert(server.includes('"/inference-import.js" => Some(('));
-  assert(server.includes('include_bytes!("../web/inference-import.js")'));
-  assert(server.includes("script-src 'self'"));
-  const files = [
-      "vendor/openseadragon.min.js",
-      "atlas-tools.js",
-      "app.js",
-      "workspace-tools.js",
-      "inference.js",
-    ],
-    bytes = files.reduce((n, f) => n + fs.statSync("web/" + f).size, 12);
-  assert(bytes < 600 * 1024);
-  assert(
-    !server
-      .slice(
-        server.indexOf("fn viewer_scripts()"),
-        server.indexOf("fn reply_viewer_bundle"),
-      )
-      .includes("inference-import"),
-  );
-  const f = fixture();
-  await tick();
-  const started = f.click("import-log");
-  await tick();
-  assert.equal(f.scripts.length, 1);
-  assert(f.get("infer-start").disabled);
-  assert(!f.get("infer-cancel-import").disabled);
-  assert(f.get("infer-log-status").textContent.includes("0 / 8"));
-  assert.equal(f.requests.length, 0);
-  f.scripts[0].onerror();
-  await started;
-  assert(f.get("infer-import-status").textContent.includes("unavailable"));
-  assert(f.get("infer-log-status").textContent.includes("0 / 8"));
-  assert(!f.get("infer-start").disabled);
-  assert.equal(f.requests.length, 0);
-  const badInit = f.click("import-log");
-  await tick();
-  f.scripts[1].onload();
-  await badInit;
-  assert(f.get("infer-import-status").textContent.includes("initialize"));
-  assert(f.get("infer-log-status").textContent.includes("0 / 8"));
-  const retry = f.click("import-log");
-  await tick();
-  f.load(f.scripts[2]);
-  await retry;
-  assert(f.get("infer-log-status").textContent.includes("1 / 8"));
-  assert.equal(f.requests.length, 0);
-  assert.equal(f.get("infer-run-inputs").textContent, "No accepted run.");
-  const c = fixture();
-  await tick();
-  const cancelled = c.click("import-log");
-  await tick();
-  c.click("cancel-import");
-  assert(!c.get("infer-start").disabled);
-  c.load(c.scripts[0]);
-  await cancelled;
-  assert(c.get("infer-log-status").textContent.includes("0 / 8"));
-  assert(c.get("infer-import-status").textContent.includes("cancelled"));
-  await c.click("import-log");
-  assert(c.get("infer-log-status").textContent.includes("1 / 8"));
-  assert.equal(c.scripts.length, 1);
-  assert.equal(c.requests.length, 0);
-  const slow = fixture();
-  await tick();
-  let resolveText;
-  slow.get("infer-import-file").files = [
-    { size: text.length, text: () => new Promise((r) => (resolveText = r)) },
-  ];
-  const reading = slow.click("import-log");
-  await tick();
-  slow.click("cancel-import");
-  resolveText(text);
-  await reading;
-  assert.equal(slow.scripts.length, 0);
-  assert(slow.get("infer-log-status").textContent.includes("0 / 8"));
-  const timeout = fixture();
-  await tick();
-  const timed = timeout.click("import-log");
-  await tick();
-  const timer = [...timeout.timers.values()].find((t) => t.ms === 15000);
-  assert(timer);
-  timer.fn();
-  await timed;
-  assert(
-    timeout.get("infer-import-status").textContent.includes("unavailable"),
-  );
-  timeout.load(timeout.scripts[0]);
-  assert(timeout.get("infer-log-status").textContent.includes("0 / 8"));
-  // A reset of the existing terminal worker view invalidates a pending import.
-  const reset = fixture();
-  await tick();
-  const submit = reset
-    .get("infer-form")
-    .listeners.submit({ preventDefault() {} });
-  reset.take("/start").resolve({
-    session: "synthetic-owner",
-    status: "loading",
-    worker_alive: true,
-    steps: [],
-    details: {},
-  });
-  await submit;
-  reset.take("/poll").resolve({
-    session: "synthetic-owner",
-    status: "complete",
-    worker_alive: false,
-    steps: [],
-    details: {},
-  });
-  await tick();
-  const delayed = reset.click("import-log");
-  await tick();
-  const clear = reset.click("reset");
-  reset.take("/reset").resolve({
-    session: null,
-    status: "idle",
-    worker_alive: false,
-    steps: [],
-    details: {},
-  });
-  await clear;
-  reset.load(reset.scripts[0]);
-  await delayed;
-  assert(reset.get("infer-log-status").textContent.includes("0 / 8"));
-  assert(reset.get("infer-import-status").textContent.includes("cancelled"));
-  assert.equal(reset.requests.length, 0);
-  console.log(
-    JSON.stringify(
-      {
-        status: "PASS",
-        startup_bytes: bytes,
-        startup_headroom: 600 * 1024 - bytes,
-        import_asset_bytes: Buffer.byteLength(asset),
-        scope:
-          "Fixed same-origin/CSP-compatible route; no startup load; delayed/error/missing initializer/explicit retry/timeout/cancel/reset stale import refusal; no imported-data execution, worker adoption or run input changes. UI and transport doubles only.",
-      },
-      null,
-      2,
-    ),
-  );
-})().catch((e) => {
-  console.error(e);
-  process.exitCode = 1;
-});
+require("./support/async-completion.cjs").requireCompletion(
+  (async () => {
+    assert(
+      asset.length < 65536,
+      "separate trusted codec has a finite 64 KiB source cap",
+    );
+    const server = fs.readFileSync("src/server.rs", "utf8");
+    assert(server.includes('"/inference-import.js" => Some(('));
+    assert(server.includes('include_bytes!("../web/inference-import.js")'));
+    assert(server.includes("script-src 'self'"));
+    const files = [
+        "vendor/openseadragon.min.js",
+        "atlas-tools.js",
+        "app.js",
+        "workspace-tools.js",
+        "inference.js",
+      ],
+      bytes = files.reduce((n, f) => n + fs.statSync("web/" + f).size, 12);
+    assert(bytes < 600 * 1024);
+    assert(
+      !server
+        .slice(
+          server.indexOf("fn viewer_scripts()"),
+          server.indexOf("fn reply_viewer_bundle"),
+        )
+        .includes("inference-import"),
+    );
+    const f = fixture();
+    await tick();
+    const started = f.click("import-log");
+    await tick();
+    assert.equal(f.scripts.length, 1);
+    assert(f.get("infer-start").disabled);
+    assert(!f.get("infer-cancel-import").disabled);
+    assert(f.get("infer-log-status").textContent.includes("0 / 8"));
+    assert.equal(f.requests.length, 0);
+    f.scripts[0].onerror();
+    await started;
+    assert(f.get("infer-import-status").textContent.includes("unavailable"));
+    assert(f.get("infer-log-status").textContent.includes("0 / 8"));
+    assert(!f.get("infer-start").disabled);
+    assert.equal(f.requests.length, 0);
+    const badInit = f.click("import-log");
+    await tick();
+    f.scripts[1].onload();
+    await badInit;
+    assert(f.get("infer-import-status").textContent.includes("initialize"));
+    assert(f.get("infer-log-status").textContent.includes("0 / 8"));
+    const retry = f.click("import-log");
+    await tick();
+    f.load(f.scripts[2]);
+    await retry;
+    assert(f.get("infer-log-status").textContent.includes("1 / 8"));
+    assert.equal(f.requests.length, 0);
+    assert.equal(f.get("infer-run-inputs").textContent, "No accepted run.");
+    const c = fixture();
+    await tick();
+    const cancelled = c.click("import-log");
+    await tick();
+    c.click("cancel-import");
+    assert(!c.get("infer-start").disabled);
+    c.load(c.scripts[0]);
+    await cancelled;
+    assert(c.get("infer-log-status").textContent.includes("0 / 8"));
+    assert(c.get("infer-import-status").textContent.includes("cancelled"));
+    await c.click("import-log");
+    assert(c.get("infer-log-status").textContent.includes("1 / 8"));
+    assert.equal(c.scripts.length, 1);
+    assert.equal(c.requests.length, 0);
+    const slow = fixture();
+    await tick();
+    let resolveText;
+    slow.get("infer-import-file").files = [
+      { size: text.length, text: () => new Promise((r) => (resolveText = r)) },
+    ];
+    const reading = slow.click("import-log");
+    await tick();
+    slow.click("cancel-import");
+    resolveText(text);
+    await reading;
+    assert.equal(slow.scripts.length, 0);
+    assert(slow.get("infer-log-status").textContent.includes("0 / 8"));
+    const timeout = fixture();
+    await tick();
+    const timed = timeout.click("import-log");
+    await tick();
+    const timer = [...timeout.timers.values()].find((t) => t.ms === 15000);
+    assert(timer);
+    timer.fn();
+    await timed;
+    assert(
+      timeout.get("infer-import-status").textContent.includes("unavailable"),
+    );
+    timeout.load(timeout.scripts[0]);
+    assert(timeout.get("infer-log-status").textContent.includes("0 / 8"));
+    // A reset of the existing terminal worker view invalidates a pending import.
+    const reset = fixture();
+    await tick();
+    const submit = reset
+      .get("infer-form")
+      .listeners.submit({ preventDefault() {} });
+    reset.take("/start").resolve({
+      session: "synthetic-owner",
+      status: "loading",
+      worker_alive: true,
+      steps: [],
+      details: {},
+    });
+    await submit;
+    reset.take("/poll").resolve({
+      session: "synthetic-owner",
+      status: "complete",
+      worker_alive: false,
+      steps: [],
+      details: {},
+    });
+    await tick();
+    const delayed = reset.click("import-log");
+    await tick();
+    const clear = reset.click("reset");
+    reset.take("/reset").resolve({
+      session: null,
+      status: "idle",
+      worker_alive: false,
+      steps: [],
+      details: {},
+    });
+    await clear;
+    reset.load(reset.scripts[0]);
+    await delayed;
+    assert(reset.get("infer-log-status").textContent.includes("0 / 8"));
+    assert(reset.get("infer-import-status").textContent.includes("cancelled"));
+    assert.equal(reset.requests.length, 0);
+    console.log(
+      JSON.stringify(
+        {
+          status: "PASS",
+          startup_bytes: bytes,
+          startup_headroom: 600 * 1024 - bytes,
+          import_asset_bytes: Buffer.byteLength(asset),
+          scope:
+            "Fixed same-origin/CSP-compatible route; no startup load; delayed/error/missing initializer/explicit retry/timeout/cancel/reset stale import refusal; no imported-data execution, worker adoption or run input changes. UI and transport doubles only.",
+        },
+        null,
+        2,
+      ),
+    );
+  })().catch((e) => {
+    console.error(e);
+    process.exitCode = 1;
+  }),
+);

@@ -184,131 +184,144 @@ function setup() {
 const tick = async () => {
   for (let i = 0; i < 15; i++) await Promise.resolve();
 };
-(async () => {
-  const old = setup();
-  old
-    .take("/api/inference")
-    .resolve({ architecture, model: "fixture", engine: "fixture" });
-  await tick();
-  assert(old.get("infer-observation").disabled);
-  const ui = setup();
-  ui.take("/api/inference").resolve({
-    architecture,
-    model: "fixture",
-    engine: "fixture",
-    observations: { kinds: ["attention", "logit_lens"] },
-  });
-  await tick();
-  assert(!ui.get("infer-observation").disabled);
-  ui.change("observation", "attention");
-  assert.equal(ui.get("infer-site").value, "attention");
-  assert(ui.get("infer-site").disabled);
-  assert(!ui.get("infer-head-index").disabled);
-  const start = ui.submit(),
-    req = ui.take("/start");
-  assert.deepEqual(JSON.parse(req.options.body).observation, {
-    kind: "attention",
-    head: 8,
-  });
-  req.resolve({ session: "owner", status: "running", steps: [], details: {} });
-  await start;
-  assert(ui.get("infer-observation").disabled);
-  assert(ui.get("infer-head-index").disabled);
-  ui.take("/poll").resolve({
-    session: "owner",
-    status: "complete",
-    steps: [{ ...base, attention, activation_site: "attention" }],
-    details: {},
-  });
-  await tick();
-  assert(ui.get("infer-observation-result").hidden);
-  ui.click("step");
-  assert(!ui.get("infer-observation-result").hidden);
-  assert.equal(ui.get("infer-observation-values").children.length, 3);
-  assert(ui.get("infer-observation-context").textContent.includes("KV head 2"));
-  assert(
-    ui
-      .get("infer-observation-context")
-      .textContent.includes("not causal attribution"),
-  );
-  assert.equal(
-    ui.get("infer-observation-values").children[2].children[2].children[0]
-      .value,
-    0.5,
-  );
-  ui.click("replay");
-  assert(ui.get("infer-observation-result").hidden);
-  ui.change("observation", "logit_lens");
-  assert.equal(ui.get("infer-site").value, "block");
-  assert(ui.get("infer-head-index").disabled);
-  ui.get("infer-layer").value = "29";
-  const second = ui.submit();
-  const secondReq = ui.take("/start");
-  assert.deepEqual(JSON.parse(secondReq.options.body).observation, {
-    kind: "logit_lens",
-  });
-  secondReq.resolve({
-    session: "owner2",
-    status: "running",
-    steps: [],
-    details: {},
-  });
-  await second;
-  const stale = ui.take("/poll");
-  const reset = ui.click("reset");
-  ui.take("/reset").resolve({
-    session: null,
-    status: "idle",
-    steps: [],
-    details: {},
-  });
-  await reset;
-  stale.resolve({
-    session: "owner2",
-    status: "complete",
-    steps: [{ ...base, layer: 29, logit_lens: lens, activation_site: "block" }],
-    details: {},
-  });
-  await tick();
-  assert(ui.get("infer-observation-result").hidden);
-  const third = ui.submit();
-  ui.take("/start").resolve({
-    session: "owner3",
-    status: "running",
-    steps: [],
-    details: {},
-  });
-  await third;
-  ui.take("/poll").resolve({
-    session: "owner3",
-    status: "complete",
-    steps: [{ ...base, layer: 29, logit_lens: lens, activation_site: "block" }],
-    details: {},
-  });
-  await tick();
-  ui.click("step");
-  assert.equal(ui.get("infer-observation-values").children.length, 2);
-  assert(
-    ui
-      .get("infer-observation-context")
-      .textContent.includes("not an early-exit prediction"),
-  );
-  assert.equal(
-    ui.get("infer-observation-values").children[0].children[3].textContent,
-    "1.000000",
-  );
-  console.log(
-    JSON.stringify(
-      {
-        status: "PASS",
-        scope:
-          "Strict mode/head selection, matching capture sites, immutable accepted request, backend capability gating, attention distribution/meter and lens union display, playback/rewind/reset/stale response, prompt-key ID export omission and later redaction",
-      },
-      null,
-      2,
-    ),
-  );
-})().catch((e) => {
-  console.error(e);
-  process.exitCode = 1;
-});
+require("./support/async-completion.cjs").requireCompletion(
+  (async () => {
+    const old = setup();
+    old
+      .take("/api/inference")
+      .resolve({ architecture, model: "fixture", engine: "fixture" });
+    await tick();
+    assert(old.get("infer-observation").disabled);
+    const ui = setup();
+    ui.take("/api/inference").resolve({
+      architecture,
+      model: "fixture",
+      engine: "fixture",
+      observations: { kinds: ["attention", "logit_lens"] },
+    });
+    await tick();
+    assert(!ui.get("infer-observation").disabled);
+    ui.change("observation", "attention");
+    assert.equal(ui.get("infer-site").value, "attention");
+    assert(ui.get("infer-site").disabled);
+    assert(!ui.get("infer-head-index").disabled);
+    const start = ui.submit(),
+      req = ui.take("/start");
+    assert.deepEqual(JSON.parse(req.options.body).observation, {
+      kind: "attention",
+      head: 8,
+    });
+    req.resolve({
+      session: "owner",
+      status: "running",
+      steps: [],
+      details: {},
+    });
+    await start;
+    assert(ui.get("infer-observation").disabled);
+    assert(ui.get("infer-head-index").disabled);
+    ui.take("/poll").resolve({
+      session: "owner",
+      status: "complete",
+      steps: [{ ...base, attention, activation_site: "attention" }],
+      details: {},
+    });
+    await tick();
+    assert(ui.get("infer-observation-result").hidden);
+    ui.click("step");
+    assert(!ui.get("infer-observation-result").hidden);
+    assert.equal(ui.get("infer-observation-values").children.length, 3);
+    assert(
+      ui.get("infer-observation-context").textContent.includes("KV head 2"),
+    );
+    assert(
+      ui
+        .get("infer-observation-context")
+        .textContent.includes("not causal attribution"),
+    );
+    assert.equal(
+      ui.get("infer-observation-values").children[2].children[2].children[0]
+        .value,
+      0.5,
+    );
+    ui.click("replay");
+    assert(ui.get("infer-observation-result").hidden);
+    ui.change("observation", "logit_lens");
+    assert.equal(ui.get("infer-site").value, "block");
+    assert(ui.get("infer-head-index").disabled);
+    ui.get("infer-layer").value = "29";
+    const second = ui.submit();
+    const secondReq = ui.take("/start");
+    assert.deepEqual(JSON.parse(secondReq.options.body).observation, {
+      kind: "logit_lens",
+    });
+    secondReq.resolve({
+      session: "owner2",
+      status: "running",
+      steps: [],
+      details: {},
+    });
+    await second;
+    const stale = ui.take("/poll");
+    const reset = ui.click("reset");
+    ui.take("/reset").resolve({
+      session: null,
+      status: "idle",
+      steps: [],
+      details: {},
+    });
+    await reset;
+    stale.resolve({
+      session: "owner2",
+      status: "complete",
+      steps: [
+        { ...base, layer: 29, logit_lens: lens, activation_site: "block" },
+      ],
+      details: {},
+    });
+    await tick();
+    assert(ui.get("infer-observation-result").hidden);
+    const third = ui.submit();
+    ui.take("/start").resolve({
+      session: "owner3",
+      status: "running",
+      steps: [],
+      details: {},
+    });
+    await third;
+    ui.take("/poll").resolve({
+      session: "owner3",
+      status: "complete",
+      steps: [
+        { ...base, layer: 29, logit_lens: lens, activation_site: "block" },
+      ],
+      details: {},
+    });
+    await tick();
+    ui.click("step");
+    assert.equal(ui.get("infer-observation-values").children.length, 2);
+    assert(
+      ui
+        .get("infer-observation-context")
+        .textContent.includes("not an early-exit prediction"),
+    );
+    assert.equal(
+      ui.get("infer-observation-values").children[0].children[3].textContent,
+      "1.000000",
+    );
+    console.log(
+      JSON.stringify(
+        {
+          status: "PASS",
+          scope:
+            "Strict mode/head selection, matching capture sites, immutable accepted request, backend capability gating, attention distribution/meter and lens union display, playback/rewind/reset/stale response, prompt-key ID export omission and later redaction",
+        },
+        null,
+        2,
+      ),
+    );
+  })().catch((e) => {
+    console.error(e);
+    process.exitCode = 1;
+  }),
+);

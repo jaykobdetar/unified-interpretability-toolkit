@@ -119,128 +119,130 @@ const terminal = (session, status = "complete") => ({
     runtime: { torch: "fixture", session: "MUST-NOT-LEAK" },
   },
 });
-(async () => {
-  take("/api/inference").resolve({ model: "fixture", engine: "CPU" });
-  await tick();
-  async function run(id, status = "complete") {
-    const start = submit();
-    const request = take("/start");
-    assert.equal(JSON.parse(request.options.body).activation_site, "mlp");
-    request.resolve({
-      session: id,
+require("./support/async-completion.cjs").requireCompletion(
+  (async () => {
+    take("/api/inference").resolve({ model: "fixture", engine: "CPU" });
+    await tick();
+    async function run(id, status = "complete") {
+      const start = submit();
+      const request = take("/start");
+      assert.equal(JSON.parse(request.options.body).activation_site, "mlp");
+      request.resolve({
+        session: id,
+        status: "loading",
+        worker_alive: true,
+        steps: [],
+        details: {},
+      });
+      await start;
+      take("/poll").resolve(terminal(id, status));
+      await tick();
+    }
+    await run("without-consent");
+    assert(get("infer-log-status").textContent.includes("0 / 8"));
+    get("infer-logging").checked = true;
+    get("infer-include-prompt").checked = true;
+    await run("first-private");
+    assert(get("infer-log-status").textContent.includes("1 / 8"));
+    click("export-log");
+    let file = JSON.parse(downloads.at(-1));
+    assert.equal(file.records[0].request.prompt, "private synthetic input");
+    assert.equal(file.records[0].request.activation_site, "mlp");
+    assert(!downloads.at(-1).includes("first-private"));
+    assert(!downloads.at(-1).includes("MUST-NOT-LEAK"));
+    get("infer-include-prompt").checked = false;
+    click("export-log");
+    file = JSON.parse(downloads.at(-1));
+    assert(!downloads.at(-1).includes("private synthetic input"));
+    assert(!Object.hasOwn(file.records[0].steps[0], "input_token_id"));
+    await run("failed-model", "error");
+    click("export-log");
+    file = JSON.parse(downloads.at(-1));
+    assert.equal(file.records[1].status, "error");
+    assert.equal(file.records[1].complete, false);
+    // Cancel before the first token and retain an incomplete record; late poll ignored.
+    const started = submit();
+    take("/start").resolve({
+      session: "cancel-owner",
       status: "loading",
       worker_alive: true,
       steps: [],
       details: {},
     });
-    await start;
-    take("/poll").resolve(terminal(id, status));
+    await started;
+    const stale = take("/poll");
+    const cancel = click("cancel");
+    take("/cancel").resolve(terminal("cancel-owner", "cancelled"));
+    await cancel;
+    stale.resolve(terminal("cancel-owner"));
     await tick();
-  }
-  await run("without-consent");
-  assert(get("infer-log-status").textContent.includes("0 / 8"));
-  get("infer-logging").checked = true;
-  get("infer-include-prompt").checked = true;
-  await run("first-private");
-  assert(get("infer-log-status").textContent.includes("1 / 8"));
-  click("export-log");
-  let file = JSON.parse(downloads.at(-1));
-  assert.equal(file.records[0].request.prompt, "private synthetic input");
-  assert.equal(file.records[0].request.activation_site, "mlp");
-  assert(!downloads.at(-1).includes("first-private"));
-  assert(!downloads.at(-1).includes("MUST-NOT-LEAK"));
-  get("infer-include-prompt").checked = false;
-  click("export-log");
-  file = JSON.parse(downloads.at(-1));
-  assert(!downloads.at(-1).includes("private synthetic input"));
-  assert(!Object.hasOwn(file.records[0].steps[0], "input_token_id"));
-  await run("failed-model", "error");
-  click("export-log");
-  file = JSON.parse(downloads.at(-1));
-  assert.equal(file.records[1].status, "error");
-  assert.equal(file.records[1].complete, false);
-  // Cancel before the first token and retain an incomplete record; late poll ignored.
-  const started = submit();
-  take("/start").resolve({
-    session: "cancel-owner",
-    status: "loading",
-    worker_alive: true,
-    steps: [],
-    details: {},
-  });
-  await started;
-  const stale = take("/poll");
-  const cancel = click("cancel");
-  take("/cancel").resolve(terminal("cancel-owner", "cancelled"));
-  await cancel;
-  stale.resolve(terminal("cancel-owner"));
-  await tick();
-  assert(get("infer-log-status").textContent.includes("3 / 8"));
-  for (let i = 3; i < 8; i++) await run("run-" + i);
-  await run("overflow");
-  assert(get("infer-log-status").textContent.includes("full"));
-  assert(get("infer-start").disabled);
-  click("export-log");
-  assert.equal(JSON.parse(downloads.at(-1)).records.length, 8);
-  click("export-run");
-  file = JSON.parse(downloads.at(-1));
-  assert.equal(file.status, "complete");
-  assert(!downloads.at(-1).includes("overflow"));
-  const reset = click("reset");
-  take("/reset").resolve({
-    session: null,
-    status: "idle",
-    worker_alive: false,
-    steps: [],
-    details: {},
-  });
-  await reset;
-  assert(get("infer-start").disabled);
-  assert(!get("infer-export-run").disabled);
-  click("clear-log");
-  assert(!get("infer-start").disabled);
-  assert(get("infer-log-status").textContent.includes("0 / 8"));
-  // Reset of an accepted active run records the last received trace as cancelled.
-  const active = submit();
-  take("/start").resolve({
-    session: "reset-active",
-    status: "loading",
-    worker_alive: true,
-    steps: [],
-    details: {},
-  });
-  await active;
-  const oldPoll = take("/poll");
-  const clear = click("reset");
-  take("/reset").resolve({
-    session: null,
-    status: "idle",
-    worker_alive: false,
-    steps: [],
-    details: {},
-  });
-  await clear;
-  oldPoll.resolve(terminal("reset-active"));
-  await tick();
-  click("export-log");
-  file = JSON.parse(downloads.at(-1));
-  assert.equal(file.records.length, 1);
-  assert.equal(file.records[0].status, "cancelled");
-  assert(file.records[0].termination.includes("last received tab snapshot"));
-  assert.equal(requests.length, 0);
-  console.log(
-    JSON.stringify(
-      {
-        status: "PASS",
-        checks: 20,
-        scope:
-          "Logging off by default; accepted run/component provenance; separate prompt consent and export redaction; failed/cancelled/reset records; stale response ignored; eight-run cap, pending overflow, capability exclusion, explicit clear and recovery",
-      },
-      null,
-      2,
-    ),
-  );
-})().catch((e) => {
-  console.error(e);
-  process.exitCode = 1;
-});
+    assert(get("infer-log-status").textContent.includes("3 / 8"));
+    for (let i = 3; i < 8; i++) await run("run-" + i);
+    await run("overflow");
+    assert(get("infer-log-status").textContent.includes("full"));
+    assert(get("infer-start").disabled);
+    click("export-log");
+    assert.equal(JSON.parse(downloads.at(-1)).records.length, 8);
+    click("export-run");
+    file = JSON.parse(downloads.at(-1));
+    assert.equal(file.status, "complete");
+    assert(!downloads.at(-1).includes("overflow"));
+    const reset = click("reset");
+    take("/reset").resolve({
+      session: null,
+      status: "idle",
+      worker_alive: false,
+      steps: [],
+      details: {},
+    });
+    await reset;
+    assert(get("infer-start").disabled);
+    assert(!get("infer-export-run").disabled);
+    click("clear-log");
+    assert(!get("infer-start").disabled);
+    assert(get("infer-log-status").textContent.includes("0 / 8"));
+    // Reset of an accepted active run records the last received trace as cancelled.
+    const active = submit();
+    take("/start").resolve({
+      session: "reset-active",
+      status: "loading",
+      worker_alive: true,
+      steps: [],
+      details: {},
+    });
+    await active;
+    const oldPoll = take("/poll");
+    const clear = click("reset");
+    take("/reset").resolve({
+      session: null,
+      status: "idle",
+      worker_alive: false,
+      steps: [],
+      details: {},
+    });
+    await clear;
+    oldPoll.resolve(terminal("reset-active"));
+    await tick();
+    click("export-log");
+    file = JSON.parse(downloads.at(-1));
+    assert.equal(file.records.length, 1);
+    assert.equal(file.records[0].status, "cancelled");
+    assert(file.records[0].termination.includes("last received tab snapshot"));
+    assert.equal(requests.length, 0);
+    console.log(
+      JSON.stringify(
+        {
+          status: "PASS",
+          checks: 20,
+          scope:
+            "Logging off by default; accepted run/component provenance; separate prompt consent and export redaction; failed/cancelled/reset records; stale response ignored; eight-run cap, pending overflow, capability exclusion, explicit clear and recovery",
+        },
+        null,
+        2,
+      ),
+    );
+  })().catch((e) => {
+    console.error(e);
+    process.exitCode = 1;
+  }),
+);

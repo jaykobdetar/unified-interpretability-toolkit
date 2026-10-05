@@ -174,124 +174,128 @@ const take = (part) => {
   tick = async () => {
     for (let i = 0; i < 15; i++) await Promise.resolve();
   };
-(async () => {
-  take("/api/inference").resolve({
-    architecture,
-    model: "fixture",
-    engine: "fixture",
-    comparison: { source_model, max_edits: 8, tensors: [] },
-    prompt_pair: { max_positions: 8 },
-    observations: { kinds: ["attention", "logit_lens"] },
-  });
-  await tick();
-  el("task").value = "prompt_pair";
-  el("task").listeners.change();
-  assert(el("start").disabled);
-  assert(!el("pair-controls").hidden);
-  assert(el("observation").disabled);
-  assert(el("limit").disabled);
-  await submit();
-  assert.equal(requests.length, 0);
-  assert(el("error").textContent.includes("fresh preview"));
-  const p = click("pair-preview"),
-    req = take("/start");
-  assert.deepEqual(JSON.parse(req.options.body), {
-    mode: "prompt_pair_preview",
-    prompts: ["A", "B"],
-    source_model,
-  });
-  req.resolve({
-    session: "preview-owner",
-    status: "loading",
-    steps: [],
-    details: {},
-  });
-  await p;
-  assert(el("task").disabled);
-  take("/poll").resolve({
-    session: "preview-owner",
-    status: "complete",
-    worker_alive: false,
-    steps: [],
-    details: { preview, reason: "token_preview" },
-  });
-  await tick();
-  assert.equal(el("pairs").value, "2,1");
-  assert(el("preview-a").textContent.includes('2: 3 "three"'));
-  assert(el("preview-status").textContent.includes("No model was loaded"));
-  assert(!el("start").disabled);
-  assert(el("export-run").disabled);
-  const run = submit(),
-    pairReq = take("/start");
-  assert.deepEqual(JSON.parse(pairReq.options.body), request);
-  pairReq.resolve({
-    session: "pair-owner",
-    status: "running",
-    steps: [],
-    details: {},
-  });
-  await run;
-  assert(el("pairs").disabled);
-  assert(el("prompt-b").disabled);
-  take("/poll").resolve({ session: "pair-owner", ...snapshot });
-  await tick();
-  click("step");
-  assert.equal(el("left-title").textContent, "Prompt A capture");
-  assert.equal(el("right-title").textContent, "Prompt B capture");
-  assert(
-    el("alignment").textContent.includes("no generated or predicted tokens"),
-  );
-  assert(el("score-context").textContent.includes("undefined for a zero norm"));
-  assert(el("baseline-output").textContent.includes("Position 2"));
-  assert(el("output").textContent.includes("Position 1"));
-  assert(el("activation-title").textContent.includes("B − A"));
-  click("replay");
-  assert.equal(
-    el("baseline-output").textContent,
-    "No prompt A capture selected in playback.",
-  );
-  el("prompt-b").value = "changed";
-  el("prompt-b").listeners.input();
-  assert(el("start").disabled);
-  assert.equal(el("preview-b").textContent, "No current token preview.");
-  const next = click("pair-preview");
-  take("/start").resolve({
-    session: "late-preview",
-    status: "running",
-    steps: [],
-    details: {},
-  });
-  await next;
-  const stale = take("/poll");
-  const reset = click("reset");
-  take("/reset").resolve({
-    session: null,
-    status: "idle",
-    steps: [],
-    details: {},
-  });
-  await reset;
-  stale.resolve({
-    session: "late-preview",
-    status: "complete",
-    steps: [],
-    details: { preview, reason: "token_preview" },
-  });
-  await tick();
-  assert(el("start").disabled);
-  assert.equal(el("preview-a").textContent, "No current token preview.");
-  console.log(
-    JSON.stringify(
-      {
-        status: "PASS",
-        scope:
-          "Explicit bounded positional alignment, tokenizer-only preview review, exact mode requests, stale prompt/preview invalidation, ownership reset, no generated-token display, zero-norm label, prompt/token/digest export consent and redaction",
-      },
-      null,
-      2,
-    ),
-  );
-})().catch((e) => {
-  console.error(e);
-  process.exitCode = 1;
-});
+require("./support/async-completion.cjs").requireCompletion(
+  (async () => {
+    take("/api/inference").resolve({
+      architecture,
+      model: "fixture",
+      engine: "fixture",
+      comparison: { source_model, max_edits: 8, tensors: [] },
+      prompt_pair: { max_positions: 8 },
+      observations: { kinds: ["attention", "logit_lens"] },
+    });
+    await tick();
+    el("task").value = "prompt_pair";
+    el("task").listeners.change();
+    assert(el("start").disabled);
+    assert(!el("pair-controls").hidden);
+    assert(el("observation").disabled);
+    assert(el("limit").disabled);
+    await submit();
+    assert.equal(requests.length, 0);
+    assert(el("error").textContent.includes("fresh preview"));
+    const p = click("pair-preview"),
+      req = take("/start");
+    assert.deepEqual(JSON.parse(req.options.body), {
+      mode: "prompt_pair_preview",
+      prompts: ["A", "B"],
+      source_model,
+    });
+    req.resolve({
+      session: "preview-owner",
+      status: "loading",
+      steps: [],
+      details: {},
+    });
+    await p;
+    assert(el("task").disabled);
+    take("/poll").resolve({
+      session: "preview-owner",
+      status: "complete",
+      worker_alive: false,
+      steps: [],
+      details: { preview, reason: "token_preview" },
+    });
+    await tick();
+    assert.equal(el("pairs").value, "2,1");
+    assert(el("preview-a").textContent.includes('2: 3 "three"'));
+    assert(el("preview-status").textContent.includes("No model was loaded"));
+    assert(!el("start").disabled);
+    assert(el("export-run").disabled);
+    const run = submit(),
+      pairReq = take("/start");
+    assert.deepEqual(JSON.parse(pairReq.options.body), request);
+    pairReq.resolve({
+      session: "pair-owner",
+      status: "running",
+      steps: [],
+      details: {},
+    });
+    await run;
+    assert(el("pairs").disabled);
+    assert(el("prompt-b").disabled);
+    take("/poll").resolve({ session: "pair-owner", ...snapshot });
+    await tick();
+    click("step");
+    assert.equal(el("left-title").textContent, "Prompt A capture");
+    assert.equal(el("right-title").textContent, "Prompt B capture");
+    assert(
+      el("alignment").textContent.includes("no generated or predicted tokens"),
+    );
+    assert(
+      el("score-context").textContent.includes("undefined for a zero norm"),
+    );
+    assert(el("baseline-output").textContent.includes("Position 2"));
+    assert(el("output").textContent.includes("Position 1"));
+    assert(el("activation-title").textContent.includes("B − A"));
+    click("replay");
+    assert.equal(
+      el("baseline-output").textContent,
+      "No prompt A capture selected in playback.",
+    );
+    el("prompt-b").value = "changed";
+    el("prompt-b").listeners.input();
+    assert(el("start").disabled);
+    assert.equal(el("preview-b").textContent, "No current token preview.");
+    const next = click("pair-preview");
+    take("/start").resolve({
+      session: "late-preview",
+      status: "running",
+      steps: [],
+      details: {},
+    });
+    await next;
+    const stale = take("/poll");
+    const reset = click("reset");
+    take("/reset").resolve({
+      session: null,
+      status: "idle",
+      steps: [],
+      details: {},
+    });
+    await reset;
+    stale.resolve({
+      session: "late-preview",
+      status: "complete",
+      steps: [],
+      details: { preview, reason: "token_preview" },
+    });
+    await tick();
+    assert(el("start").disabled);
+    assert.equal(el("preview-a").textContent, "No current token preview.");
+    console.log(
+      JSON.stringify(
+        {
+          status: "PASS",
+          scope:
+            "Explicit bounded positional alignment, tokenizer-only preview review, exact mode requests, stale prompt/preview invalidation, ownership reset, no generated-token display, zero-norm label, prompt/token/digest export consent and redaction",
+        },
+        null,
+        2,
+      ),
+    );
+  })().catch((e) => {
+    console.error(e);
+    process.exitCode = 1;
+  }),
+);

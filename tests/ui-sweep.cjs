@@ -188,138 +188,140 @@ const tick = async () => {
   },
   click = (id) => el(id).listeners.click(),
   submit = () => el("form").listeners.submit({ preventDefault() {} });
-(async () => {
-  take("/api/inference").resolve({
-    architecture,
-    model: "fixture",
-    engine: "fixture",
-    comparison: { source_model, max_edits: 8, tensors: [] },
-    sweep: plan.limits,
-  });
-  await tick();
-  el("task").value = "sweep";
-  el("task").listeners.change();
-  assert(el("start").disabled);
-  assert(el("limit").disabled);
-  assert(el("observation").disabled);
-  const refusal = click("sweep-preview");
-  take("/sweep-plan").resolve({ error: "Synthetic refusal" }, 503);
-  await refusal;
-  assert(el("error").textContent.includes("Synthetic refusal"));
-  assert.equal(requests.length, 0);
-  assert(el("start").disabled);
-  const preview = click("sweep-preview"),
-    planning = take("/sweep-plan");
-  assert.deepEqual(JSON.parse(planning.options.body), request);
-  planning.resolve({ plan });
-  await preview;
-  assert(!el("start").disabled);
-  assert(
-    el("sweep-plan-status").textContent.includes("not a complete head sweep"),
-  );
-  assert(el("sweep-plan-status").textContent.includes("90 CPU s total"));
-  el("sweep-seed").value = "8";
-  el("sweep-seed").listeners.input();
-  assert(el("start").disabled);
-  await submit();
-  assert.equal(requests.length, 0);
-  assert(el("error").textContent.includes("fresh expanded plan"));
-  el("sweep-seed").value = "7";
-  el("sweep-seed").listeners.input();
-  const stalePlan = click("sweep-preview"),
-    old = take("/sweep-plan");
-  el("sweep-seed").value = "8";
-  el("sweep-seed").listeners.input();
-  old.resolve({ plan });
-  await stalePlan;
-  assert(el("start").disabled);
-  el("sweep-seed").value = "7";
-  el("sweep-seed").listeners.input();
-  const review = click("sweep-preview");
-  take("/sweep-plan").resolve({ plan });
-  await review;
-  const run = submit(),
-    start = take("/start");
-  assert.deepEqual(JSON.parse(start.options.body), accepted);
-  start.resolve({
-    session: "sweep-owner",
-    status: "loading",
-    steps: [],
-    details: {
-      sweep_plan: plan,
-      sweep_coverage: {
-        planned_ids: ids,
-        completed_ids: [],
-        unrun_ids: ids,
-        interrupted_id: null,
-        complete: false,
+require("./support/async-completion.cjs").requireCompletion(
+  (async () => {
+    take("/api/inference").resolve({
+      architecture,
+      model: "fixture",
+      engine: "fixture",
+      comparison: { source_model, max_edits: 8, tensors: [] },
+      sweep: plan.limits,
+    });
+    await tick();
+    el("task").value = "sweep";
+    el("task").listeners.change();
+    assert(el("start").disabled);
+    assert(el("limit").disabled);
+    assert(el("observation").disabled);
+    const refusal = click("sweep-preview");
+    take("/sweep-plan").resolve({ error: "Synthetic refusal" }, 503);
+    await refusal;
+    assert(el("error").textContent.includes("Synthetic refusal"));
+    assert.equal(requests.length, 0);
+    assert(el("start").disabled);
+    const preview = click("sweep-preview"),
+      planning = take("/sweep-plan");
+    assert.deepEqual(JSON.parse(planning.options.body), request);
+    planning.resolve({ plan });
+    await preview;
+    assert(!el("start").disabled);
+    assert(
+      el("sweep-plan-status").textContent.includes("not a complete head sweep"),
+    );
+    assert(el("sweep-plan-status").textContent.includes("90 CPU s total"));
+    el("sweep-seed").value = "8";
+    el("sweep-seed").listeners.input();
+    assert(el("start").disabled);
+    await submit();
+    assert.equal(requests.length, 0);
+    assert(el("error").textContent.includes("fresh expanded plan"));
+    el("sweep-seed").value = "7";
+    el("sweep-seed").listeners.input();
+    const stalePlan = click("sweep-preview"),
+      old = take("/sweep-plan");
+    el("sweep-seed").value = "8";
+    el("sweep-seed").listeners.input();
+    old.resolve({ plan });
+    await stalePlan;
+    assert(el("start").disabled);
+    el("sweep-seed").value = "7";
+    el("sweep-seed").listeners.input();
+    const review = click("sweep-preview");
+    take("/sweep-plan").resolve({ plan });
+    await review;
+    const run = submit(),
+      start = take("/start");
+    assert.deepEqual(JSON.parse(start.options.body), accepted);
+    start.resolve({
+      session: "sweep-owner",
+      status: "loading",
+      steps: [],
+      details: {
+        sweep_plan: plan,
+        sweep_coverage: {
+          planned_ids: ids,
+          completed_ids: [],
+          unrun_ids: ids,
+          interrupted_id: null,
+          complete: false,
+        },
       },
-    },
-  });
-  await run;
-  assert(el("sweep-targets").disabled);
-  assert(el("task").disabled);
-  take("/poll").resolve({ session: "sweep-owner", ...snapshot });
-  await tick();
-  assert(el("sweep-progress").textContent.includes("2 / 3 completed"));
-  assert(el("sweep-progress").textContent.includes("1 unrun"));
-  assert.equal(el("sweep-results").children.length, 2);
-  assert.equal(requests.length, 0);
-  click("step");
-  click("step");
-  assert(el("alignment").textContent.includes("no continuation"));
-  assert(
-    el("score-context").textContent.includes("no inferred causal purpose"),
-  );
-  assert(el("edited-ids").textContent.includes("original bits restored"));
-  assert.equal(el("scores").children[0].children[3].textContent, "-1.000000");
-  // No automatic retry/chaining. Only this explicit new submit creates a request.
-  const next = submit();
-  take("/start").resolve({
-    session: "sweep-next",
-    status: "running",
-    steps: [],
-    details: { sweep_plan: plan },
-  });
-  await next;
-  const stale = take("/poll"),
-    reset = click("reset");
-  take("/reset").resolve({
-    session: null,
-    status: "idle",
-    steps: [],
-    details: {},
-  });
-  await reset;
-  stale.resolve({ session: "sweep-next", ...snapshot });
-  await tick();
-  assert(el("sweep-results-section").hidden);
-  assert.equal(el("sweep-results").children.length, 0);
-  assert(el("start").disabled);
-  assert.equal(requests.length, 0);
-  window.atlasInferenceSelectionChanged({
-    source_model: { ...source_model, repo: "Qwen/Qwen3-8B" },
-    tensor: "model.layers.0.self_attn.q_proj.weight",
-    shape: [576, 576],
-    row: 70,
-    col: 0,
-  });
-  assert(el("sweep-use-inspected").disabled);
-  console.log(
-    JSON.stringify(
-      {
-        status: "PASS",
-        scope:
-          "Strict explicit subset input, reviewed deterministic plan binding, stale plan/seed invalidation, no automatic refusal retry or chaining, bounded partial coverage, owned reset/stale poll, fixed-context labels, Qwen inspector rejection, prompt/digest/all-prefill-token export redaction",
-      },
-      null,
-      2,
-    ),
-  );
-})().catch((e) => {
-  console.error(e);
-  process.exitCode = 1;
-});
+    });
+    await run;
+    assert(el("sweep-targets").disabled);
+    assert(el("task").disabled);
+    take("/poll").resolve({ session: "sweep-owner", ...snapshot });
+    await tick();
+    assert(el("sweep-progress").textContent.includes("2 / 3 completed"));
+    assert(el("sweep-progress").textContent.includes("1 unrun"));
+    assert.equal(el("sweep-results").children.length, 2);
+    assert.equal(requests.length, 0);
+    click("step");
+    click("step");
+    assert(el("alignment").textContent.includes("no continuation"));
+    assert(
+      el("score-context").textContent.includes("no inferred causal purpose"),
+    );
+    assert(el("edited-ids").textContent.includes("original bits restored"));
+    assert.equal(el("scores").children[0].children[3].textContent, "-1.000000");
+    // No automatic retry/chaining. Only this explicit new submit creates a request.
+    const next = submit();
+    take("/start").resolve({
+      session: "sweep-next",
+      status: "running",
+      steps: [],
+      details: { sweep_plan: plan },
+    });
+    await next;
+    const stale = take("/poll"),
+      reset = click("reset");
+    take("/reset").resolve({
+      session: null,
+      status: "idle",
+      steps: [],
+      details: {},
+    });
+    await reset;
+    stale.resolve({ session: "sweep-next", ...snapshot });
+    await tick();
+    assert(el("sweep-results-section").hidden);
+    assert.equal(el("sweep-results").children.length, 0);
+    assert(el("start").disabled);
+    assert.equal(requests.length, 0);
+    window.atlasInferenceSelectionChanged({
+      source_model: { ...source_model, repo: "Qwen/Qwen3-8B" },
+      tensor: "model.layers.0.self_attn.q_proj.weight",
+      shape: [576, 576],
+      row: 70,
+      col: 0,
+    });
+    assert(el("sweep-use-inspected").disabled);
+    console.log(
+      JSON.stringify(
+        {
+          status: "PASS",
+          scope:
+            "Strict explicit subset input, reviewed deterministic plan binding, stale plan/seed invalidation, no automatic refusal retry or chaining, bounded partial coverage, owned reset/stale poll, fixed-context labels, Qwen inspector rejection, prompt/digest/all-prefill-token export redaction",
+        },
+        null,
+        2,
+      ),
+    );
+  })().catch((e) => {
+    console.error(e);
+    process.exitCode = 1;
+  }),
+);
 // Full-layer requests stay in one reviewed job and cannot exceed the trace cap.
 assert.deepEqual(
   sweepRequest({ ...values, targets: "layer 4" }, source_model, architecture)

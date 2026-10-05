@@ -107,131 +107,134 @@ const paired = (index, left, right) => ({
     },
   ],
 });
-(async () => {
-  for (const ended of ["baseline", "edited"]) {
+require("./support/async-completion.cjs").requireCompletion(
+  (async () => {
+    for (const ended of ["baseline", "edited"]) {
+      const ui = setup();
+      ui.take("/api/inference").resolve({ model: "fixture", engine: "CPU" });
+      await tick();
+      const short = branch(
+          [1],
+          ended === "baseline" ? "BASE EOS" : "EDIT EOS",
+          true,
+        ),
+        long0 = branch([2], "LONG 0"),
+        long1 = branch([2, 3], "LONG 0 1");
+      const steps =
+        ended === "baseline"
+          ? [paired(0, short, long0), paired(1, null, long1)]
+          : [paired(0, long0, short), paired(1, long1, null)];
+      const start = ui.submit();
+      ui.take("/start").resolve({
+        session: "owner",
+        status: "loading",
+        steps: [],
+        details: {},
+      });
+      await start;
+      ui.take("/poll").resolve({
+        session: "owner",
+        status: "running",
+        steps,
+        details: {},
+      });
+      await tick();
+      ui.click("step");
+      ui.click("step");
+      const output = ended === "baseline" ? "baseline-output" : "output",
+        ids = ended === "baseline" ? "baseline-ids" : "edited-ids";
+      assert.equal(ui.get("infer-" + output).textContent, short.generated_text);
+      assert.equal(ui.get("infer-" + ids).textContent, "Token IDs: 1");
+      assert(
+        ui.get("infer-score-context").textContent.includes("One branch ended"),
+      );
+      assert.equal(
+        ui.get("infer-scores").children[0].children[
+          ended === "baseline" ? 1 : 2
+        ].textContent,
+        "—",
+      );
+      assert.equal(
+        ui.get("infer-scores").children[0].children[3].textContent,
+        "—",
+      );
+      const cancel = ui.click("cancel");
+      ui.take("/cancel").resolve({
+        session: "owner",
+        status: "cancelled",
+        steps,
+        details: {},
+      });
+      await cancel;
+      assert.equal(ui.get("infer-" + output).textContent, short.generated_text);
+      assert.equal(ui.get("infer-" + ids).textContent, "Token IDs: 1");
+      ui.click("replay");
+      assert.equal(
+        ui.get("infer-baseline-output").textContent,
+        "Baseline text will appear here.",
+      );
+      ui.click("step");
+      const longOutput = ended === "baseline" ? "output" : "baseline-output";
+      assert.equal(ui.get("infer-" + longOutput).textContent, "LONG 0");
+      const reset = ui.click("reset");
+      ui.take("/reset").resolve({
+        session: null,
+        status: "idle",
+        steps: [],
+        details: {},
+      });
+      await reset;
+      assert.equal(ui.get("infer-baseline-ids").textContent, "");
+      assert.equal(ui.get("infer-edited-ids").textContent, "");
+    }
+    // A valid empty decoded branch is retained, including after a worker error.
     const ui = setup();
     ui.take("/api/inference").resolve({ model: "fixture", engine: "CPU" });
     await tick();
-    const short = branch(
-        [1],
-        ended === "baseline" ? "BASE EOS" : "EDIT EOS",
-        true,
-      ),
-      long0 = branch([2], "LONG 0"),
-      long1 = branch([2, 3], "LONG 0 1");
-    const steps =
-      ended === "baseline"
-        ? [paired(0, short, long0), paired(1, null, long1)]
-        : [paired(0, long0, short), paired(1, long1, null)];
+    const empty = branch([1], "", true),
+      steps = [
+        paired(0, empty, branch([2], "first")),
+        paired(1, null, branch([2, 3], "first second")),
+      ];
     const start = ui.submit();
     ui.take("/start").resolve({
-      session: "owner",
+      session: "empty",
       status: "loading",
       steps: [],
       details: {},
     });
     await start;
     ui.take("/poll").resolve({
-      session: "owner",
-      status: "running",
+      session: "empty",
+      status: "error",
       steps,
-      details: {},
+      details: {
+        error: "controlled fixture",
+        baseline: { generated_text: "FUTURE SUMMARY", generated_ids: [99] },
+        edited: { generated_text: "FUTURE SUMMARY", generated_ids: [99] },
+      },
     });
     await tick();
     ui.click("step");
     ui.click("step");
-    const output = ended === "baseline" ? "baseline-output" : "output",
-      ids = ended === "baseline" ? "baseline-ids" : "edited-ids";
-    assert.equal(ui.get("infer-" + output).textContent, short.generated_text);
-    assert.equal(ui.get("infer-" + ids).textContent, "Token IDs: 1");
-    assert(
-      ui.get("infer-score-context").textContent.includes("One branch ended"),
-    );
-    assert.equal(
-      ui.get("infer-scores").children[0].children[ended === "baseline" ? 1 : 2]
-        .textContent,
-      "—",
-    );
-    assert.equal(
-      ui.get("infer-scores").children[0].children[3].textContent,
-      "—",
-    );
-    const cancel = ui.click("cancel");
-    ui.take("/cancel").resolve({
-      session: "owner",
-      status: "cancelled",
-      steps,
-      details: {},
-    });
-    await cancel;
-    assert.equal(ui.get("infer-" + output).textContent, short.generated_text);
-    assert.equal(ui.get("infer-" + ids).textContent, "Token IDs: 1");
+    assert.equal(ui.get("infer-baseline-output").textContent, "");
+    assert.equal(ui.get("infer-baseline-ids").textContent, "Token IDs: 1");
     ui.click("replay");
-    assert.equal(
-      ui.get("infer-baseline-output").textContent,
-      "Baseline text will appear here.",
-    );
     ui.click("step");
-    const longOutput = ended === "baseline" ? "output" : "baseline-output";
-    assert.equal(ui.get("infer-" + longOutput).textContent, "LONG 0");
-    const reset = ui.click("reset");
-    ui.take("/reset").resolve({
-      session: null,
-      status: "idle",
-      steps: [],
-      details: {},
-    });
-    await reset;
-    assert.equal(ui.get("infer-baseline-ids").textContent, "");
-    assert.equal(ui.get("infer-edited-ids").textContent, "");
-  }
-  // A valid empty decoded branch is retained, including after a worker error.
-  const ui = setup();
-  ui.take("/api/inference").resolve({ model: "fixture", engine: "CPU" });
-  await tick();
-  const empty = branch([1], "", true),
-    steps = [
-      paired(0, empty, branch([2], "first")),
-      paired(1, null, branch([2, 3], "first second")),
-    ];
-  const start = ui.submit();
-  ui.take("/start").resolve({
-    session: "empty",
-    status: "loading",
-    steps: [],
-    details: {},
-  });
-  await start;
-  ui.take("/poll").resolve({
-    session: "empty",
-    status: "error",
-    steps,
-    details: {
-      error: "controlled fixture",
-      baseline: { generated_text: "FUTURE SUMMARY", generated_ids: [99] },
-      edited: { generated_text: "FUTURE SUMMARY", generated_ids: [99] },
-    },
-  });
-  await tick();
-  ui.click("step");
-  ui.click("step");
-  assert.equal(ui.get("infer-baseline-output").textContent, "");
-  assert.equal(ui.get("infer-baseline-ids").textContent, "Token IDs: 1");
-  ui.click("replay");
-  ui.click("step");
-  assert.equal(ui.get("infer-output").textContent, "first");
-  console.log(
-    JSON.stringify(
-      {
-        status: "PASS",
-        scope:
-          "Both asymmetric EOS/length directions preserve last branch text/IDs before done and after cancellation/error; scores stay absent; empty decoded text, rewind, reset, and no future-summary leakage",
-      },
-      null,
-      2,
-    ),
-  );
-})().catch((e) => {
-  console.error(e);
-  process.exitCode = 1;
-});
+    assert.equal(ui.get("infer-output").textContent, "first");
+    console.log(
+      JSON.stringify(
+        {
+          status: "PASS",
+          scope:
+            "Both asymmetric EOS/length directions preserve last branch text/IDs before done and after cancellation/error; scores stay absent; empty decoded text, rewind, reset, and no future-summary leakage",
+        },
+        null,
+        2,
+      ),
+    );
+  })().catch((e) => {
+    console.error(e);
+    process.exitCode = 1;
+  }),
+);

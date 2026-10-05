@@ -364,13 +364,15 @@ test("declined tab only clears uncertain admission on authoritative reconciliati
   await assert.rejects(client.start(binding, 0, 6));
   assert.equal(starts, 2, "Only a later explicit Start retries admission");
 });
-(async () => {
-  for (const { name, fn } of cases) {
-    await fn();
-    console.log("PASS " + name);
-  }
-  console.log(cases.length + " source transition checks passed");
-})().catch((e) => {
-  console.error(e);
-  process.exitCode = 1;
-});
+require("./support/async-completion.cjs").requireCompletion(
+  (async () => {
+    for (const { name, fn } of cases) {
+      await fn();
+      console.log("PASS " + name);
+    }
+    console.log(cases.length + " source transition checks passed");
+  })().catch((e) => {
+    console.error(e);
+    process.exitCode = 1;
+  }),
+);

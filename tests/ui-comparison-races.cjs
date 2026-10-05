@@ -302,262 +302,270 @@ async function activate() {
   return vs;
 }
 const passed = [];
-(async () => {
-  run("bind()");
-  const init = run("refresh()");
-  take("/model").resolve(model);
-  await tick();
-  await finishView(take("/view"));
-  await init;
-  passed.push(
-    "Both panels preserve exact established 32-tile cache, one-loader limit, canvas/no-smoothing, render/zoom and gesture controls on every construction",
-  );
-  assert.deepEqual(settings(), {
-    tensor: 0,
-    left: "a",
-    right: "b",
-    mapping: "linear",
-  });
-  assert.equal(get("left-bounds").textContent, get("right-bounds").textContent);
-  assert(
-    get("provenance").textContent.includes("source-a") &&
-      get("provenance").textContent.includes("source-b"),
-  );
-  assert.equal(get("inspect").disabled, false);
-  passed.push(
-    "Ordered source identities and shared raw A/B scale appear with comparison-only coordinate boundary",
-  );
-  for (const side of ["left", "right"])
-    for (const q of ["a", "b", "delta", "abs_delta"]) {
-      get(side).value = q;
-      await activate();
-      const url = run(`state.viewers.${side}.source.getTileUrl(0,0,0)`);
-      assert(url.startsWith("/api/comparison/tile?"));
-      assert(
-        url.includes("quantity=" + q) &&
-          url.includes("comparison_identity=pair-identity"),
-      );
-      assert.equal(
-        get(side + "-gradient").classes.has("unsigned"),
-        q === "abs_delta",
-      );
-      if (q === "delta")
-        assert(get(side + "-scope").textContent.includes("derived"));
-    }
-  passed.push(
-    "Both panels select every quantity with ordered-identity-bound comparison tile URLs and distinct raw/difference legends",
-  );
-  get("mapping").value = "magnitude";
-  await activate();
-  assert(get("left-gradient").classes.has("unsigned"));
-  get("mapping").value = "asinh";
-  await activate();
-  assert(
-    run("state.viewers.left.source.getTileUrl(0,0,0)").includes(
-      "mapping=asinh",
-    ),
-  );
-  passed.push(
-    "Common magnitude/asinh mapping survives API and tile selection without substituting a rule",
-  );
-  const p1 = run("inspectAt(0,0)"),
-    r1 = take("/inspect"),
-    p2 = run("inspectAt(1,1)"),
-    r2 = take("/inspect");
-  r2.resolve(inspection(0, 1, 1));
-  await p2;
-  const nodes = get("inspection").children;
-  assert.equal(nodes[0].textContent, "Original A · BF16");
-  assert(nodes[1].textContent.startsWith("-0.0"));
-  assert.equal(nodes[4].textContent, "Derived B − A · F64 arithmetic");
-  assert(nodes[5].textContent.includes("no inference edit target"));
-  r1.resolve({
-    ...inspection(),
-    difference: { ...inspection().difference, decimal_f64: "stale" },
-  });
-  await p1;
-  assert(!get("inspection").children.at(-1).textContent.includes("stale"));
-  passed.push(
-    "Inspector preserves signed original, dtype-sized bytes and labeled arithmetic difference; late address response ignored",
-  );
-  const before = pending.length;
-  await run("inspectAt(-1,0)");
-  await run("inspectAt(3,0)");
-  await run("inspectAt(0,0.5)");
-  assert.equal(pending.length, before);
-  get("row").value = "";
-  get("inspect-form").listeners.submit({ preventDefault() {} });
-  assert.equal(pending.length, before);
-  passed.push(
-    "Invalid or empty native coordinates do not request source reads",
-  );
-  const old = run("loadView()"),
-    oldReq = take("/view"),
-    oldSettings = settings();
-  get("left").value = "a";
-  const current = run("loadView()");
-  await finishView(take("/view"));
-  oldReq.resolve(view(oldSettings));
-  await Promise.all([old, current]);
-  assert.equal(run("state.view.legends.left.quantity"), "a");
-  passed.push(
-    "Out-of-order view response cannot replace newer quantity selection",
-  );
-  const stale = run("state.viewers.left"),
-    oldRead = run("inspectAt(0,0)"),
-    readReq = take("/inspect");
-  get("right").value = "b";
-  await activate();
-  readReq.resolve(inspection());
-  await oldRead;
-  assert.equal(get("inspection").textContent, "Choose a native coordinate.");
-  get("error").textContent = "";
-  stale.emit("tile-load-failed");
-  assert.equal(get("error").textContent, "");
-  run("state.viewers.left.emit('tile-load-failed')");
-  assert(get("error").textContent.includes("tile failed"));
-  passed.push(
-    "Rule changes invalidate inspections and obsolete viewer errors while preserving active failures",
-  );
-  const left = run("state.viewers.left"),
-    right = run("state.viewers.right");
-  left.bounds = { x: 0.1, y: 0.2, width: 0.3, height: 0.4 };
-  left.emit("viewport-change");
-  assert.deepEqual(left.bounds, right.bounds);
-  right.bounds = { x: 0.2, y: 0.3, width: 0.4, height: 0.5 };
-  right.emit("viewport-change");
-  assert.deepEqual(left.bounds, right.bounds);
-  left.item.lastDrawn = [{ tile: { level: 2 } }];
-  left.emit("tile-drawn");
-  assert(get("left-resolution").textContent.includes("2 × 2"));
-  passed.push(
-    "Native geometry synchronizes in both directions; actual numeric pooling and partial-edge policy are visible",
-  );
-  get("tensor").value = "1";
-  get("tensor").listeners.change();
-  await finishView(take("/view"));
-  await tick();
-  assert.equal(run("state.viewers.left.source.height"), 1);
-  get("right").value = "delta";
-  await activate();
-  assert(get("right-gradient").classes.has("zero"));
-  assert(get("shape").textContent.includes("unwrapped vector"));
-  passed.push(
-    "Vectors remain one native row and zero-difference scale displays a uniform zero legend",
-  );
-  const bad = run("loadView()");
-  take("/view").resolve({ ...view(), comparison_identity: "wrong" });
-  await bad;
-  assert.equal(run("state.view"), null);
-  assert(get("error").textContent.includes("identity changed"));
-  assert.equal(get("inspect").disabled, false);
-  passed.push(
-    "Mismatched comparison identity refuses colors while leaving original inspection available",
-  );
-  const wrongLegend = run("loadView()");
-  const wl = view();
-  wl.legends.left.quantity = "wrong";
-  take("/view").resolve(wl);
-  await wrongLegend;
-  assert.equal(run("state.view"), null);
-  assert(get("error").textContent.includes("legend mismatch"));
-  passed.push("Wrong quantity legend cannot activate either panel");
-  const rawBad = run("inspectAt(0,0)");
-  const badRaw = inspection(1);
-  badRaw.originals.a.raw_hex_le = "00";
-  take("/inspect").resolve(badRaw);
-  await rawBad;
-  assert(get("error").textContent.includes("inconsistent original"));
-  passed.push("Raw inspector refuses dtype/byte-width inconsistency");
-  const ref = run("refresh()");
-  const unready = {
-    ...model,
-    catalog: model.catalog.map((t) => ({
-      ...t,
-      calibration_complete: false,
-      scales: null,
-    })),
-  };
-  take("/model").resolve(unready);
-  await ref;
-  assert.equal(run("state.view"), null);
-  assert.equal(get("inspect").disabled, false);
-  assert.equal(pending.length, 0);
-  const ir = run("inspectAt(0,0)");
-  const special = inspection(1);
-  special.originals.b = {
-    ...special.originals.b,
-    raw_exact: "Infinity",
-    classification: "infinity",
-  };
-  special.difference = {
-    ...special.difference,
-    decimal_f64: null,
-    value: null,
-    unavailable_reason: "Nonfinite original; difference unavailable",
-  };
-  take("/inspect").resolve(special);
-  await ir;
-  assert(get("inspection").children.at(-1).textContent.includes("Nonfinite"));
-  passed.push(
-    "Uncalibrated pairs make no automatic scan or tile request; nonfinite originals remain inspectable with unavailable difference",
-  );
-  const cal = run("calibrate()"),
-    calReq = take("/calibrate");
-  assert.equal(calReq.options.method, "POST");
-  assert.equal(calReq.options.headers["X-Atlas-Local"], "1");
-  assert(calReq.url.includes("tensor=1") && !calReq.url.includes("all="));
-  calReq.resolve({ ...boundary, queued: 1 }, 202);
-  await cal;
-  const poll = timers.filter(Boolean).at(-1);
-  poll();
-  take("/model").resolve(model);
-  await tick();
-  await finishView(take("/view"));
-  await tick();
-  assert.equal(run("state.view.pair.id"), 1);
-  passed.push(
-    "Explicit calibration queues only the selected pair; completed metadata activates its views",
-  );
-  const untrusted = run("loadView()");
-  take("/view").resolve({ ...view(), inference_editable: true });
-  await untrusted;
-  assert.equal(run("state.view"), null);
-  assert(get("error").textContent.includes("coordinate boundary"));
-  passed.push(
-    "Any inference-editable response is rejected at the comparison boundary",
-  );
-  const html = fs.readFileSync(
-    path.join(__dirname, "../web/comparison.html"),
-    "utf8",
-  );
-  assert(!html.includes("inference.js"));
-  assert(!/["']\/api\/inference/.test(source));
-  assert(
-    /@media\s*\(\s*max-width\s*:\s*720px\s*\)/.test(
-      fs.readFileSync(path.join(__dirname, "../web/comparison.css"), "utf8"),
-    ),
-  );
-  passed.push(
-    "Dedicated page has no inference controller or route; mobile panels stack with wrapping source metadata (static check)",
-  );
-  console.log(
-    JSON.stringify(
-      {
-        status: "PASS",
-        checks: passed.length,
-        source_sha256: crypto.createHash("sha256").update(source).digest("hex"),
-        viewer_controls: expectedViewerControls,
-        constructors_checked: viewers.length,
-        scope:
-          "Actual comparison frontend plus deterministic DOM/transport/OSD doubles; no browser rendering or backend qualification",
-        passed,
-      },
-      null,
-      2,
-    ),
-  );
-})().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+require("./support/async-completion.cjs").requireCompletion(
+  (async () => {
+    run("bind()");
+    const init = run("refresh()");
+    take("/model").resolve(model);
+    await tick();
+    await finishView(take("/view"));
+    await init;
+    passed.push(
+      "Both panels preserve exact established 32-tile cache, one-loader limit, canvas/no-smoothing, render/zoom and gesture controls on every construction",
+    );
+    assert.deepEqual(settings(), {
+      tensor: 0,
+      left: "a",
+      right: "b",
+      mapping: "linear",
+    });
+    assert.equal(
+      get("left-bounds").textContent,
+      get("right-bounds").textContent,
+    );
+    assert(
+      get("provenance").textContent.includes("source-a") &&
+        get("provenance").textContent.includes("source-b"),
+    );
+    assert.equal(get("inspect").disabled, false);
+    passed.push(
+      "Ordered source identities and shared raw A/B scale appear with comparison-only coordinate boundary",
+    );
+    for (const side of ["left", "right"])
+      for (const q of ["a", "b", "delta", "abs_delta"]) {
+        get(side).value = q;
+        await activate();
+        const url = run(`state.viewers.${side}.source.getTileUrl(0,0,0)`);
+        assert(url.startsWith("/api/comparison/tile?"));
+        assert(
+          url.includes("quantity=" + q) &&
+            url.includes("comparison_identity=pair-identity"),
+        );
+        assert.equal(
+          get(side + "-gradient").classes.has("unsigned"),
+          q === "abs_delta",
+        );
+        if (q === "delta")
+          assert(get(side + "-scope").textContent.includes("derived"));
+      }
+    passed.push(
+      "Both panels select every quantity with ordered-identity-bound comparison tile URLs and distinct raw/difference legends",
+    );
+    get("mapping").value = "magnitude";
+    await activate();
+    assert(get("left-gradient").classes.has("unsigned"));
+    get("mapping").value = "asinh";
+    await activate();
+    assert(
+      run("state.viewers.left.source.getTileUrl(0,0,0)").includes(
+        "mapping=asinh",
+      ),
+    );
+    passed.push(
+      "Common magnitude/asinh mapping survives API and tile selection without substituting a rule",
+    );
+    const p1 = run("inspectAt(0,0)"),
+      r1 = take("/inspect"),
+      p2 = run("inspectAt(1,1)"),
+      r2 = take("/inspect");
+    r2.resolve(inspection(0, 1, 1));
+    await p2;
+    const nodes = get("inspection").children;
+    assert.equal(nodes[0].textContent, "Original A · BF16");
+    assert(nodes[1].textContent.startsWith("-0.0"));
+    assert.equal(nodes[4].textContent, "Derived B − A · F64 arithmetic");
+    assert(nodes[5].textContent.includes("no inference edit target"));
+    r1.resolve({
+      ...inspection(),
+      difference: { ...inspection().difference, decimal_f64: "stale" },
+    });
+    await p1;
+    assert(!get("inspection").children.at(-1).textContent.includes("stale"));
+    passed.push(
+      "Inspector preserves signed original, dtype-sized bytes and labeled arithmetic difference; late address response ignored",
+    );
+    const before = pending.length;
+    await run("inspectAt(-1,0)");
+    await run("inspectAt(3,0)");
+    await run("inspectAt(0,0.5)");
+    assert.equal(pending.length, before);
+    get("row").value = "";
+    get("inspect-form").listeners.submit({ preventDefault() {} });
+    assert.equal(pending.length, before);
+    passed.push(
+      "Invalid or empty native coordinates do not request source reads",
+    );
+    const old = run("loadView()"),
+      oldReq = take("/view"),
+      oldSettings = settings();
+    get("left").value = "a";
+    const current = run("loadView()");
+    await finishView(take("/view"));
+    oldReq.resolve(view(oldSettings));
+    await Promise.all([old, current]);
+    assert.equal(run("state.view.legends.left.quantity"), "a");
+    passed.push(
+      "Out-of-order view response cannot replace newer quantity selection",
+    );
+    const stale = run("state.viewers.left"),
+      oldRead = run("inspectAt(0,0)"),
+      readReq = take("/inspect");
+    get("right").value = "b";
+    await activate();
+    readReq.resolve(inspection());
+    await oldRead;
+    assert.equal(get("inspection").textContent, "Choose a native coordinate.");
+    get("error").textContent = "";
+    stale.emit("tile-load-failed");
+    assert.equal(get("error").textContent, "");
+    run("state.viewers.left.emit('tile-load-failed')");
+    assert(get("error").textContent.includes("tile failed"));
+    passed.push(
+      "Rule changes invalidate inspections and obsolete viewer errors while preserving active failures",
+    );
+    const left = run("state.viewers.left"),
+      right = run("state.viewers.right");
+    left.bounds = { x: 0.1, y: 0.2, width: 0.3, height: 0.4 };
+    left.emit("viewport-change");
+    assert.deepEqual(left.bounds, right.bounds);
+    right.bounds = { x: 0.2, y: 0.3, width: 0.4, height: 0.5 };
+    right.emit("viewport-change");
+    assert.deepEqual(left.bounds, right.bounds);
+    left.item.lastDrawn = [{ tile: { level: 2 } }];
+    left.emit("tile-drawn");
+    assert(get("left-resolution").textContent.includes("2 × 2"));
+    passed.push(
+      "Native geometry synchronizes in both directions; actual numeric pooling and partial-edge policy are visible",
+    );
+    get("tensor").value = "1";
+    get("tensor").listeners.change();
+    await finishView(take("/view"));
+    await tick();
+    assert.equal(run("state.viewers.left.source.height"), 1);
+    get("right").value = "delta";
+    await activate();
+    assert(get("right-gradient").classes.has("zero"));
+    assert(get("shape").textContent.includes("unwrapped vector"));
+    passed.push(
+      "Vectors remain one native row and zero-difference scale displays a uniform zero legend",
+    );
+    const bad = run("loadView()");
+    take("/view").resolve({ ...view(), comparison_identity: "wrong" });
+    await bad;
+    assert.equal(run("state.view"), null);
+    assert(get("error").textContent.includes("identity changed"));
+    assert.equal(get("inspect").disabled, false);
+    passed.push(
+      "Mismatched comparison identity refuses colors while leaving original inspection available",
+    );
+    const wrongLegend = run("loadView()");
+    const wl = view();
+    wl.legends.left.quantity = "wrong";
+    take("/view").resolve(wl);
+    await wrongLegend;
+    assert.equal(run("state.view"), null);
+    assert(get("error").textContent.includes("legend mismatch"));
+    passed.push("Wrong quantity legend cannot activate either panel");
+    const rawBad = run("inspectAt(0,0)");
+    const badRaw = inspection(1);
+    badRaw.originals.a.raw_hex_le = "00";
+    take("/inspect").resolve(badRaw);
+    await rawBad;
+    assert(get("error").textContent.includes("inconsistent original"));
+    passed.push("Raw inspector refuses dtype/byte-width inconsistency");
+    const ref = run("refresh()");
+    const unready = {
+      ...model,
+      catalog: model.catalog.map((t) => ({
+        ...t,
+        calibration_complete: false,
+        scales: null,
+      })),
+    };
+    take("/model").resolve(unready);
+    await ref;
+    assert.equal(run("state.view"), null);
+    assert.equal(get("inspect").disabled, false);
+    assert.equal(pending.length, 0);
+    const ir = run("inspectAt(0,0)");
+    const special = inspection(1);
+    special.originals.b = {
+      ...special.originals.b,
+      raw_exact: "Infinity",
+      classification: "infinity",
+    };
+    special.difference = {
+      ...special.difference,
+      decimal_f64: null,
+      value: null,
+      unavailable_reason: "Nonfinite original; difference unavailable",
+    };
+    take("/inspect").resolve(special);
+    await ir;
+    assert(get("inspection").children.at(-1).textContent.includes("Nonfinite"));
+    passed.push(
+      "Uncalibrated pairs make no automatic scan or tile request; nonfinite originals remain inspectable with unavailable difference",
+    );
+    const cal = run("calibrate()"),
+      calReq = take("/calibrate");
+    assert.equal(calReq.options.method, "POST");
+    assert.equal(calReq.options.headers["X-Atlas-Local"], "1");
+    assert(calReq.url.includes("tensor=1") && !calReq.url.includes("all="));
+    calReq.resolve({ ...boundary, queued: 1 }, 202);
+    await cal;
+    const poll = timers.filter(Boolean).at(-1);
+    poll();
+    take("/model").resolve(model);
+    await tick();
+    await finishView(take("/view"));
+    await tick();
+    assert.equal(run("state.view.pair.id"), 1);
+    passed.push(
+      "Explicit calibration queues only the selected pair; completed metadata activates its views",
+    );
+    const untrusted = run("loadView()");
+    take("/view").resolve({ ...view(), inference_editable: true });
+    await untrusted;
+    assert.equal(run("state.view"), null);
+    assert(get("error").textContent.includes("coordinate boundary"));
+    passed.push(
+      "Any inference-editable response is rejected at the comparison boundary",
+    );
+    const html = fs.readFileSync(
+      path.join(__dirname, "../web/comparison.html"),
+      "utf8",
+    );
+    assert(!html.includes("inference.js"));
+    assert(!/["']\/api\/inference/.test(source));
+    assert(
+      /@media\s*\(\s*max-width\s*:\s*720px\s*\)/.test(
+        fs.readFileSync(path.join(__dirname, "../web/comparison.css"), "utf8"),
+      ),
+    );
+    passed.push(
+      "Dedicated page has no inference controller or route; mobile panels stack with wrapping source metadata (static check)",
+    );
+    console.log(
+      JSON.stringify(
+        {
+          status: "PASS",
+          checks: passed.length,
+          source_sha256: crypto
+            .createHash("sha256")
+            .update(source)
+            .digest("hex"),
+          viewer_controls: expectedViewerControls,
+          constructors_checked: viewers.length,
+          scope:
+            "Actual comparison frontend plus deterministic DOM/transport/OSD doubles; no browser rendering or backend qualification",
+          passed,
+        },
+        null,
+        2,
+      ),
+    );
+  })().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  }),
+);

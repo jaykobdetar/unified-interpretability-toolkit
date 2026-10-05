@@ -209,104 +209,106 @@ function scalar(row, col, t = catalog[0]) {
     transformed: { left: 0.5, right: 0.6 },
   };
 }
-(async () => {
-  run(
-    "state.model=fixture;state.tensor=fixture.catalog[0];state.loading=false;state.current={tensor:state.tensor};state.selected=[1,1]",
-  );
-  assert.match(
-    run("tensorDescription(state.tensor).title"),
-    /Layer 0.*Attention queries/,
-  );
-  run("queueHover(64,1);queueHover(64,2);queueHover(64,3)");
-  assert.equal(requests.length, 0);
-  assert.equal(timers.size, 1);
-  fire(140);
-  assert.equal(requests.length, 1);
-  const old = requests.shift();
-  run("queueHover(65,3)");
-  assert(old.options.signal.aborted);
-  fire(140);
-  const fresh = requests.shift();
-  fresh.resolve(scalar(65, 3));
-  await tick();
-  assert.match(
-    get("hover-readout").textContent,
-    /Row 65 · column 3.*native \[65, 3\].*Query head 1.*raw BF16 1/,
-  );
-  old.resolve(scalar(64, 3));
-  await tick();
-  assert.match(get("hover-readout").textContent, /Row 65/);
-  assert.equal(run('state.selected.join(",")'), "1,1");
-  run("queueHover(65,3)");
-  assert.equal(timers.size, 0);
-  assert.equal(requests.length, 0);
-  run("queueHover(66,4)");
-  fire(140);
-  const wrong = requests.shift();
-  wrong.resolve(scalar(66, 5));
-  await tick();
-  assert.match(get("hover-readout").textContent, /does not match/);
-  run("queueHover(67,4)");
-  fire(140);
-  const late = requests.shift();
-  run("cancelHover();state.viewEpoch++");
-  late.resolve(scalar(67, 4));
-  await tick();
-  assert.match(get("hover-readout").textContent, /Hover over/);
-  run("queueHover(-1,0);queueHover(576,0)");
-  assert.equal(requests.length, 0);
-  assert.equal(timers.size, 0);
-  run("state.tensor=fixture.catalog[2];queueHover(0,17)");
-  fire(140);
-  requests.shift().resolve(scalar(0, 17, catalog[2]));
-  await tick();
-  assert.match(
-    get("hover-readout").textContent,
-    /native \[17\].*not applicable/,
-  );
-  run("queueHover(0,18)");
-  fire(140);
-  const expired = requests.shift();
-  fire(2000);
-  assert(expired.options.signal.aborted);
-  expired.resolve(scalar(0, 18, catalog[2]));
-  await tick();
-  assert(!get("hover-readout").textContent.includes("raw BF16 1"));
-  run(
-    `state.tensor={id:9,rows:100000,cols:200000,max_level:18};state.current={tensor:state.tensor};state.viewers.left={world:{getItemCount:()=>1,getItemAt:()=>({viewportToImageCoordinates:(x,y)=>({x,y})})},viewport:{getBounds:()=>({x:50000,y:25000,width:50000,height:25000})}};loadOverview()`,
-  );
-  const image = get("overview-image");
-  assert.match(image.src, /level=8&x=0&y=0/);
-  assert.equal(get("tensor-overview").style.width, "144px");
-  image.onload();
-  assert.equal(get("overview-viewport").style.left, "25%");
-  assert.equal(get("overview-viewport").style.width, "25%");
-  assert.equal(get("overview-viewport").style.top, "25%");
-  assert.equal(get("overview-viewport").style.height, "25%");
-  run("updateViewportBounds()");
-  assert.match(
-    get("viewport-bounds").textContent,
-    /rows 25,000–49,999.*columns 50,000–99,999/,
-  );
-  assert.equal(requests.length, 0);
-  run("clearOverview()");
-  assert(image.hidden);
-  assert(get("overview-viewport").hidden);
-  assert.equal(image.src, undefined);
-  run("bindWelcomeAndTheme()");
-  assert.equal(ctx.document.documentElement.dataset.theme, "dark");
-  get("theme-toggle").listeners.click();
-  assert.equal(storage.get("atlas-theme"), "light");
-  get("dismiss-help").listeners.click();
-  assert(get("welcome").hidden);
-  assert.equal(storage.get("atlas-welcome-dismissed"), "1");
-  get("show-help").listeners.click();
-  assert(!get("welcome").hidden);
-  assert(!storage.has("atlas-welcome-dismissed"));
-  console.log(
-    "PASS: source-bound observed examples; verified row/column head mappings; hover debounce, abort, late response, address validation, vector indices, timeout, no selection mutation; bounded overview and viewport geometry; reversible help/theme. Pure doubles only.",
-  );
-})().catch((e) => {
-  console.error(e);
-  process.exitCode = 1;
-});
+require("./support/async-completion.cjs").requireCompletion(
+  (async () => {
+    run(
+      "state.model=fixture;state.tensor=fixture.catalog[0];state.loading=false;state.current={tensor:state.tensor};state.selected=[1,1]",
+    );
+    assert.match(
+      run("tensorDescription(state.tensor).title"),
+      /Layer 0.*Attention queries/,
+    );
+    run("queueHover(64,1);queueHover(64,2);queueHover(64,3)");
+    assert.equal(requests.length, 0);
+    assert.equal(timers.size, 1);
+    fire(140);
+    assert.equal(requests.length, 1);
+    const old = requests.shift();
+    run("queueHover(65,3)");
+    assert(old.options.signal.aborted);
+    fire(140);
+    const fresh = requests.shift();
+    fresh.resolve(scalar(65, 3));
+    await tick();
+    assert.match(
+      get("hover-readout").textContent,
+      /Row 65 · column 3.*native \[65, 3\].*Query head 1.*raw BF16 1/,
+    );
+    old.resolve(scalar(64, 3));
+    await tick();
+    assert.match(get("hover-readout").textContent, /Row 65/);
+    assert.equal(run('state.selected.join(",")'), "1,1");
+    run("queueHover(65,3)");
+    assert.equal(timers.size, 0);
+    assert.equal(requests.length, 0);
+    run("queueHover(66,4)");
+    fire(140);
+    const wrong = requests.shift();
+    wrong.resolve(scalar(66, 5));
+    await tick();
+    assert.match(get("hover-readout").textContent, /does not match/);
+    run("queueHover(67,4)");
+    fire(140);
+    const late = requests.shift();
+    run("cancelHover();state.viewEpoch++");
+    late.resolve(scalar(67, 4));
+    await tick();
+    assert.match(get("hover-readout").textContent, /Hover over/);
+    run("queueHover(-1,0);queueHover(576,0)");
+    assert.equal(requests.length, 0);
+    assert.equal(timers.size, 0);
+    run("state.tensor=fixture.catalog[2];queueHover(0,17)");
+    fire(140);
+    requests.shift().resolve(scalar(0, 17, catalog[2]));
+    await tick();
+    assert.match(
+      get("hover-readout").textContent,
+      /native \[17\].*not applicable/,
+    );
+    run("queueHover(0,18)");
+    fire(140);
+    const expired = requests.shift();
+    fire(2000);
+    assert(expired.options.signal.aborted);
+    expired.resolve(scalar(0, 18, catalog[2]));
+    await tick();
+    assert(!get("hover-readout").textContent.includes("raw BF16 1"));
+    run(
+      `state.tensor={id:9,rows:100000,cols:200000,max_level:18};state.current={tensor:state.tensor};state.viewers.left={world:{getItemCount:()=>1,getItemAt:()=>({viewportToImageCoordinates:(x,y)=>({x,y})})},viewport:{getBounds:()=>({x:50000,y:25000,width:50000,height:25000})}};loadOverview()`,
+    );
+    const image = get("overview-image");
+    assert.match(image.src, /level=8&x=0&y=0/);
+    assert.equal(get("tensor-overview").style.width, "144px");
+    image.onload();
+    assert.equal(get("overview-viewport").style.left, "25%");
+    assert.equal(get("overview-viewport").style.width, "25%");
+    assert.equal(get("overview-viewport").style.top, "25%");
+    assert.equal(get("overview-viewport").style.height, "25%");
+    run("updateViewportBounds()");
+    assert.match(
+      get("viewport-bounds").textContent,
+      /rows 25,000–49,999.*columns 50,000–99,999/,
+    );
+    assert.equal(requests.length, 0);
+    run("clearOverview()");
+    assert(image.hidden);
+    assert(get("overview-viewport").hidden);
+    assert.equal(image.src, undefined);
+    run("bindWelcomeAndTheme()");
+    assert.equal(ctx.document.documentElement.dataset.theme, "dark");
+    get("theme-toggle").listeners.click();
+    assert.equal(storage.get("atlas-theme"), "light");
+    get("dismiss-help").listeners.click();
+    assert(get("welcome").hidden);
+    assert.equal(storage.get("atlas-welcome-dismissed"), "1");
+    get("show-help").listeners.click();
+    assert(!get("welcome").hidden);
+    assert(!storage.has("atlas-welcome-dismissed"));
+    console.log(
+      "PASS: source-bound observed examples; verified row/column head mappings; hover debounce, abort, late response, address validation, vector indices, timeout, no selection mutation; bounded overview and viewport geometry; reversible help/theme. Pure doubles only.",
+    );
+  })().catch((e) => {
+    console.error(e);
+    process.exitCode = 1;
+  }),
+);

@@ -178,14 +178,16 @@ test("heartbeat only carries existing private ownership", async () => {
   assert.equal(calls[1].b.job_capability, admitted.job_capability);
   assert.ok(!("values" in calls[1].b));
 });
-(async () => {
-  for (const { name, fn } of cases) {
-    await fn();
-    console.log("PASS " + name);
-  }
-  assert.equal(cases.length, 9);
-  console.log("9 client checks passed");
-})().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+require("./support/async-completion.cjs").requireCompletion(
+  (async () => {
+    for (const { name, fn } of cases) {
+      await fn();
+      console.log("PASS " + name);
+    }
+    assert.equal(cases.length, 9);
+    console.log("9 client checks passed");
+  })().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  }),
+);

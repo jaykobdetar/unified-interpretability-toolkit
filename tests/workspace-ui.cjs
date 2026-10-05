@@ -429,371 +429,378 @@ const loaded = async () => {
   await complete(take("/api/view"));
   await tick();
 };
-(async () => {
-  run("bind()");
-  const init = run("refreshModel()");
-  await tick();
-  assert.equal(tensorEvents.at(-1), null);
-  await loaded();
-  await init;
-  assert.equal(tensorEvents.at(-1).id, 11);
-  assert.equal(run("window.atlasAnalyticsBridge.selected().id"), 11);
-  checks.push(
-    "analytics source invalidation and selected-tensor bridge coexist with QoL initialization",
-  );
-  assert.equal(get("tensor-browser").open, false);
-  assert.equal(get("note-controls").disabled, false);
-  assert.equal(get("region-controls").disabled, false);
-  checks.push(
-    "390px mobile initial state and region/note controls initialized (DOM double only)",
-  );
-  get("note-text").value = "local-only secret";
-  click("note-save");
-  click("note-save");
-  assert.equal(storage.size, 1);
-  assert.equal(JSON.parse([...storage.values()][0]).length, 1);
-  assert.equal(get("note-list").children.length, 1);
-  assert(!location.hash.includes("secret"));
-  assert.equal(pending.length, 0);
-  checks.push(
-    "repeated Save updates one private note without a request or URL leak",
-  );
-  const refresh = run("refreshModel()");
-  await tick();
-  assert.equal(tensorEvents.at(-1), null);
-  assert.equal(run("window.atlasAnalyticsBridge.selected()"), null);
-  await loaded();
-  await refresh;
-  assert.equal(get("note-list").children.length, 1);
-  assert(
-    get("note-list").children[0].children[0].textContent.includes("local-only"),
-  );
-  checks.push("same-identity harmless model reload preserves notes");
-  click("bookmark-save");
-  assert.equal(historyEntries.length, 2);
-  click("bookmark-save");
-  assert.equal(historyEntries.length, 2);
-  get("region-r0").value = "1";
-  get("region-r1").value = "2";
-  get("region-c0").value = "1";
-  get("region-c1").value = "3";
-  get("region-r0").listeners.input();
-  await fire(350);
-  assert.equal(historyEntries.length, 2);
-  const savedHash = location.hash;
-  assert(run("AtlasTools.parseBookmark(location.hash).region[0]") === 1);
-  checks.push(
-    "bookmark button makes one entry; repeated clicks and debounced edits do not spam history",
-  );
-  run("selectTensor(13)");
-  await tick();
-  take("/api/tensor-status").resolve(statusUpdate(catalog[2]));
-  await tick();
-  await complete(take("/api/view"));
-  await fire(350);
-  assert.equal(get("note-list").children.length, 0);
-  const vectorHash = location.hash;
-  assert.notEqual(vectorHash, savedHash);
-  const anchorRequests = pending.length;
-  updateLocation("/#workspace");
-  events.hashchange();
-  assert.equal(pending.length, anchorRequests);
-  assert(!get("bookmark-status").textContent.includes("Invalid"));
-  checks.push(
-    "Ordinary section anchors never parse as source bookmarks or reload the view",
-  );
-  updateLocation("/" + savedHash);
-  events.popstate();
-  await loaded();
-  assert.equal(run("state.tensor.id"), 11);
-  assert.equal(get("region-r0").value, "1");
-  assert.equal(get("note-list").children.length, 1);
-  const requestsBefore = pending.length;
-  events.hashchange();
-  assert.equal(pending.length, requestsBefore);
-  checks.push(
-    "back navigation restores tensor/region/notes; duplicate hashchange is ignored",
-  );
-  updateLocation("/" + vectorHash);
-  events.popstate();
-  await loaded();
-  assert.equal(run("state.tensor.id"), 13);
-  assert.equal(get("note-list").children.length, 0);
-  checks.push("forward navigation restores the vector scope");
-  click("bookmark-reset");
-  await loaded();
-  assert.equal(location.hash, "");
-  assert.equal(run("state.tensor.id"), 11);
-  assert.equal(get("region-r0").value, "0");
-  const resetEntries = historyEntries.length;
-  click("bookmark-reset");
-  await loaded();
-  assert.equal(historyEntries.length, resetEntries);
-  checks.push(
-    "reset clears link, cancels prior context and restores default tensor/region without repeated-click history spam",
-  );
-  const first = run("refreshModel()");
-  await tick();
-  take("/api/model").resolve(
-    { code: "backend_unavailable", error: "offline" },
-    503,
-  );
-  await tick();
-  assert(get("read-retry").textContent.includes("Retry 1/2"));
-  const replacement = run("refreshModel()");
-  await tick();
-  await loaded();
-  await replacement;
-  await first;
-  assert.equal(pending.length, 0);
-  assert(!get("read-retry").textContent.includes("Retry"));
-  checks.push(
-    "refresh aborts old retry wait; only newest model/view can activate",
-  );
-  const tile = run("loadView()");
-  const req = take("/api/view"),
-    before = viewers.length;
-  req.resolve(view(currentSettings()));
-  await tick();
-  const pair = viewers.slice(before);
-  pair[0].emit("tile-load-failed");
-  pair.forEach((v) => v.emit("open"));
-  await tile;
-  assert(get("status").textContent.includes("Tile request failed"));
-  checks.push(
-    "tile failure during open cannot be overwritten by active-view status",
-  );
-  const exp = click("region-export");
-  const metadata = take("/api/model");
-  await click("region-export");
-  assert.equal(pending.length, 0);
-  get("left-rule").value = "tensor_linear";
-  const nav = run("loadView()");
-  metadata.resolve(model);
-  await exp;
-  assert.equal(downloads.length, 0);
-  assert.equal(pending.filter((p) => p.url.includes("/api/inspect")).length, 0);
-  await complete(take("/api/view"));
-  await nav;
-  checks.push(
-    "repeated export click launches once; rule change cancels before stale metadata can read cells or download",
-  );
-  const success = click("region-export");
-  take("/api/model").resolve(model);
-  await tick();
-  take("/api/inspect").resolve(inspect(catalog[0], 0, 0, "1"));
-  await tick();
-  take("/api/model").resolve(model);
-  await success;
-  assert.equal(downloads.length, 1);
-  assert((await downloads[0].text()).includes("raw_exact"));
-  checks.push("bounded original cell export completes through Blob download");
-  for (const action of [
-    () => {
-      run("state.selected=[0,0]");
-      click("region-use-cell");
-    },
-    () => get("note-list").children[0].children[1].children[0].click(),
-    () => get("note-list").children[0].children[1].children[1].click(),
-  ]) {
-    const work = click("region-export"),
-      oldMetadata = take("/api/model"),
-      downloadCount = downloads.length;
-    action();
-    oldMetadata.resolve(model);
-    await work;
-    assert.equal(downloads.length, downloadCount);
-    assert.equal(pending.length, 0);
-    assert(
-      get("region-status").textContent.includes("cancelled") ||
-        get("region-status").textContent.includes("selected"),
+require("./support/async-completion.cjs").requireCompletion(
+  (async () => {
+    run("bind()");
+    const init = run("refreshModel()");
+    await tick();
+    assert.equal(tensorEvents.at(-1), null);
+    await loaded();
+    await init;
+    assert.equal(tensorEvents.at(-1).id, 11);
+    assert.equal(run("window.atlasAnalyticsBridge.selected().id"), 11);
+    checks.push(
+      "analytics source invalidation and selected-tensor bridge coexist with QoL initialization",
     );
-  }
-  checks.push(
-    "Use inspected cell, Show pin and note Edit all cancel a pending export before stale callbacks can download",
-  );
-  const readOne = run(
-    "AtlasTools.readJSON('/api/model',{onState:e=>atlasWorkspace.retry(e,'/api/model',undefined,'parallel')})",
-  );
-  take("/api/model").resolve(
-    { code: "backend_unavailable", error: "offline" },
-    503,
-  );
-  await tick();
-  const readTwo = run(
-    "AtlasTools.readJSON('/api/model',{onState:e=>atlasWorkspace.retry(e,'/api/model',undefined,'parallel')})",
-  );
-  take("/api/model").resolve({ api_version: 1 });
-  await readTwo;
-  assert(get("read-retry").textContent.includes("Retry 1/2"));
-  await fire(250);
-  take("/api/model").resolve({ api_version: 1 });
-  await readOne;
-  assert.equal(get("read-retry").textContent, "");
-  checks.push(
-    "concurrent success for the same URL cannot clear another request retry status",
-  );
-  const manualFail = run(
-    "AtlasTools.readJSON('/api/model',{onState:e=>atlasWorkspace.retry(e,'/api/model',undefined,'export')})",
-  );
-  const failedPromise = assert.rejects(manualFail);
-  take("/api/model").reject(new Error("offline"));
-  await failedPromise;
-  assert(get("read-retry").textContent.includes("Automatic retry stopped"));
-  const manualRead = run(
-    "AtlasTools.readJSON('/api/model',{onState:e=>atlasWorkspace.retry(e,'/api/model',undefined,'export')})",
-  );
-  take("/api/model").resolve({ api_version: 1 });
-  await manualRead;
-  assert.equal(get("read-retry").textContent, "");
-  checks.push(
-    "manual retry retires only terminal failures owned by that operation",
-  );
-  get("note-list").children[0].children[1].children[1].click();
-  get("note-text").value = "edited";
-  click("note-save");
-  assert(
-    get("note-list").children[0].children[0].textContent.includes("edited"),
-  );
-  get("note-list").children[0].children[1].children[2].click();
-  assert.equal(get("note-list").children.length, 0);
-  checks.push(
-    "visible edit and delete controls update only scoped local notes",
-  );
-  const pollTimerStart = timers.length;
-  const poll = run("pollStatus()");
-  await fire(1000, pollTimerStart);
-  const stalePoll = take("/api/progress");
-  run("selectTensor(13)");
-  await tick();
-  take("/api/tensor-status").resolve(statusUpdate(catalog[2]));
-  await tick();
-  stalePoll.resolve({ ...statusUpdate(catalog[0]), global_max: 999 });
-  await poll;
-  await complete(take("/api/view"));
-  assert.equal(run("state.model.name"), model.name);
-  assert.equal(run("state.model.global_max"), 34);
-  assert.equal(run("state.tensor.id"), 13);
-  checks.push("navigation aborts polling and ignores stale model responses");
-  const unavailable = run("refreshModel()");
-  await tick();
-  take("/api/model").resolve(
-    { code: "backend_unavailable", error: "still offline" },
-    503,
-  );
-  await tick();
-  await fire(250);
-  take("/api/model").resolve(
-    { code: "backend_unavailable", error: "still offline" },
-    503,
-  );
-  await tick();
-  await fire(750);
-  take("/api/model").resolve(
-    { code: "backend_unavailable", error: "still offline" },
-    503,
-  );
-  await unavailable;
-  assert(get("read-retry").textContent.includes("Automatic retry stopped"));
-  assert(get("status").textContent.includes("unavailable"));
-  assert.equal(pending.length, 0);
-  const manual = run("refreshModel()");
-  await tick();
-  await loaded();
-  await manual;
-  assert.equal(get("read-retry").textContent, "");
-  checks.push(
-    "retry exhaustion stays unavailable and explicit refresh recovers",
-  );
-  click("note-new");
-  get("note-text").value = "only revision A";
-  click("note-save");
-  assert.equal(get("note-list").children.length, 1);
-  const oldNotes = [...storage.entries()];
-  const oldExport = click("region-export"),
-    oldExportMetadata = take("/api/model"),
-    downloadCount = downloads.length;
-  const revisionPoll = run("refreshModel()");
-  await tick();
-  assert.equal(run("state.model"), null);
-  assert.equal(get("note-controls").disabled, true);
-  oldExportMetadata.resolve(model);
-  await oldExport;
-  assert.equal(downloads.length, downloadCount);
-  take("/api/model").resolve({
-    ...model,
-    revision: "fixture-B",
-    model_identity: "e".repeat(64),
-  });
-  await tick();
-  await complete(take("/api/view"));
-  await revisionPoll;
-  assert.equal(run("state.model.revision"), "fixture-B");
-  assert.equal(get("note-list").children.length, 0);
-  assert(get("note-scope").textContent.includes("fixture-B"));
-  assert.deepEqual([...storage.entries()], oldNotes);
-  click("note-new");
-  get("note-text").value = "only revision B";
-  click("note-save");
-  assert.equal(get("note-list").children.length, 1);
-  assert.equal(storage.size, oldNotes.length + 1);
-  const oldRevision = run("refreshModel()");
-  await tick();
-  await loaded();
-  await oldRevision;
-  assert(
-    get("note-list").children[0].children[0].textContent.includes(
-      "only revision A",
-    ),
-  );
-  checks.push(
-    "explicit revision refresh invalidates old loads/exports and notes before adopting equal-geometry metadata; old notes survive separately",
-  );
-  const snapshot = [...storage.entries()];
-  run("state.model={...state.model,revision:'unexpected-stale-context'}");
-  get("note-text").value = "must not attach";
-  click("note-save");
-  click("note-export");
-  assert.deepEqual([...storage.entries()], snapshot);
-  assert.equal(downloads.length, downloadCount);
-  assert(get("note-status").textContent.includes("Model/tensor changed"));
-  run("state.model={...state.model,revision:'fixture'}");
-  checks.push(
-    "note writes and exports independently refuse stale revision context",
-  );
-  updateLocation("/#wa=1&prompt=must-not-apply");
-  events.popstate();
-  await loaded();
-  assert(get("bookmark-status").textContent.includes("Invalid"));
-  assert.equal(pending.length, 0);
-  checks.push("invalid URL state ignored without unsafe coordinate reads");
-  run("state.tensor={...state.tensor,dtype:'F32',element_bytes:4}");
-  get("right-rule").value = "tensor_signed_percentile";
-  assert.equal(run("refuseUnsupportedView()"), true);
-  assert.equal(get("inspect-submit").disabled, false);
-  assert.equal(get("note-controls").disabled, false);
-  assert.equal(get("region-controls").disabled, false);
-  click("note-new");
-  get("note-text").value = "F32 native note";
-  click("note-save");
-  assert(get("note-status").textContent.includes("Saved"));
-  const f32export = click("region-export");
-  take("/api/model").resolve(model);
-  await f32export;
-  assert.equal(pending.length, 0);
-  assert(get("region-status").textContent.includes("Source changed"));
-  checks.push(
-    "F32 native tools remain available; a dtype switch not yet bound to current server metadata refuses before reading cells",
-  );
-  assert.equal(pending.length, 0);
-  console.log(
-    JSON.stringify(
-      { status: "PASS", checks: checks.length, passed: checks },
-      null,
-      2,
-    ),
-  );
-})().catch((e) => {
-  console.error(e);
-  process.exitCode = 1;
-});
+    assert.equal(get("tensor-browser").open, false);
+    assert.equal(get("note-controls").disabled, false);
+    assert.equal(get("region-controls").disabled, false);
+    checks.push(
+      "390px mobile initial state and region/note controls initialized (DOM double only)",
+    );
+    get("note-text").value = "local-only secret";
+    click("note-save");
+    click("note-save");
+    assert.equal(storage.size, 1);
+    assert.equal(JSON.parse([...storage.values()][0]).length, 1);
+    assert.equal(get("note-list").children.length, 1);
+    assert(!location.hash.includes("secret"));
+    assert.equal(pending.length, 0);
+    checks.push(
+      "repeated Save updates one private note without a request or URL leak",
+    );
+    const refresh = run("refreshModel()");
+    await tick();
+    assert.equal(tensorEvents.at(-1), null);
+    assert.equal(run("window.atlasAnalyticsBridge.selected()"), null);
+    await loaded();
+    await refresh;
+    assert.equal(get("note-list").children.length, 1);
+    assert(
+      get("note-list").children[0].children[0].textContent.includes(
+        "local-only",
+      ),
+    );
+    checks.push("same-identity harmless model reload preserves notes");
+    click("bookmark-save");
+    assert.equal(historyEntries.length, 2);
+    click("bookmark-save");
+    assert.equal(historyEntries.length, 2);
+    get("region-r0").value = "1";
+    get("region-r1").value = "2";
+    get("region-c0").value = "1";
+    get("region-c1").value = "3";
+    get("region-r0").listeners.input();
+    await fire(350);
+    assert.equal(historyEntries.length, 2);
+    const savedHash = location.hash;
+    assert(run("AtlasTools.parseBookmark(location.hash).region[0]") === 1);
+    checks.push(
+      "bookmark button makes one entry; repeated clicks and debounced edits do not spam history",
+    );
+    run("selectTensor(13)");
+    await tick();
+    take("/api/tensor-status").resolve(statusUpdate(catalog[2]));
+    await tick();
+    await complete(take("/api/view"));
+    await fire(350);
+    assert.equal(get("note-list").children.length, 0);
+    const vectorHash = location.hash;
+    assert.notEqual(vectorHash, savedHash);
+    const anchorRequests = pending.length;
+    updateLocation("/#workspace");
+    events.hashchange();
+    assert.equal(pending.length, anchorRequests);
+    assert(!get("bookmark-status").textContent.includes("Invalid"));
+    checks.push(
+      "Ordinary section anchors never parse as source bookmarks or reload the view",
+    );
+    updateLocation("/" + savedHash);
+    events.popstate();
+    await loaded();
+    assert.equal(run("state.tensor.id"), 11);
+    assert.equal(get("region-r0").value, "1");
+    assert.equal(get("note-list").children.length, 1);
+    const requestsBefore = pending.length;
+    events.hashchange();
+    assert.equal(pending.length, requestsBefore);
+    checks.push(
+      "back navigation restores tensor/region/notes; duplicate hashchange is ignored",
+    );
+    updateLocation("/" + vectorHash);
+    events.popstate();
+    await loaded();
+    assert.equal(run("state.tensor.id"), 13);
+    assert.equal(get("note-list").children.length, 0);
+    checks.push("forward navigation restores the vector scope");
+    click("bookmark-reset");
+    await loaded();
+    assert.equal(location.hash, "");
+    assert.equal(run("state.tensor.id"), 11);
+    assert.equal(get("region-r0").value, "0");
+    const resetEntries = historyEntries.length;
+    click("bookmark-reset");
+    await loaded();
+    assert.equal(historyEntries.length, resetEntries);
+    checks.push(
+      "reset clears link, cancels prior context and restores default tensor/region without repeated-click history spam",
+    );
+    const first = run("refreshModel()");
+    await tick();
+    take("/api/model").resolve(
+      { code: "backend_unavailable", error: "offline" },
+      503,
+    );
+    await tick();
+    assert(get("read-retry").textContent.includes("Retry 1/2"));
+    const replacement = run("refreshModel()");
+    await tick();
+    await loaded();
+    await replacement;
+    await first;
+    assert.equal(pending.length, 0);
+    assert(!get("read-retry").textContent.includes("Retry"));
+    checks.push(
+      "refresh aborts old retry wait; only newest model/view can activate",
+    );
+    const tile = run("loadView()");
+    const req = take("/api/view"),
+      before = viewers.length;
+    req.resolve(view(currentSettings()));
+    await tick();
+    const pair = viewers.slice(before);
+    pair[0].emit("tile-load-failed");
+    pair.forEach((v) => v.emit("open"));
+    await tile;
+    assert(get("status").textContent.includes("Tile request failed"));
+    checks.push(
+      "tile failure during open cannot be overwritten by active-view status",
+    );
+    const exp = click("region-export");
+    const metadata = take("/api/model");
+    await click("region-export");
+    assert.equal(pending.length, 0);
+    get("left-rule").value = "tensor_linear";
+    const nav = run("loadView()");
+    metadata.resolve(model);
+    await exp;
+    assert.equal(downloads.length, 0);
+    assert.equal(
+      pending.filter((p) => p.url.includes("/api/inspect")).length,
+      0,
+    );
+    await complete(take("/api/view"));
+    await nav;
+    checks.push(
+      "repeated export click launches once; rule change cancels before stale metadata can read cells or download",
+    );
+    const success = click("region-export");
+    take("/api/model").resolve(model);
+    await tick();
+    take("/api/inspect").resolve(inspect(catalog[0], 0, 0, "1"));
+    await tick();
+    take("/api/model").resolve(model);
+    await success;
+    assert.equal(downloads.length, 1);
+    assert((await downloads[0].text()).includes("raw_exact"));
+    checks.push("bounded original cell export completes through Blob download");
+    for (const action of [
+      () => {
+        run("state.selected=[0,0]");
+        click("region-use-cell");
+      },
+      () => get("note-list").children[0].children[1].children[0].click(),
+      () => get("note-list").children[0].children[1].children[1].click(),
+    ]) {
+      const work = click("region-export"),
+        oldMetadata = take("/api/model"),
+        downloadCount = downloads.length;
+      action();
+      oldMetadata.resolve(model);
+      await work;
+      assert.equal(downloads.length, downloadCount);
+      assert.equal(pending.length, 0);
+      assert(
+        get("region-status").textContent.includes("cancelled") ||
+          get("region-status").textContent.includes("selected"),
+      );
+    }
+    checks.push(
+      "Use inspected cell, Show pin and note Edit all cancel a pending export before stale callbacks can download",
+    );
+    const readOne = run(
+      "AtlasTools.readJSON('/api/model',{onState:e=>atlasWorkspace.retry(e,'/api/model',undefined,'parallel')})",
+    );
+    take("/api/model").resolve(
+      { code: "backend_unavailable", error: "offline" },
+      503,
+    );
+    await tick();
+    const readTwo = run(
+      "AtlasTools.readJSON('/api/model',{onState:e=>atlasWorkspace.retry(e,'/api/model',undefined,'parallel')})",
+    );
+    take("/api/model").resolve({ api_version: 1 });
+    await readTwo;
+    assert(get("read-retry").textContent.includes("Retry 1/2"));
+    await fire(250);
+    take("/api/model").resolve({ api_version: 1 });
+    await readOne;
+    assert.equal(get("read-retry").textContent, "");
+    checks.push(
+      "concurrent success for the same URL cannot clear another request retry status",
+    );
+    const manualFail = run(
+      "AtlasTools.readJSON('/api/model',{onState:e=>atlasWorkspace.retry(e,'/api/model',undefined,'export')})",
+    );
+    const failedPromise = assert.rejects(manualFail);
+    take("/api/model").reject(new Error("offline"));
+    await failedPromise;
+    assert(get("read-retry").textContent.includes("Automatic retry stopped"));
+    const manualRead = run(
+      "AtlasTools.readJSON('/api/model',{onState:e=>atlasWorkspace.retry(e,'/api/model',undefined,'export')})",
+    );
+    take("/api/model").resolve({ api_version: 1 });
+    await manualRead;
+    assert.equal(get("read-retry").textContent, "");
+    checks.push(
+      "manual retry retires only terminal failures owned by that operation",
+    );
+    get("note-list").children[0].children[1].children[1].click();
+    get("note-text").value = "edited";
+    click("note-save");
+    assert(
+      get("note-list").children[0].children[0].textContent.includes("edited"),
+    );
+    get("note-list").children[0].children[1].children[2].click();
+    assert.equal(get("note-list").children.length, 0);
+    checks.push(
+      "visible edit and delete controls update only scoped local notes",
+    );
+    const pollTimerStart = timers.length;
+    const poll = run("pollStatus()");
+    await fire(1000, pollTimerStart);
+    const stalePoll = take("/api/progress");
+    run("selectTensor(13)");
+    await tick();
+    take("/api/tensor-status").resolve(statusUpdate(catalog[2]));
+    await tick();
+    stalePoll.resolve({ ...statusUpdate(catalog[0]), global_max: 999 });
+    await poll;
+    await complete(take("/api/view"));
+    assert.equal(run("state.model.name"), model.name);
+    assert.equal(run("state.model.global_max"), 34);
+    assert.equal(run("state.tensor.id"), 13);
+    checks.push("navigation aborts polling and ignores stale model responses");
+    const unavailable = run("refreshModel()");
+    await tick();
+    take("/api/model").resolve(
+      { code: "backend_unavailable", error: "still offline" },
+      503,
+    );
+    await tick();
+    await fire(250);
+    take("/api/model").resolve(
+      { code: "backend_unavailable", error: "still offline" },
+      503,
+    );
+    await tick();
+    await fire(750);
+    take("/api/model").resolve(
+      { code: "backend_unavailable", error: "still offline" },
+      503,
+    );
+    await unavailable;
+    assert(get("read-retry").textContent.includes("Automatic retry stopped"));
+    assert(get("status").textContent.includes("unavailable"));
+    assert.equal(pending.length, 0);
+    const manual = run("refreshModel()");
+    await tick();
+    await loaded();
+    await manual;
+    assert.equal(get("read-retry").textContent, "");
+    checks.push(
+      "retry exhaustion stays unavailable and explicit refresh recovers",
+    );
+    click("note-new");
+    get("note-text").value = "only revision A";
+    click("note-save");
+    assert.equal(get("note-list").children.length, 1);
+    const oldNotes = [...storage.entries()];
+    const oldExport = click("region-export"),
+      oldExportMetadata = take("/api/model"),
+      downloadCount = downloads.length;
+    const revisionPoll = run("refreshModel()");
+    await tick();
+    assert.equal(run("state.model"), null);
+    assert.equal(get("note-controls").disabled, true);
+    oldExportMetadata.resolve(model);
+    await oldExport;
+    assert.equal(downloads.length, downloadCount);
+    take("/api/model").resolve({
+      ...model,
+      revision: "fixture-B",
+      model_identity: "e".repeat(64),
+    });
+    await tick();
+    await complete(take("/api/view"));
+    await revisionPoll;
+    assert.equal(run("state.model.revision"), "fixture-B");
+    assert.equal(get("note-list").children.length, 0);
+    assert(get("note-scope").textContent.includes("fixture-B"));
+    assert.deepEqual([...storage.entries()], oldNotes);
+    click("note-new");
+    get("note-text").value = "only revision B";
+    click("note-save");
+    assert.equal(get("note-list").children.length, 1);
+    assert.equal(storage.size, oldNotes.length + 1);
+    const oldRevision = run("refreshModel()");
+    await tick();
+    await loaded();
+    await oldRevision;
+    assert(
+      get("note-list").children[0].children[0].textContent.includes(
+        "only revision A",
+      ),
+    );
+    checks.push(
+      "explicit revision refresh invalidates old loads/exports and notes before adopting equal-geometry metadata; old notes survive separately",
+    );
+    const snapshot = [...storage.entries()];
+    run("state.model={...state.model,revision:'unexpected-stale-context'}");
+    get("note-text").value = "must not attach";
+    click("note-save");
+    click("note-export");
+    assert.deepEqual([...storage.entries()], snapshot);
+    assert.equal(downloads.length, downloadCount);
+    assert(get("note-status").textContent.includes("Model/tensor changed"));
+    run("state.model={...state.model,revision:'fixture'}");
+    checks.push(
+      "note writes and exports independently refuse stale revision context",
+    );
+    updateLocation("/#wa=1&prompt=must-not-apply");
+    events.popstate();
+    await loaded();
+    assert(get("bookmark-status").textContent.includes("Invalid"));
+    assert.equal(pending.length, 0);
+    checks.push("invalid URL state ignored without unsafe coordinate reads");
+    run("state.tensor={...state.tensor,dtype:'F32',element_bytes:4}");
+    get("right-rule").value = "tensor_signed_percentile";
+    assert.equal(run("refuseUnsupportedView()"), true);
+    assert.equal(get("inspect-submit").disabled, false);
+    assert.equal(get("note-controls").disabled, false);
+    assert.equal(get("region-controls").disabled, false);
+    click("note-new");
+    get("note-text").value = "F32 native note";
+    click("note-save");
+    assert(get("note-status").textContent.includes("Saved"));
+    const f32export = click("region-export");
+    take("/api/model").resolve(model);
+    await f32export;
+    assert.equal(pending.length, 0);
+    assert(get("region-status").textContent.includes("Source changed"));
+    checks.push(
+      "F32 native tools remain available; a dtype switch not yet bound to current server metadata refuses before reading cells",
+    );
+    assert.equal(pending.length, 0);
+    console.log(
+      JSON.stringify(
+        { status: "PASS", checks: checks.length, passed: checks },
+        null,
+        2,
+      ),
+    );
+  })().catch((e) => {
+    console.error(e);
+    process.exitCode = 1;
+  }),
+);

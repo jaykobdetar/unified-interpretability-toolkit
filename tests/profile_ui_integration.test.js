@@ -344,13 +344,15 @@ test("unconfirmed profile cleanup prevents model replacement before any acquire 
   assert.equal(calls, 0);
   assert.equal(host.snapshot().context_id, context.context_id);
 });
-(async () => {
-  for (const { name, fn } of cases) {
-    await fn();
-    console.log("PASS " + name);
-  }
-  console.log(cases.length + " profile UI integration checks passed");
-})().catch((e) => {
-  console.error(e);
-  process.exitCode = 1;
-});
+require("./support/async-completion.cjs").requireCompletion(
+  (async () => {
+    for (const { name, fn } of cases) {
+      await fn();
+      console.log("PASS " + name);
+    }
+    console.log(cases.length + " profile UI integration checks passed");
+  })().catch((e) => {
+    console.error(e);
+    process.exitCode = 1;
+  }),
+);

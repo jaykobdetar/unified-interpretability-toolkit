@@ -139,146 +139,148 @@ vm.runInContext(
   "globalThis.confirmations=0;const originalConfirm=AtlasExperimentLog.prototype.confirmCleanup;AtlasExperimentLog.prototype.confirmCleanup=function(index){confirmations++;return originalConfirm.call(this,index);};globalThis.appended=[];const originalAppend=AtlasExperimentLog.prototype.append;AtlasExperimentLog.prototype.append=function(record){appended.push(JSON.parse(JSON.stringify(record)));return originalAppend.call(this,record);};",
   context,
 );
-(async () => {
-  take("/api/inference").resolve({ model: "fixture", engine: "CPU" });
-  await tick();
-  get("infer-logging").checked = true;
-  const first = submit();
-  take("/start").resolve({
-    session: "interrupted-owner",
-    status: "running",
-    worker_alive: true,
-    steps: [step],
-    details: { prompt_ids: [10, 20, 42] },
-  });
-  await first;
-  take("/poll").reject(new Error("controlled poll loss"));
-  await tick();
-  take("/cancel").resolve({
-    session: "interrupted-owner",
-    status: "stopping",
-    worker_alive: false,
-    steps: [step],
-    details: { cleanup_pending: true, prompt_ids: [10, 20, 42] },
-  });
-  await tick();
-  assert(get("infer-status").textContent.includes("compute stopping"));
-  assert(get("infer-start").disabled);
-  assert(get("infer-log-status").textContent.includes("1 / 8"));
-  const records = () => JSON.parse(JSON.stringify(context.appended));
-  let saved = records();
-  assert.equal(saved.length, 1);
-  assert.equal(saved[0].status, "connection_lost");
-  assert.equal(saved[0].worker_cleanup_confirmed, false);
-  assert.equal(saved[0].termination, "transport_error");
-  assert(!JSON.stringify(saved).includes("private synthetic input"));
-  assert(!Object.hasOwn(saved[0].steps[0], "input_token_id"));
-  await submit();
-  assert.equal(requests.length, 0);
-  await fire();
-  let req = take("/poll");
-  assert.equal(JSON.parse(req.options.body).session, "interrupted-owner");
-  req.reject(new Error("second controlled status loss"));
-  await tick();
-  assert(get("infer-start").disabled);
-  assert.equal(records().length, 1);
-  await fire();
-  take("/poll").resolve({
-    session: "interrupted-owner",
-    status: "stopping",
-    worker_alive: false,
-    steps: [step],
-    details: { cleanup_pending: true },
-  });
-  await tick();
-  assert(get("infer-start").disabled);
-  assert.equal(records().length, 1);
-  assert.equal(records()[0].worker_cleanup_confirmed, false);
-  assert.equal(context.confirmations, 0);
-  await fire();
-  take("/poll").resolve({
-    ...terminal("interrupted-owner", "cancelled"),
-    steps: [step],
-  });
-  await tick();
-  assert(!get("infer-start").disabled);
-  click("export-log");
-  let file = JSON.parse(downloads.at(-1));
-  assert.equal(file.records.length, 1);
-  assert.equal(file.records[0].status, "connection_lost");
-  assert.equal(file.records[0].complete, false);
-  assert.equal(file.records[0].worker_cleanup_confirmed, true);
-  assert.equal(context.confirmations, 1);
-  assert(!Object.hasOwn(file.records[0].steps[0], "input_token_id"));
-  const second = submit();
-  take("/start").resolve({
-    session: "next-owner",
-    status: "running",
-    worker_alive: true,
-    steps: [],
-    details: {},
-  });
-  await second;
-  take("/poll").resolve(terminal("next-owner"));
-  await tick();
-  click("export-log");
-  file = JSON.parse(downloads.at(-1));
-  assert.deepEqual(
-    file.records.map((r) => r.status),
-    ["connection_lost", "complete"],
-  );
-  assert(!downloads.at(-1).includes("interrupted-owner"));
-  assert(!downloads.at(-1).includes("private synthetic input"));
-  // A lost cancellation response also retains ownership. A later running status retries owned cancellation.
-  const third = submit();
-  take("/start").resolve({
-    session: "unknown-cleanup",
-    status: "running",
-    worker_alive: true,
-    steps: [],
-    details: {},
-  });
-  await third;
-  take("/poll").reject(new Error("poll lost"));
-  await tick();
-  take("/cancel").reject(new Error("cancel lost"));
-  await tick();
-  assert(get("infer-start").disabled);
-  assert.equal(records().length, 3);
-  assert.equal(records()[2].worker_cleanup_confirmed, false);
-  await fire();
-  take("/poll").resolve({
-    session: "unknown-cleanup",
-    status: "running",
-    worker_alive: true,
-    steps: [],
-    details: {},
-  });
-  await tick();
-  req = take("/cancel");
-  assert.equal(JSON.parse(req.options.body).session, "unknown-cleanup");
-  req.resolve({
-    session: "unknown-cleanup",
-    status: "stopping",
-    worker_alive: true,
-    steps: [],
-    details: { cleanup_pending: true },
-  });
-  await tick();
-  assert(get("infer-start").disabled);
-  await fire();
-  take("/poll").resolve(terminal("unknown-cleanup", "cancelled"));
-  await tick();
-  click("export-log");
-  file = JSON.parse(downloads.at(-1));
-  assert.equal(file.records.length, 3);
-  assert.equal(file.records[2].worker_cleanup_confirmed, true);
-  assert.equal(file.records[2].status, "connection_lost");
-  assert.equal(requests.length, 0);
-  console.log(
-    "PASS OBS-2: owned cleanup survives poll/cancel transport loss; one incomplete consent-redacted outcome; cleanup confirmation updates in place; next run preserves prior outcome",
-  );
-})().catch((e) => {
-  console.error(e);
-  process.exitCode = 1;
-});
+require("./support/async-completion.cjs").requireCompletion(
+  (async () => {
+    take("/api/inference").resolve({ model: "fixture", engine: "CPU" });
+    await tick();
+    get("infer-logging").checked = true;
+    const first = submit();
+    take("/start").resolve({
+      session: "interrupted-owner",
+      status: "running",
+      worker_alive: true,
+      steps: [step],
+      details: { prompt_ids: [10, 20, 42] },
+    });
+    await first;
+    take("/poll").reject(new Error("controlled poll loss"));
+    await tick();
+    take("/cancel").resolve({
+      session: "interrupted-owner",
+      status: "stopping",
+      worker_alive: false,
+      steps: [step],
+      details: { cleanup_pending: true, prompt_ids: [10, 20, 42] },
+    });
+    await tick();
+    assert(get("infer-status").textContent.includes("compute stopping"));
+    assert(get("infer-start").disabled);
+    assert(get("infer-log-status").textContent.includes("1 / 8"));
+    const records = () => JSON.parse(JSON.stringify(context.appended));
+    let saved = records();
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].status, "connection_lost");
+    assert.equal(saved[0].worker_cleanup_confirmed, false);
+    assert.equal(saved[0].termination, "transport_error");
+    assert(!JSON.stringify(saved).includes("private synthetic input"));
+    assert(!Object.hasOwn(saved[0].steps[0], "input_token_id"));
+    await submit();
+    assert.equal(requests.length, 0);
+    await fire();
+    let req = take("/poll");
+    assert.equal(JSON.parse(req.options.body).session, "interrupted-owner");
+    req.reject(new Error("second controlled status loss"));
+    await tick();
+    assert(get("infer-start").disabled);
+    assert.equal(records().length, 1);
+    await fire();
+    take("/poll").resolve({
+      session: "interrupted-owner",
+      status: "stopping",
+      worker_alive: false,
+      steps: [step],
+      details: { cleanup_pending: true },
+    });
+    await tick();
+    assert(get("infer-start").disabled);
+    assert.equal(records().length, 1);
+    assert.equal(records()[0].worker_cleanup_confirmed, false);
+    assert.equal(context.confirmations, 0);
+    await fire();
+    take("/poll").resolve({
+      ...terminal("interrupted-owner", "cancelled"),
+      steps: [step],
+    });
+    await tick();
+    assert(!get("infer-start").disabled);
+    click("export-log");
+    let file = JSON.parse(downloads.at(-1));
+    assert.equal(file.records.length, 1);
+    assert.equal(file.records[0].status, "connection_lost");
+    assert.equal(file.records[0].complete, false);
+    assert.equal(file.records[0].worker_cleanup_confirmed, true);
+    assert.equal(context.confirmations, 1);
+    assert(!Object.hasOwn(file.records[0].steps[0], "input_token_id"));
+    const second = submit();
+    take("/start").resolve({
+      session: "next-owner",
+      status: "running",
+      worker_alive: true,
+      steps: [],
+      details: {},
+    });
+    await second;
+    take("/poll").resolve(terminal("next-owner"));
+    await tick();
+    click("export-log");
+    file = JSON.parse(downloads.at(-1));
+    assert.deepEqual(
+      file.records.map((r) => r.status),
+      ["connection_lost", "complete"],
+    );
+    assert(!downloads.at(-1).includes("interrupted-owner"));
+    assert(!downloads.at(-1).includes("private synthetic input"));
+    // A lost cancellation response also retains ownership. A later running status retries owned cancellation.
+    const third = submit();
+    take("/start").resolve({
+      session: "unknown-cleanup",
+      status: "running",
+      worker_alive: true,
+      steps: [],
+      details: {},
+    });
+    await third;
+    take("/poll").reject(new Error("poll lost"));
+    await tick();
+    take("/cancel").reject(new Error("cancel lost"));
+    await tick();
+    assert(get("infer-start").disabled);
+    assert.equal(records().length, 3);
+    assert.equal(records()[2].worker_cleanup_confirmed, false);
+    await fire();
+    take("/poll").resolve({
+      session: "unknown-cleanup",
+      status: "running",
+      worker_alive: true,
+      steps: [],
+      details: {},
+    });
+    await tick();
+    req = take("/cancel");
+    assert.equal(JSON.parse(req.options.body).session, "unknown-cleanup");
+    req.resolve({
+      session: "unknown-cleanup",
+      status: "stopping",
+      worker_alive: true,
+      steps: [],
+      details: { cleanup_pending: true },
+    });
+    await tick();
+    assert(get("infer-start").disabled);
+    await fire();
+    take("/poll").resolve(terminal("unknown-cleanup", "cancelled"));
+    await tick();
+    click("export-log");
+    file = JSON.parse(downloads.at(-1));
+    assert.equal(file.records.length, 3);
+    assert.equal(file.records[2].worker_cleanup_confirmed, true);
+    assert.equal(file.records[2].status, "connection_lost");
+    assert.equal(requests.length, 0);
+    console.log(
+      "PASS OBS-2: owned cleanup survives poll/cancel transport loss; one incomplete consent-redacted outcome; cleanup confirmation updates in place; next run preserves prior outcome",
+    );
+  })().catch((e) => {
+    console.error(e);
+    process.exitCode = 1;
+  }),
+);
