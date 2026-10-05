@@ -5,6 +5,7 @@ import argparse
 import ast
 import os
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -109,6 +110,39 @@ def require_version(name, command, expected):
         raise RuntimeError(f"{name} version {actual!r}; required {expected!r}")
 
 
+def require_minimum_version(name, command, minimum):
+    actual = subprocess.check_output(command, cwd=ROOT, text=True, timeout=30).strip()
+    version = re.search(r"(?<!\d)(\d+)\.(\d+)\.(\d+)(?!\d)", actual)
+    if version is None or tuple(map(int, version.groups())) < tuple(
+        map(int, minimum.split("."))
+    ):
+        raise RuntimeError(f"{name} version {actual!r}; minimum {minimum!r}")
+
+
+def formatter_files():
+    if (ROOT / ".git").exists():
+        files = (
+            subprocess.check_output(
+                ["git", "ls-files", "-z", "tools", "tests", "web"], cwd=ROOT
+            )
+            .decode()
+            .split("\0")
+        )
+    else:
+        files = [
+            str(path.relative_to(ROOT))
+            for base in ("tools", "tests", "web")
+            for path in (ROOT / base).rglob("*")
+            if path.is_file()
+        ]
+    return sorted(
+        path
+        for path in files
+        if path
+        and not {"vendor", "node_modules", "__pycache__"}.intersection(Path(path).parts)
+    )
+
+
 def format_checks(dev_python):
     pins = json.loads((ROOT / "dev/versions.json").read_text())
     if not dev_python.is_file():
@@ -120,13 +154,19 @@ def format_checks(dev_python):
         raise RuntimeError(
             "required Prettier is missing; run the documented npm ci command"
         )
-    commands = [
+    minimums = pins["runtime_minimums"]
+    for name, command, minimum in [
         (
             "Python",
             [sys.executable, "-c", "import platform; print(platform.python_version())"],
-            pins["python"],
+            minimums["python"],
         ),
-        ("Node", ["node", "--version"], "v" + pins["node"]),
+        ("Node", ["node", "--version"], minimums["node"]),
+        ("rustc", ["rustc", "--version"], minimums["rustc"]),
+        ("cargo", ["cargo", "--version"], minimums["cargo"]),
+    ]:
+        require_minimum_version(name, command, minimum)
+    commands = [
         (
             "Black",
             [str(dev_python), "-c", "import black; print(black.__version__)"],
@@ -136,19 +176,13 @@ def format_checks(dev_python):
     ]
     for name, command, expected in commands:
         require_version(name, command, expected)
-    for name in ("rustc", "cargo", "rustfmt"):
+    for name in ("rustfmt",):
         actual = subprocess.check_output(
             [name, "--version"], cwd=ROOT, text=True, timeout=30
         ).strip()
         if not actual.startswith(f"{name} {pins[name]} "):
             raise RuntimeError(f"{name} version {actual!r}; required {pins[name]!r}")
-    tracked = (
-        subprocess.check_output(
-            ["git", "ls-files", "-z", "tools", "tests", "web"], cwd=ROOT
-        )
-        .decode()
-        .split("\0")
-    )
+    tracked = formatter_files()
     python = [
         p for p in tracked if p.endswith(".py") and p != "tools/behaviour_lock.py"
     ]

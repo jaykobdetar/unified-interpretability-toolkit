@@ -10,7 +10,7 @@ After installing the pinned optional development tools below, run the same comma
 python3 tools/check.py all
 ```
 
-`all` requires the exact qualified versions in `dev/versions.json`, checks formatter output, and runs every original syntax/contract/Rust/smoke/launcher check plus the dense regression suite. It also runs ordinary debug `cargo test` and release tests with four libtest threads, while the existing build guard retains one CPU and one Cargo build job. Required tools, wrong versions and failed checks are fatal; nothing is skipped. Existing `python3 tools/check.py lint` and `python3 tools/check.py contracts` remain available without installing formatter or browser packages. `format` checks only formatter output; `--dev-python` selects the isolated pinned Black interpreter.
+`all` requires Python 3.12+, Node 22+ and Rust/Cargo 1.92+, with exact Black, Prettier and rustfmt versions from `dev/versions.json`. It checks formatter output and runs every original syntax/contract/Rust/smoke/launcher check plus the dense regression suite. It also runs ordinary debug `cargo test` and release tests with four libtest threads, while the existing build guard retains one CPU and one Cargo build job. Required tools, unsupported versions and failed checks are fatal; nothing is skipped. Existing `python3 tools/check.py lint` and `python3 tools/check.py contracts` remain available without installing formatter or browser packages. `format` checks only formatter output; `--dev-python` selects the isolated pinned Black interpreter. Git checkouts select tracked formatter files; source archives without `.git` select the same first-party trees and exclusions directly, without requiring Git.
 
 `lint` AST-parses first-party Python, syntax-checks first-party JavaScript with Node, and checks the launcher shell syntax. It is not a Python style or type checker. Clippy treats Rust warnings as errors. `contracts` lists its selected Python/Node files and runs every declared scenario for the asynchronous UI tests. Tests use mocks and tiny synthetic fixtures; they do not launch browsers or load trained models. The smoke test independently checks 26 exact source values and native/pooled PNG outputs across seven rules; other rules and dtype/slice behavior have dedicated Rust/contract coverage.
 
@@ -70,7 +70,7 @@ Optional browser gap checks use the existing resource guard. `tests/held-link-br
 The formatter and browser development dependencies are isolated from runtime dependencies. `dev/versions.json` records the qualified tool versions. Install the hash-pinned Black wheels in a local CPython 3.12 virtual environment, and install the npm lockfile without lifecycle scripts or browser downloads:
 
 ```bash
-python3 -m venv qualification/dev/black-26.1.0
+python3.12 -m venv qualification/dev/black-26.1.0
 qualification/dev/black-26.1.0/bin/python -m pip install --require-hashes -r dev/requirements-format.txt
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm --prefix dev ci --ignore-scripts
 ```
