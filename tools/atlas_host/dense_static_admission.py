@@ -22,21 +22,24 @@ REVISION='93efa2f097d58c2a74874c7e644dbc9b0cee75a2'
 CONFIG_SHA='1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843'
 WEIGHTS_SHA='80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1'
 PRIOR_TINY_SHA='645285c4c06a3525ed02e85484e1ef08f566b614bd40ac7bb9af1b7767d74ccd'
-QUALIFIED_READER_SHA='76c82c15a18497226fc90d6516ef54efd6c78b571a9aae46c40a5a12fbb99b9a'
-# Accepted reader native inputs; host-only changes do not relabel this proof.
+QUALIFIED_READER_SHA=None  # Combined reader qualification is pending.
+# Exact combined native inputs; matching bytes do not qualify a reader.
 NATIVE_SOURCE_PINS={'Cargo.lock': '36e31907d27773a3781dd6f012428204abe7da611625b20344e0572e67e06daf',
  'Cargo.toml': '179b96b488b8bda8dce3632708de2acdf1150641a0316979c87afaf6fe7c0004',
  'src/comparison.rs': 'd666ebb1441690429d6a81e6add0885dc8e8d86cec01b815939af45c95f3223c',
  'src/comparison_http.rs': '27866e03b02ff26aa4019ec5c68e1f3775386256a668ae2a7c280d93f7f2b098',
  'src/hosted_renderer.rs': '49cd8c6144c46c7286758b0947b2d8a41ca447f12152585c41fefb28780ef6dd',
- 'src/lib.rs': '22b0c64e920465eeb37153bb35d12dca50b823c4452b78150f569d9cdd28c479',
- 'src/main.rs': 'dbfffaa2cac8ad053a322cbc72edf7a88314d235deec777391dddeee6280ebb3',
+ 'src/lib.rs': '27f0029c1568d7d7f4add2f3b9191f21a0bc8c9661eb676bc02f38f221f80b54',
+ 'src/main.rs': '43dd07ce6abe2ad5da970d69697f03a38a020f911bb11dcca375d0dfb6fcea45',
  'src/profile_worker.rs': 'd9c9b07928e8b2b070568d71af79285973d4aa1380963e8ee6c19b1a5fdd38c6',
- 'src/render.rs': '475f148ed3d54329112853234e6fee2d3069e4abb66bbad70f6fa4ab14e12659',
- 'src/server.rs': '2a8549a669e6a09d991aa6cf1a59316961766e615a41c8c37fa4736c512266c2',
+ 'src/render.rs': '6552ecde66c90b88cf9e340f4ab89fed51bdfa94fbb30041929c891f131d2544',
+ 'src/resources.rs': '83f8f46daa2d45361e8b6bc7e7d916fd587ea16e6018b3eac51f057afb074aa8',
+ 'src/server.rs': 'fb0d9f433b65ab2eb74a9f7b7037523b01ab684d7e1e49179a02bbe6f17d2456',
+ 'src/server/reuse.rs': '999877634e9a8b119991ed49bbbb3c2bfd50cf4b3d14421f3c6f5296473e5cfa',
+ 'src/server/reuse_transport.rs': '336750cf1c4de3ca4d714c93e4597fc4fc42ebc7b8496b4278bba6220708f73f',
  'src/slice.rs': 'bd4e64f2161f9af1a696d179770a200fed940cc1bd356fda3bb5b68bb0b9d815',
  'src/source.rs': '13ed5932eeb2a54387f358fbf4f50ca31b9ba7a9b361237005eb6c059ee524a7',
- 'src/state.rs': '081498ff92b46f374ac0cb06603fe4cd015c9c5101bbe7a8d4acff952c98166a',
+ 'src/state.rs': '948d840cf9f2b71a3293e63e2ec6d4000386e83b9a7e98e4a1586a4d162b55ff',
  'src/strength.rs': 'ac76cb5c4018fd088b30e61f46179a1a10673a2e7b9fd04db6593f16b0f2fc8e',
  'src/strength/snapshot.rs': '4f9387541756d5e9a3ba48aa47b6332e383814dc1aa202df663b5157ccb2475c'}
 _SEAL=object()
@@ -473,6 +476,7 @@ def bind_dense_policy(path,approved_sha,registry,cache,binary_path):
     Absence is closed. No registration, license insertion, filesystem experiment,
     model payload hashing or real-model qualification is performed here.
     """
+    require(QUALIFIED_READER_SHA is not None,'Combined native reader qualification pending')
     root=package_root();path=Path(path)
     policy,identity=_verified(path,approved_sha,32768,json_artifact=True)
     fields(policy,('version','policy','enabled','model_id','owner_receipt_sha256','filesystem_receipt_sha256','source_recipe_sha256','native_binary_sha256'))

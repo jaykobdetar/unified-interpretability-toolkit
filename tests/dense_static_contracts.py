@@ -134,6 +134,14 @@ class PolicyTests(unittest.TestCase):
         file.write_bytes(canonical(owner));binary.write_bytes(b'different')
         with self.assertRaises(ValueError):policy.bind_dense_policy(file,H(owner),self.registry,self.fs['cache']['canonical_root'],binary)
 
+    def test_pending_combined_reader_refuses_before_any_bundle_or_owner_read(self):
+        with patch.object(policy,'QUALIFIED_READER_SHA',None), \
+                patch.object(policy,'_verified',side_effect=AssertionError('No pending bundle read')) as verified:
+            with self.assertRaisesRegex(ValueError,'Combined native reader qualification pending'):
+                policy.bind_dense_policy(self.root/'absent-policy.json','a'*64,self.registry,
+                                         self.fs['cache']['canonical_root'],self.root/'absent-reader')
+            verified.assert_not_called();self.registry.owner_receipt.assert_not_called()
+
     def test_pin_and_license_dictionaries_do_not_create_authority(self):
         policy.target_entry(self.entry)
         for change in [lambda e:e.update(enabled=False),lambda e:e['manifest'].update(revision='b'*40),
