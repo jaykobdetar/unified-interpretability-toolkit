@@ -1,0 +1,141 @@
+{
+  "source_commit": "9d99410f061c0130f2ed15be194a2f587a920060",
+  "excluded_headers": [
+    "Date",
+    "Server"
+  ],
+  "responses": {
+    "empty_catalog": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "208",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"api_version\":1,\"downloads_enabled\":false,\"inference_enabled\":false,\"lease_capacity\":4,\"models\":[],\"profiles_enabled\":false,\"reader_capacity\":1,\"registry_revision\":0,\"static_views_enabled\":false,\"version\":1}"
+    },
+    "disabled_fixture_catalog": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "208",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"api_version\":1,\"downloads_enabled\":false,\"inference_enabled\":false,\"lease_capacity\":4,\"models\":[],\"profiles_enabled\":false,\"reader_capacity\":1,\"registry_revision\":1,\"static_views_enabled\":false,\"version\":1}"
+    },
+    "enabled_fixture_catalog": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "737",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"api_version\":1,\"downloads_enabled\":false,\"inference_enabled\":false,\"lease_capacity\":4,\"models\":[{\"fixture_eligible\":true,\"hash_provenance\":\"synthetic_fixture\",\"inference_ready\":false,\"license\":\"Apache-2.0\",\"model_id\":\"m_f1ac2dd2d4a15e76bb690afb40e70c31df9bedb841772afd6be8f27f95875141\",\"name\":\"Public tiny fixture\",\"reader_state\":\"closed\",\"repository\":\"weight-atlas/tiny-bf16\",\"revision\":\"fixture-v1\",\"source_bytes\":244,\"state\":\"verified_pending_renderer\",\"static_activation_allowed\":false,\"static_view_candidate\":false,\"static_view_ready\":false,\"verification\":\"saved_hash_receipt_and_current_fingerprint\",\"view_ready\":false}],\"profiles_enabled\":false,\"reader_capacity\":1,\"registry_revision\":2,\"static_views_enabled\":false,\"version\":1}"
+    },
+    "disabled_inference": {
+      "status_line": "HTTP/1.0 503 Service Unavailable",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "108",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"api_version\": 1, \"code\": \"disabled\", \"error\": \"Inference and analytics are disabled in fixture host mode\"}"
+    },
+    "disabled_analytics": {
+      "status_line": "HTTP/1.0 503 Service Unavailable",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "108",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"api_version\": 1, \"code\": \"disabled\", \"error\": \"Inference and analytics are disabled in fixture host mode\"}"
+    },
+    "unavailable_route": {
+      "status_line": "HTTP/1.0 404 Not Found",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "93",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"api_version\": 1, \"code\": \"not_found\", \"error\": \"Route is unavailable in fixture host mode\"}"
+    },
+    "acquire_fixture": {
+      "status_line": "HTTP/1.0 202 Accepted",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "285",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"api_version\":1,\"capability\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"lease_seconds\":15,\"model_id\":\"m_f1ac2dd2d4a15e76bb690afb40e70c31df9bedb841772afd6be8f27f95875141\",\"state\":\"starting\",\"view_kind\":\"fixture\"}"
+    },
+    "selected_model": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "1099",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"api_version\":1,\"catalog\":[{\"dtype\":\"BF16\",\"id\":0,\"name\":\"matrix\",\"shape\":[3,5],\"shard\":\"tiny.safetensors\"},{\"dtype\":\"BF16\",\"id\":1,\"name\":\"vector\",\"shape\":[7],\"shard\":\"tiny.safetensors\"},{\"dtype\":\"BF16\",\"id\":2,\"name\":\"zeros\",\"shape\":[4],\"shard\":\"tiny.safetensors\"}],\"content_digest\":\"f1ac2dd2d4a15e76bb690afb40e70c31df9bedb841772afd6be8f27f95875141\",\"host_context\":{\"context_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"model_id\":\"m_f1ac2dd2d4a15e76bb690afb40e70c31df9bedb841772afd6be8f27f95875141\",\"model_identity\":\"8ed1d0849ec8789dcb97f10c72f5bd85a7db81173ea7754e6b65264b033b7bfa\",\"source_identity\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"identity_validation\":\"Owner-registered synthetic fixture; current file identity checked. Saved calibration is separate from source hash verification.\",\"inference_editable\":false,\"model_identity\":\"8ed1d0849ec8789dcb97f10c72f5bd85a7db81173ea7754e6b65264b033b7bfa\",\"parameter_count\":26,\"revision\":\"fixture-v1\",\"source_bytes\":244,\"source_identity\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"view_kind\":\"fixture\"}"
+    },
+    "active_catalog": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "736",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"api_version\":1,\"downloads_enabled\":false,\"inference_enabled\":false,\"lease_capacity\":4,\"models\":[{\"fixture_eligible\":true,\"hash_provenance\":\"synthetic_fixture\",\"inference_ready\":false,\"license\":\"Apache-2.0\",\"model_id\":\"m_f1ac2dd2d4a15e76bb690afb40e70c31df9bedb841772afd6be8f27f95875141\",\"name\":\"Public tiny fixture\",\"reader_state\":\"active\",\"repository\":\"weight-atlas/tiny-bf16\",\"revision\":\"fixture-v1\",\"source_bytes\":244,\"state\":\"verified_pending_renderer\",\"static_activation_allowed\":false,\"static_view_candidate\":false,\"static_view_ready\":false,\"verification\":\"saved_hash_receipt_and_current_fingerprint\",\"view_ready\":true}],\"profiles_enabled\":false,\"reader_capacity\":1,\"registry_revision\":2,\"static_views_enabled\":false,\"version\":1}"
+    },
+    "heartbeat": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "84",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"api_version\":1,\"context_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"lease_seconds\":15}"
+    },
+    "release": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "57",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"api_version\":1,\"cleanup_pending\":false,\"released\":true}"
+    },
+    "stale_heartbeat": {
+      "status_line": "HTTP/1.0 409 Conflict",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "92",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"api_version\": 1, \"code\": \"stale_context\", \"error\": \"Reader lease expired or is not owned\"}"
+    }
+  }
+}
