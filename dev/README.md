@@ -25,3 +25,5 @@ python3 tools/check.py all
 ```
 
 See [the static-check scope](STATIC-CHECKS.md) for selected rules, two explicit oracle-hook scope exceptions and type-check limits. `static` runs these checks alone. `--ruff` can select another existing exact Ruff executable. The no-install `lint` and `contracts` entrypoints remain available.
+
+The full runner builds the release binary before running the complete release test suite. Cold production compilation and test-target compilation/execution therefore use separate existing 140-second command budgets. Both checks remain mandatory; either failure stops the runner. CPU affinity, one build job, offline locked vendor inputs, memory/address-space/disk guards, test threads and smoke/launcher checks are unchanged. A warm retry or cache-assisted run is not a cold-build timing claim.

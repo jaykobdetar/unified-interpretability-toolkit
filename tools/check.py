@@ -299,10 +299,10 @@ def main() -> None:
     guard = [sys.executable, "-B", "tools/guarded-build.py"]
     run([*guard, "clippy", "--all-targets", "--", "-D", "warnings"], timeout=140)
     run([*guard, "test"], extra_env={"RUST_TEST_THREADS": "4"}, timeout=140)
+    run([*guard, "build", "--release"], timeout=140)
     run(
         [*guard, "test", "--release"], extra_env={"RUST_TEST_THREADS": "4"}, timeout=140
     )
-    run([*guard, "build", "--release"], timeout=140)
     run([sys.executable, "-B", "tools/smoke.py"])
     run(["./run-atlas.sh", "--demo", "--check"])
     print("PASS: unified pinned development and CI checks")

@@ -1,6 +1,7 @@
 """Development runner runtime bounds and equivalent archive formatter scope."""
 
 import sys
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -11,6 +12,63 @@ import check
 
 
 class DevelopmentChecks(unittest.TestCase):
+    def run_full_with(self, runner):
+        with (
+            patch.object(sys, "argv", ["check.py", "all"]),
+            patch.object(check, "format_checks"),
+            patch.object(check, "static_checks"),
+            patch.object(check, "lint"),
+            patch.object(check, "contracts"),
+            patch.object(check, "run", side_effect=runner),
+        ):
+            check.main()
+
+    def test_release_build_and_tests_keep_separate_original_budgets(self):
+        calls = []
+        self.run_full_with(lambda command, **options: calls.append((command, options)))
+        build = next(
+            i
+            for i, (command, _) in enumerate(calls)
+            if command[-2:] == ["build", "--release"]
+        )
+        test = next(
+            i
+            for i, (command, _) in enumerate(calls)
+            if command[-2:] == ["test", "--release"]
+        )
+        self.assertLess(
+            build,
+            test,
+            "Cold release build must precede the retained release test stage",
+        )
+        self.assertEqual(calls[build][1], {"timeout": 140})
+        self.assertEqual(
+            calls[test][1], {"extra_env": {"RUST_TEST_THREADS": "4"}, "timeout": 140}
+        )
+        self.assertEqual(
+            sum(command[-2:] == ["build", "--release"] for command, _ in calls), 1
+        )
+        self.assertEqual(
+            sum(command[-2:] == ["test", "--release"] for command, _ in calls), 1
+        )
+
+    def test_release_build_timeout_stops_before_tests_and_smoke(self):
+        calls = []
+
+        def timeout(command, **options):
+            calls.append(command)
+            if command[-2:] == ["build", "--release"]:
+                raise subprocess.TimeoutExpired(command, options["timeout"])
+
+        with self.assertRaises(subprocess.TimeoutExpired) as failure:
+            self.run_full_with(timeout)
+        self.assertEqual(failure.exception.timeout, 140)
+        self.assertFalse(
+            any(command[-2:] == ["test", "--release"] for command in calls)
+        )
+        self.assertFalse(any("tools/smoke.py" in command for command in calls))
+        self.assertEqual(calls[-1][-2:], ["build", "--release"])
+
     def test_runtime_versions_accept_minimum_and_newer_refuse_older_or_unknown(self):
         cases = [
             ("3.12.0", "3.12.0", True),
