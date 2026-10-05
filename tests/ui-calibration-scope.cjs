@@ -1,9 +1,7 @@
 'use strict';
 // Pure DOM/transport regression for the independent mixed-catalog finding.
-const fs=require('node:fs'),path=require('node:path'),{createRequire}=require('node:module');
-const fixture=path.resolve('tests/ui-contract-races.cjs');
-const setup=fs.readFileSync(fixture,'utf8').split('(async()=>{')[0];
-new Function('require','__dirname',setup+`
+const {createFixture}=require('./support/ui-fixture.cjs');
+const {fs,vm,assert,crypto,path,source,Element,elements,get,pending,viewers,frames,timers,OSD,context,run,copy,tick,take,tensor,catalog,model,statusUpdate,currentSettings,view,inspect,complete,activate,passed}=createFixture();
 const packed={id:99,name:'packed.weight',dtype:'I32',element_bytes:4,shape:[1],rows:1,cols:1,count:1,max_level:0,min_level:0,available:false,unavailable_reason:'Quantization semantics unsupported',calibration_complete:false,max_abs:null};
 const mixed={...model,calibration_complete:false,global_max:null,catalog:[...catalog,packed],parameter_count:model.parameter_count+1,coverage:{...model.coverage,statistics_complete:false,all_requested:false,active_tensor:null}};
 context.fixture=mixed;
@@ -36,4 +34,3 @@ context.fixture=mixed;
  assert.equal(pending.length,0);
  console.log('PASS: mixed catalog global unavailability, completed/pending/empty supported subsets, local view remains usable, global rules remain disabled, and no redundant calibration job. Pure DOM doubles only.');
 })().catch(e=>{console.error(e);process.exitCode=1;});
-`)(createRequire(fixture),path.dirname(fixture));

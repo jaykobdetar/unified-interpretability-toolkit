@@ -1,14 +1,11 @@
 'use strict';
 // Actual app.js -> publishInferenceSelection -> inference.js DOM handoff.
 // Valid calibration/inspection responses only; no browser, model or network.
-const fs=require('node:fs'),path=require('node:path'),{createRequire}=require('node:module');
-const fixture=path.resolve('tests/ui-contract-races.cjs');
+const {createFixture}=require('./support/ui-fixture.cjs');
+const path=require('node:path');
 const appSource=path.resolve(process.env.ATLAS_TEST_APP_SOURCE||'web/app.js');
-const setup=fs.readFileSync(fixture,'utf8').split('(async()=>{')[0].replace(
- "const source=fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');",
- 'const source=fs.readFileSync('+JSON.stringify(appSource)+',"utf8");');
+const {fs,vm,assert,crypto,source,Element,elements,get,pending,viewers,frames,timers,OSD,context,run,copy,tick,take,tensor,catalog,model,statusUpdate,currentSettings,view,inspect,complete,activate,passed}=createFixture({appSource});
 const pendingFirstRead=process.argv[2]==='pending-first-read';
-new Function('require','__dirname','pendingFirstRead',setup+`
 (async()=>{
  Element.prototype.getContext=function(){return {clearRect(){},fillRect(){}};};
  context.window.addEventListener=()=>{};
@@ -49,4 +46,3 @@ new Function('require','__dirname','pendingFirstRead',setup+`
  run("state.model.inference_source_model={...state.model.inference_source_model,weights_sha256:'different'}");await inspectForm(q,'0.25');assert.equal(get('infer-head').disabled,true);assert(get('infer-selection').textContent.includes('no verified edit mapping'));
  assert.equal(pending.length,0);console.log(JSON.stringify({status:'PASS',pending_first_read:pendingFirstRead,checks:5,scope:'Actual raw-inspect form and callback across first calibration; O columns512:576; Q rows64:128; tensor switch clears; changed source remains disabled; DOM/transport only',app_sha256:crypto.createHash('sha256').update(source).digest('hex')},null,2));
 })().catch(e=>{console.error(e);process.exitCode=1;});
-`)(createRequire(fixture),path.dirname(fixture),pendingFirstRead);

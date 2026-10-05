@@ -1,12 +1,9 @@
 'use strict';
-// Reuse only the deterministic DOM/transport setup. Run production readiness
-// handlers with reversed response order; no server, worker or network traffic.
-const fs=require('node:fs'),path=require('node:path'),{createRequire}=require('node:module');
-const fixture=path.resolve('tests/inference-availability.cjs');
-const setup=fs.readFileSync(fixture,'utf8').split('(async()=>{')[0];
+// Readiness ordering with a fresh deterministic inference DOM/transport fixture.
+const {createFixture}=require('./support/inference-fixture.cjs');
+const {fs,vm,assert,source,Element,elems,get,timers,requests,context,tick,take,click,submit}=createFixture();
 const scenario=process.argv[2]||'busy';
 if(!['busy','failure','finally','session'].includes(scenario))throw Error('Unknown scenario');
-new Function('require','scenario',setup+`
 (async()=>{
  const idle={model:'fixture',engine:'fixture',busy:false};
  const busy={...idle,busy:true,busy_owner:'analytics job',queue_capacity:0};
@@ -40,4 +37,3 @@ new Function('require','scenario',setup+`
  }
  console.log(JSON.stringify({status:'PASS',scenario,scope:'Pure DOM/transport only; readiness and session generations'}));
 })().catch(e=>{console.error(e);process.exitCode=1;});
-`)(createRequire(fixture),scenario);

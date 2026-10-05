@@ -1,9 +1,7 @@
 'use strict';
 // Real prepareTensor with DOM/OSD/transport doubles; no listener or numeric work.
-const fs=require('node:fs'),path=require('node:path'),{createRequire}=require('node:module');
-const fixture=path.resolve('tests/ui-contract-races.cjs');
-const setup=fs.readFileSync(fixture,'utf8').split('(async()=>{')[0];
-new Function('require','__dirname',setup+`
+const {createFixture}=require('./support/ui-fixture.cjs');
+const {fs,vm,assert,crypto,path,source,Element,elements,get,pending,viewers,frames,timers,OSD,context,run,copy,tick,take,tensor,catalog,model,statusUpdate,currentSettings,view,inspect,complete,activate,passed}=createFixture();
 (async()=>{
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../web/atlas-tools.js'),'utf8'),context);
  const bound=[];
@@ -41,4 +39,3 @@ new Function('require','__dirname',setup+`
  assert.equal(bound.length,2,'Both states retain verified profile binding setup');
  console.log(JSON.stringify({status:'PASS',checks:6,scope:'Uncalibrated hosted raw inspection and owner-only calibration; calibrated metadata opens both real view paths; no automatic calibration or profile work; DOM/transport doubles only'}));
 })().catch(e=>{console.error(e);process.exitCode=1;});
-`)(createRequire(fixture),path.dirname(fixture));

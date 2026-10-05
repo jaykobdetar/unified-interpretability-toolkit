@@ -1,12 +1,10 @@
 'use strict';
 // Reuse the repository's DOM/OSD doubles; all source-binding checks are real.
 // Extends the independently reviewed first-view schedules to a pending raw read.
-const fs=require('node:fs'),path=require('node:path'),{createRequire}=require('node:module');
-const fixture=path.resolve('tests/ui-contract-races.cjs');
-const setup=fs.readFileSync(fixture,'utf8').split('(async()=>{')[0];
+const {createFixture}=require('./support/ui-fixture.cjs');
+const {fs,vm,assert,crypto,path,source,Element,elements,get,pending,viewers,frames,timers,OSD,context,run,copy,tick,take,tensor,catalog,model,statusUpdate,currentSettings,view,inspect,complete,activate,passed}=createFixture();
 const scenario=process.argv[2];
 if(!['restore','prior-pin','newer-complete','newer-pending','cancel-before','cancel-opening','tensor-change','binding-mismatch'].includes(scenario))throw Error('Unknown scenario');
-new Function('require','__dirname','scenario',setup+`
 (async()=>{
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../web/atlas-tools.js'),'utf8'),context);
  model.source_identity='a'.repeat(64);model.model_identity='b'.repeat(64);model.calibration_complete=false;catalog[0].calibration_complete=false;
@@ -48,4 +46,3 @@ new Function('require','__dirname','scenario',setup+`
  }
  assert.equal(pending.length,0,'No automatic retry loop');console.log(JSON.stringify({status:'PASS',scenario,app_sha256:crypto.createHash('sha256').update(source).digest('hex'),scope:'Pending first-view intent, real source binding, cancellation/tensor/newer-selection precedence; pure DOM/transport'}));
 })().catch(e=>{console.error(e);process.exitCode=1;});
-`)(createRequire(fixture),path.dirname(fixture),scenario);

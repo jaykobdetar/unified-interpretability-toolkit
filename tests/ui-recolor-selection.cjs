@@ -1,12 +1,10 @@
 'use strict';
 // Existing DOM/OSD/transport plumbing, with explicit interleaving of an
 // analytics Jump and viewer open completion. No browser or analytics job.
-const fs=require('node:fs'),path=require('node:path'),{createRequire}=require('node:module');
-const fixture=path.resolve('tests/ui-contract-races.cjs');
-const setup=fs.readFileSync(fixture,'utf8').split('(async()=>{')[0];
+const {createFixture}=require('./support/ui-fixture.cjs');
+const {fs,vm,assert,crypto,path,source,Element,elements,get,pending,viewers,frames,timers,OSD,context,run,copy,tick,take,tensor,catalog,model,statusUpdate,currentSettings,view,inspect,complete,activate,passed}=createFixture();
 const scenario=process.argv[2]||'successful';
 if(!['successful','pending'].includes(scenario))throw Error('Unknown scenario');
-new Function('require','__dirname','scenario',setup+`
 (async()=>{
  run('bind()');const init=run('refreshModel()');await tick();take('/api/model').resolve(model);await tick();await complete(take('/api/view'));await init;
  const pin=run('inspectAt(1,1)');take('/api/inspect').resolve(inspect(catalog[0],1,1,'0.125'));await pin;
@@ -25,4 +23,3 @@ new Function('require','__dirname','scenario',setup+`
  assert.equal(pending.length,0);
  console.log(JSON.stringify({status:'PASS',scenario,selected:copy(run('state.selected')),scope:'Pure DOM/OSD/transport only; latest explicit selection owns raw value and edit handoff'}));
 })().catch(e=>{console.error(e);process.exitCode=1;});
-`)(createRequire(fixture),path.dirname(fixture),scenario);

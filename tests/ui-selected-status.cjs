@@ -1,9 +1,7 @@
 'use strict';
 // Selected-status races, with the actual app state machine and fake transport.
-const fs=require('node:fs'),path=require('node:path'),{createRequire}=require('node:module');
-const fixture=path.resolve('tests/ui-contract-races.cjs');
-const setup=fs.readFileSync(fixture,'utf8').split('(async()=>{')[0];
-new Function('require','__dirname',setup+`
+const {createFixture}=require('./support/ui-fixture.cjs');
+const {fs,vm,assert,crypto,path,source,Element,elements,get,pending,viewers,frames,timers,OSD,context,run,copy,tick,take,tensor,catalog,model,statusUpdate,currentSettings,view,inspect,complete,activate,passed}=createFixture();
 (async()=>{
  context.fixture=model;run('bind();populateModel(fixture,null)');
  const older=run('selectTensor(12)');await tick();const old=take('/api/tensor-status');
@@ -20,4 +18,3 @@ new Function('require','__dirname',setup+`
  assert.equal(run('state.tensor.max_abs'),34);assert.equal(pending.length,0);
  console.log('PASS: older tensor status and same-ID reselection status cannot replace the latest selection or reopen a stale view. Pure DOM/transport only.');
 })().catch(e=>{console.error(e);process.exitCode=1;});
-`)(createRequire(fixture),path.dirname(fixture));

@@ -1,9 +1,7 @@
 'use strict';
 // Reuse deterministic DOM/OSD transport doubles; no browser/network/model reads.
-const fs=require('node:fs'),path=require('node:path'),{createRequire}=require('node:module');
-const fixture=path.resolve('tests/ui-contract-races.cjs');
-const setup=fs.readFileSync(fixture,'utf8').split('(async()=>{')[0];
-new Function('require','__dirname',setup+`
+const {createFixture}=require('./support/ui-fixture.cjs');
+const {fs,vm,assert,crypto,path,source,Element,elements,get,pending,viewers,frames,timers,OSD,context,run,copy,tick,take,tensor,catalog,model,statusUpdate,currentSettings,view,inspect,complete,activate,passed}=createFixture();
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../web/atlas-tools.js'),'utf8'),context);
 const high={id:21,name:'rank3',dtype:'BF16',element_bytes:2,shape:[2,3,4],rows:3,cols:4,count:24,max_level:2,min_level:0,available:true,calibration_complete:true,max_abs:12};
 context.fixture={...model,source_identity:'a'.repeat(64),model_identity:'b'.repeat(64),catalog:[high],parameter_count:24};
@@ -29,4 +27,3 @@ async function openSlice(p){const r=take('/api/view'),before=viewers.length;r.re
  assert.equal(pending.length,0);assert.match(get('status').textContent,/Quantization/);assert(get('inspect-submit').disabled);
  console.log('PASS: explicit slice picker gate; slice-bound view/tile/inspect; full native indices; no higher-rank inference handoff; stale slice reply rejection; unavailable tensor leaves no fabricated view. Pure DOM doubles only.');
 })().catch(e=>{console.error(e);process.exitCode=1;});
-`)(createRequire(fixture),path.dirname(fixture));

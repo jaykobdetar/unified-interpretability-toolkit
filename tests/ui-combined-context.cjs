@@ -1,15 +1,12 @@
 'use strict';
 // Combined source: pending raw selection must not cross a slice or model lease.
 // Real app/binding code; deterministic DOM, OSD and transport doubles only.
-const fs=require('node:fs'),path=require('node:path'),{createRequire}=require('node:module');
-const fixture=path.resolve('tests/ui-contract-races.cjs');
+const {createFixture}=require('./support/ui-fixture.cjs');
+const path=require('node:path');
 const appSource=path.resolve(process.env.ATLAS_TEST_APP_SOURCE||'web/app.js');
-const setup=fs.readFileSync(fixture,'utf8').split('(async()=>{')[0].replace(
- "const source=fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');",
- 'const source=fs.readFileSync('+JSON.stringify(appSource)+',"utf8");');
+const {fs,vm,assert,crypto,source,Element,elements,get,pending,viewers,frames,timers,OSD,context,run,copy,tick,take,tensor,catalog,model,statusUpdate,currentSettings,view,inspect,complete,activate,passed}=createFixture({appSource});
 const scenario=process.argv[2];
 if(!['slice-change','model-refresh','host-reopen'].includes(scenario))throw Error('Unknown scenario');
-new Function('require','__dirname','scenario',setup+`
 (async()=>{
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../web/atlas-tools.js'),'utf8'),context);
  const high={id:21,name:'rank3',dtype:'BF16',element_bytes:2,shape:[2,3,4],rows:3,cols:4,count:24,max_level:2,min_level:0,available:true,calibration_complete:false,max_abs:12,slice:[1]};
@@ -41,4 +38,3 @@ new Function('require','__dirname','scenario',setup+`
  if(scenario==='slice-change')assert.match(viewers.at(-1).source.getTileUrl(2,0,0),/slice=0/);
  console.log(JSON.stringify({status:'PASS',scenario,scope:'Pending raw read cleared by actual slice apply or model refresh; late old response cannot restore a pin; model/lease epoch and native slice remain distinct'}));
 })().catch(e=>{console.error(e);process.exitCode=1;});
-`)(createRequire(fixture),path.dirname(fixture),scenario);
