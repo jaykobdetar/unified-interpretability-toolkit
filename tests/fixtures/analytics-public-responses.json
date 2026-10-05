@@ -1,0 +1,97 @@
+{
+  "source_commit": "9d99410f061c0130f2ed15be194a2f587a920060",
+  "excluded_headers": [
+    "Date",
+    "Server"
+  ],
+  "responses": {
+    "idle_metadata": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "447",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"available\": true, \"busy\": false, \"limits\": {\"jobs\": 1, \"queue\": 0, \"values\": 65536, \"axis\": 4096, \"svd_axis\": 64, \"svd_values\": 4096, \"wall_seconds\": 5, \"svd_summary\": {\"schema\": \"weight-atlas.svd-window-summary.v2\", \"axis\": 128, \"values\": 16384, \"preview_axis\": 16, \"body_bytes\": 63488}, \"output_bytes\": 2095104, \"worker_address_space_mib\": 768}, \"coverage\": \"Explicit selected window or bounded catalog prefix; no full-model claim by default\"}"
+    },
+    "inference_busy_metadata": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "446",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"available\": true, \"busy\": true, \"limits\": {\"jobs\": 1, \"queue\": 0, \"values\": 65536, \"axis\": 4096, \"svd_axis\": 64, \"svd_values\": 4096, \"wall_seconds\": 5, \"svd_summary\": {\"schema\": \"weight-atlas.svd-window-summary.v2\", \"axis\": 128, \"values\": 16384, \"preview_axis\": 16, \"body_bytes\": 63488}, \"output_bytes\": 2095104, \"worker_address_space_mib\": 768}, \"coverage\": \"Explicit selected window or bounded catalog prefix; no full-model claim by default\"}"
+    },
+    "inference_busy_start": {
+      "status_line": "HTTP/1.0 409 Conflict",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "90",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"error\": \"Local compute busy; wait for the active job to finish\", \"code\": \"compute_busy\"}"
+    },
+    "poll_without_owner": {
+      "status_line": "HTTP/1.0 409 Conflict",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "52",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"error\": \"Stale analysis job\", \"code\": \"stale_job\"}"
+    },
+    "running_start": {
+      "status_line": "HTTP/1.0 202 Accepted",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "171",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"job\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"status\": \"running\", \"result\": null, \"error\": null, \"cleanup_pending\": false, \"worker_alive\": true, \"peak_worker_rss_mib\": 0.0}"
+    },
+    "complete_poll": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "3807",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"job\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"status\": \"complete\", \"result\": {\"schema\": \"weight-atlas.analytics.v1\", \"source_identity\": \"d273b309ec5ee7bf431eef0e86486281c79d66897c048138f25ad36e1fb00282\", \"tensor\": \"fixture\", \"shape\": [2, 3], \"region\": {\"row\": 0, \"col\": 0, \"rows\": 2, \"cols\": 3}, \"cache_key\": \"858e9455f9c78632a7d49c0f700e059cac1160569ac5c04f1c44fc5b3c47cc5c\", \"coverage\": {\"visited_values\": 6, \"total_tensor_values\": 6, \"full_tensor\": true, \"full_model\": false, \"scope\": \"native region\", \"coordinate_source\": \"direct source values\"}, \"control\": {\"kind\": \"same-region-exact-multiset\", \"seed\": 1, \"algorithm\": \"xorshift32-rejection-fisher-yates-v1\", \"zero_seed_alias\": 1831565813, \"position_to_source\": [0, 5, 2, 1, 4, 3], \"statistics\": \"refit separately for original and control\", \"calibration\": \"raw values; shared display scale; no fitted transform\", \"caution\": \"A shuffle alone does not establish pattern meaning. Sorting can manufacture gradients.\"}, \"original\": {\"rows\": [{\"index\": 0, \"mean_abs\": 1.0, \"count\": 3}, {\"index\": 1, \"mean_abs\": 5.0, \"count\": 3}], \"columns\": [{\"index\": 0, \"mean_abs\": 2.5, \"count\": 2}, {\"index\": 1, \"mean_abs\": 3.5, \"count\": 2}, {\"index\": 2, \"mean_abs\": 3.0, \"count\": 2}], \"row_order\": [1, 0], \"column_order\": [1, 2, 0], \"top_values\": [{\"index\": 5, \"row\": 1, \"col\": 2, \"native_indices\": [1, 2], \"value\": -6.0, \"abs\": 6.0}, {\"index\": 4, \"row\": 1, \"col\": 1, \"native_indices\": [1, 1], \"value\": 5.0, \"abs\": 5.0}, {\"index\": 3, \"row\": 1, \"col\": 0, \"native_indices\": [1, 0], \"value\": 4.0, \"abs\": 4.0}, {\"index\": 1, \"row\": 0, \"col\": 1, \"native_indices\": [0, 1], \"value\": -2.0, \"abs\": 2.0}, {\"index\": 0, \"row\": 0, \"col\": 0, \"native_indices\": [0, 0], \"value\": 1.0, \"abs\": 1.0}, {\"index\": 2, \"row\": 0, \"col\": 2, \"native_indices\": [0, 2], \"value\": 0.0, \"abs\": 0.0}], \"top_rows\": [{\"index\": 1, \"mean_abs\": 5.0, \"count\": 3}, {\"index\": 0, \"mean_abs\": 1.0, \"count\": 3}], \"top_columns\": [{\"index\": 1, \"mean_abs\": 3.5, \"count\": 2}, {\"index\": 2, \"mean_abs\": 3.0, \"count\": 2}, {\"index\": 0, \"mean_abs\": 2.5, \"count\": 2}], \"vector\": null, \"folded\": null}, \"shuffled\": {\"rows\": [{\"index\": 0, \"mean_abs\": 2.3333333333333335, \"count\": 3}, {\"index\": 1, \"mean_abs\": 3.6666666666666665, \"count\": 3}], \"columns\": [{\"index\": 0, \"mean_abs\": 1.5, \"count\": 2}, {\"index\": 1, \"mean_abs\": 5.5, \"count\": 2}, {\"index\": 2, \"mean_abs\": 2.0, \"count\": 2}], \"row_order\": [1, 0], \"column_order\": [1, 2, 0], \"top_values\": [{\"index\": 1, \"row\": 0, \"col\": 1, \"value\": -6.0, \"abs\": 6.0, \"control_position\": [0, 1], \"source_native_indices\": [1, 2]}, {\"index\": 4, \"row\": 1, \"col\": 1, \"value\": 5.0, \"abs\": 5.0, \"control_position\": [1, 1], \"source_native_indices\": [1, 1]}, {\"index\": 5, \"row\": 1, \"col\": 2, \"value\": 4.0, \"abs\": 4.0, \"control_position\": [1, 2], \"source_native_indices\": [1, 0]}, {\"index\": 3, \"row\": 1, \"col\": 0, \"value\": -2.0, \"abs\": 2.0, \"control_position\": [1, 0], \"source_native_indices\": [0, 1]}, {\"index\": 0, \"row\": 0, \"col\": 0, \"value\": 1.0, \"abs\": 1.0, \"control_position\": [0, 0], \"source_native_indices\": [0, 0]}, {\"index\": 2, \"row\": 0, \"col\": 2, \"value\": 0.0, \"abs\": 0.0, \"control_position\": [0, 2], \"source_native_indices\": [0, 2]}], \"top_rows\": [{\"index\": 1, \"mean_abs\": 3.6666666666666665, \"count\": 3}, {\"index\": 0, \"mean_abs\": 2.3333333333333335, \"count\": 3}], \"top_columns\": [{\"index\": 1, \"mean_abs\": 5.5, \"count\": 2}, {\"index\": 2, \"mean_abs\": 2.0, \"count\": 2}, {\"index\": 0, \"mean_abs\": 1.5, \"count\": 2}], \"vector\": null, \"folded\": null}, \"heads\": {\"available\": false, \"reason\": \"Missing or invalid local layout evidence; head labels disabled\"}, \"svd\": {\"available\": false, \"reason\": \"Optional isolated NumPy worker has not run\"}, \"tensor_id\": 0, \"host_source_identity\": \"trusted-fixture\"}, \"error\": null, \"cleanup_pending\": false, \"worker_alive\": false, \"peak_worker_rss_mib\": 0.0}"
+    },
+    "second_running_start": {
+      "status_line": "HTTP/1.0 202 Accepted",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "171",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"job\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"status\": \"running\", \"result\": null, \"error\": null, \"cleanup_pending\": false, \"worker_alive\": true, \"peak_worker_rss_mib\": 0.0}"
+    },
+    "cancelled": {
+      "status_line": "HTTP/1.0 200 OK",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "174",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      },
+      "body_utf8": "{\"job\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"status\": \"cancelled\", \"result\": null, \"error\": null, \"cleanup_pending\": false, \"worker_alive\": false, \"peak_worker_rss_mib\": 0.0}"
+    }
+  }
+}
