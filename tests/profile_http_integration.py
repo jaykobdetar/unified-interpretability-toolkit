@@ -101,7 +101,11 @@ class Integration(unittest.TestCase):
             h = self.handler("/viewer.js", enabled=enabled)
             h.handle_action()
             script = self.sent[-1][1]
-            self.assertEqual(re.search(rb"\broot\s*\.\s*AtlasProfiles\s*=\s*api\b", script) is not None, enabled)
+            self.assertEqual(
+                re.search(rb"\broot\s*\.\s*AtlasProfiles\s*=\s*api\b", script)
+                is not None,
+                enabled,
+            )
         self.assertEqual(
             production_capabilities(),
             {"profiles_enabled": False, "resume_available": False},
