@@ -11,8 +11,9 @@ Dense admission binds one exact owner-approved SmolLM2-135M source to the review
 | Configuration SHA-256 | `1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843` |
 | Weights SHA-256 | `80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1` |
 | Inherited source-lane reader binary SHA-256 | `76c82c15a18497226fc90d6516ef54efd6c78b571a9aae46c40a5a12fbb99b9a` |
+| Combined qualified-reader binary SHA-256 | `44c36b079b3c3a6a9cc3eee3df2b0e7fa5cb703e2df749cca07c18ef9d25db5d` |
 
-The binary pin above records the accepted source lane's reader. The integrated source pins cover the exact combined Rust/Cargo inputs, including resource and connection-reuse modules; matching them supplies no reader qualification. The combined qualified-reader digest is unset, and admission refuses before reading an owner bundle until separate combined-source review and reader qualification are accepted.
+The inherited binary pin records the earlier source lane's reader. The combined reader has its own naming-source build, served-asset proof and synthetic hosted correspondence. The final integration changed only the reviewed Python reader-digest literal; its native inputs and embedded assets are byte-identical to that build. Exact final source/recipe/reader correspondence was separately reviewed, and the bounded pinned Smol browser result uses that same binary. Native source pins alone supply no qualification or activation authority.
 
 Admission then also requires the complete current owner receipt, closed filesystem/source receipts and separately supplied bundle approval. Replacing the reader requires separate review and qualification. Saved owner hashes and current fingerprints are not presented as fresh payload hashing.
 
@@ -46,4 +47,4 @@ Cache preflight checks the existing lock without writing; native open repeats an
 
 ## Remaining gates
 
-The exact completed lifecycle was accepted and ended disabled. Actual browser picker/raw-inspection behavior, optional color preparation, calibration, arbitrary model admission and production enablement need separate scope and authorization. GPU inference at stored precision, measured fit, resident inference restoration and real small-Qwen qualification remain separate work. Static BF16 inspection does not qualify those behaviors or silently change existing FP32 experiment receipts.
+The earlier exact lifecycle ended disabled. The later bounded browser check completed explicit picker selection and one raw scalar across two contexts, followed by verified disable and policy removal. Pagehide delivery, optional color preparation, calibration, arbitrary model admission and production enablement still need separate scope and authorization. GPU inference at stored precision, measured fit, resident inference restoration and real small-Qwen qualification remain separate work. Static BF16 inspection does not qualify those behaviors or silently change existing FP32 experiment receipts.
