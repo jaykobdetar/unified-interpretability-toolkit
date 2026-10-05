@@ -15,7 +15,7 @@ assert(/^http:\/\/127\.0\.0\.1:\d+$/.test(base));assert(out);assert(['desktop','
  try{
   await page.goto(base);await ready();await expect(page.locator('#welcome')).toBeVisible();
   const model=await (await context.request.get(base+'/api/model')).json();
-  assert.equal(await page.title(),'Weight Atlas · '+model.name);
+  assert.equal(await page.title(),'Unified Interpretability Toolkit · '+model.name);
   if(phase!=='inference'){
    await expect(page.locator('#inference-panel')).toBeHidden();await expect(page.locator('#mode-status')).toContainText('inference unavailable');checks.push('Viewer-only server hides unavailable experiments and loads the actual model name');
   }
