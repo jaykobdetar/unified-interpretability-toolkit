@@ -2,8 +2,16 @@
 import unittest
 from types import SimpleNamespace
 from acceptance.owner_client import OwnerClient, clean, parity
+from acceptance.render_contract import assert_render_rules
 
 class OwnerTests(unittest.TestCase):
+    def test_combined_renderer_rule_contract(self):
+        ids=['global_linear','global_asinh','tensor_linear','tensor_asinh','tensor_magnitude','tensor_magnitude_asinh','tensor_robust99','tensor_signed_percentile']
+        assert_render_rules({'rules':[{'id':rule} for rule in ids]})
+        faults=[ids[:-1],ids+[ids[0]],[ids[0],*ids[2:],ids[0]],['unknown',*ids[1:]],list(reversed(ids))]
+        for fault in faults:
+            with self.subTest(ids=fault),self.assertRaises(AssertionError):
+                assert_render_rules({'rules':[{'id':rule} for rule in fault]})
     def client(self,responses):
         clock=SimpleNamespace(now=0.);calls=[]
         def transport(action,data):calls.append((action,data));return responses.pop(0)

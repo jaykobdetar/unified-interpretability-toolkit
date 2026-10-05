@@ -26,6 +26,8 @@ Numerical references such as `tests/parity.py`, `tests/data_view_reference.py`, 
 
 The core browser harness uses the viewer's A/B selector at mobile widths. It checks that each selected panel is visible and paints, that the inactive panel is hidden, and captures both panels sequentially without changing the production layout.
 
+Combined API acceptance checks the exact eight renderer rule IDs in their public order, including `tensor_magnitude_asinh`. Its pure contract cases reject missing, extra, duplicated, renamed or reordered IDs; historical seven-rule acceptance does not describe the current renderer contract.
+
 Run one heavy build/browser/model workload at a time. Existing guards retain one CPU, build 2 GiB address space, browser-specific aggregate caps, workload time limits, memory stop reserves, and the 25 GiB free-disk reserve. Do not extend a job or replace an uncertain owner automatically. Every harness must stop/reap its own processes and preserve failed/partial outcomes honestly. [Acceptance harness instructions](../tests/acceptance/README.md) describe optional model cases and their limits.
 
 Local model tests use `ATLAS_SMOL_MODEL`, `ATLAS_QWEN_MODEL`, and `ATLAS_CPU_PYTHON`; no machine paths are built in. The numeric analytics harness always includes the synthetic fixture and explicitly reports which optional models were not selected. The ownership harness requires `ATLAS_SMOL_MODEL`. Historical head-ablation phase-B reuse requires an explicitly supplied `ATLAS_PHASE_A_EVIDENCE` archive with its original file hashes; it is not needed by the ordinary combined workflow or CI.

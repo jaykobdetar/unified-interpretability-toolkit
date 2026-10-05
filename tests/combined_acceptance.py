@@ -3,6 +3,7 @@ import argparse,hashlib,json,math,os,struct,sys,time,urllib.request,urllib.error
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'tests/acceptance'));sys.path.insert(0,str(ROOT/'tools'))
 from owner_client import OwnerClient,clean,parity
+from render_contract import assert_render_rules
 from inference_edits import SOURCE_MODEL
 from live_inference import verify_model
 p=argparse.ArgumentParser();p.add_argument('--base',required=True);p.add_argument('--model',type=Path,required=True);p.add_argument('--out',type=Path,required=True);args=p.parse_args();args.out.mkdir(parents=True,exist_ok=False)
@@ -22,7 +23,7 @@ def save():
  text=json.dumps(checks,indent=2)+'\n';assert len(text.encode())<1024**2;(args.out/'progress.json').write_text(text)
 
 try:
- verify_model(args.model);metadata=api('/api/model');assert metadata['inference_source_model']==SOURCE_MODEL;assert len(metadata['rules'])==7
+ verify_model(args.model);metadata=api('/api/model');assert metadata['inference_source_model']==SOURCE_MODEL;assert_render_rules(metadata)
  tensor=next(t for t in metadata['catalog'] if t['name']=='model.layers.0.self_attn.q_proj.weight')
  request={'prompt':'The capital of France is','max_new_tokens':1,'layer':7,'activation_site':'attention','source_model':SOURCE_MODEL,'edits':[]}
  first=client.start(request);assert first['worker_alive']
