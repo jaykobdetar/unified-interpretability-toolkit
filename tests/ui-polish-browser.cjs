@@ -91,6 +91,15 @@ fs.mkdirSync(out, { recursive: true });
         await page.locator("#show-help").click();
         await expect(page.locator("#welcome")).toBeVisible();
         await page.locator("#dismiss-help").click();
+        // A fresh native catalog starts on embeddings. Exercise the actual
+        // projection whose native coordinates the held pointer assertion uses.
+        if (!(await page.locator("#tensor-browser").evaluate((e) => e.open)))
+          await page.locator("#tensor-browser > summary").click();
+        await page
+          .locator("#tensor-search")
+          .fill("model.layers.0.self_attn.q_proj.weight");
+        await page.locator(".tensor-option").first().click();
+        await ready();
         await page.locator("#row").fill("70");
         await page.locator("#col").fill("5");
         await page.locator("#inspect-submit").click();
