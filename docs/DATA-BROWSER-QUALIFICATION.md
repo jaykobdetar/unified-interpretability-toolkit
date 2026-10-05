@@ -37,9 +37,11 @@ Deterministic load/write failure, timeout, cancellation, reset and stale initial
 
 Only after receiving a runtime slot, rebuild the exact accepted production assets with the existing offline build guard, provide the installed `NODE_PATH` and `ATLAS_CHROMIUM`, and set `ATLAS_EVIDENCE_DIR` to a fresh directory outside the checkout. Run each phase separately:
 
+For a later source snapshot, explicitly set `SOURCE_COMMIT` to its full reviewed commit and `BINARY_SHA256` to its recorded successful release-build digest. The driver retains its historical candidate as the default; selecting another immutable commit requires the binary pin and still rejects changes in `src/` or `web/`. Receipts distinguish the production source commit from the test checkout HEAD and record any supplied behaviour lock's hash. The measurements above describe the historical accepted batch, not a new snapshot.
+
 ```sh
-python3 tools/guarded-core-ui.py python3 -B tests/data_browser_driver.py exports --binary target/release/weight-atlas-rust
-python3 tools/guarded-core-ui.py python3 -B tests/data_browser_driver.py archives --binary target/release/weight-atlas-rust
+python3 tools/guarded-core-ui.py python3 -B tests/data_browser_driver.py exports --binary target/release/weight-atlas-rust --source-commit "$SOURCE_COMMIT" --binary-sha256 "$BINARY_SHA256"
+python3 tools/guarded-core-ui.py python3 -B tests/data_browser_driver.py archives --binary target/release/weight-atlas-rust --source-commit "$SOURCE_COMMIT" --binary-sha256 "$BINARY_SHA256"
 ```
 
 Use different evidence directories for the phases. The driver binds the production commit, binary, fixture and asset digests, owns its loopback servers, and reaps them before returning. It refuses changed production sources, lacks worker routes, and fails on unexpected mutations. Run `tests/data_browser_download_numpy.py` on the exports directory using already installed NumPy. Retain receipts, downloads, screenshots and temporary fixtures outside the checkout. Never reuse an earlier embedded binary for changed JavaScript or relax limits after a refusal.

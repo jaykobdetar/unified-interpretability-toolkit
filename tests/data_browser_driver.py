@@ -26,20 +26,40 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def validate_source_binding(root, binary, source_commit, binary_sha256):
+    assert len(source_commit) == 40 and all(c in '0123456789abcdef' for c in source_commit), 'Use a full immutable source commit'
+    resolved = subprocess.check_output(['git','rev-parse',source_commit+'^{commit}'],cwd=root,text=True).strip()
+    assert resolved == source_commit, 'Source commit did not resolve exactly'
+    assert not subprocess.check_output(['git','diff','--name-only',source_commit,'--','src','web'],cwd=root,text=True).strip(), 'Production sources differ from selected candidate'
+    assert binary.is_file(), 'Missing release binary'
+    actual_sha = sha(binary)
+    if source_commit != CANDIDATE:
+        assert binary_sha256 is not None, 'An explicit source commit requires its recorded binary SHA-256'
+    if binary_sha256 is not None:
+        assert len(binary_sha256) == 64 and all(c in '0123456789abcdef' for c in binary_sha256), 'Use a full binary SHA-256'
+        assert actual_sha == binary_sha256, 'Binary differs from selected build'
+    return {'production_commit':source_commit,
+            'production_tree':subprocess.check_output(['git','rev-parse',source_commit+'^{tree}'],cwd=root,text=True).strip(),
+            'test_checkout_head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),
+            'historical_candidate':CANDIDATE,'binary_sha256':actual_sha,
+            'binary_pin_verified':binary_sha256 is not None}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('phase', choices=('exports', 'archives'))
     parser.add_argument('--binary', required=True, type=Path)
+    parser.add_argument('--source-commit', default=CANDIDATE)
+    parser.add_argument('--binary-sha256')
     args = parser.parse_args()
     out = Path(os.environ['ATLAS_EVIDENCE_DIR']).resolve()
     assert not out.is_relative_to(ROOT), 'Evidence stays outside checkout'
     assert os.environ.get('ATLAS_CHROMIUM') and os.environ.get('NODE_PATH'), 'Explicit installed browser runtime required'
-    assert not subprocess.check_output(['git','diff','--name-only',CANDIDATE,'--','src','web'],cwd=ROOT,text=True).strip(), 'Production sources differ from accepted candidate'
+    binary = args.binary.resolve()
+    source_binding = validate_source_binding(ROOT, binary, args.source_commit, args.binary_sha256)
     out.mkdir(parents=True, exist_ok=True)
     fixture = out/'fixture'
     manifest = write(fixture)
-    binary = args.binary.resolve()
-    assert binary.is_file()
     cache = out/'cache'
     with (out/'calibrate.log').open('w') as log:
         subprocess.run([str(binary),'calibrate','--model',str(fixture),'--cache',str(cache),
@@ -96,7 +116,9 @@ def main():
         server.daemon_threads = True
         threading.Thread(target=server.serve_forever,daemon=True).start()
         base = 'http://127.0.0.1:'+str(server.server_port)
-        binding = {'production_commit':CANDIDATE,'binary_sha256':sha(binary),
+        lock = ROOT/'tools/behaviour_lock.py'
+        binding = {**source_binding,'behaviour_lock_sha256':sha(lock) if lock.is_file() else None,
+                   'harness_sha256':sha(__file__),
                    'fixture_sha256':manifest['sha256'],'fixture_bytes':manifest['bytes'],
                    'phase':args.phase,'adapter':'metadata-only fixture; actual rebuilt Rust assets/CSP; no inference integration claim',
                    'assets':{name:sha(ROOT/'web'/name) for name in ('vendor/openseadragon.min.js','atlas-tools.js','app.js','workspace-tools.js','inference.js','inference-import.js')}}
