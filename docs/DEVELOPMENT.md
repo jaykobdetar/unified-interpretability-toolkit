@@ -4,17 +4,13 @@ Use Linux, Rust 1.92.0 with clippy, Python 3.12 or newer, and Node 22. The viewe
 
 ## CI recipe
 
-Run these sequentially from the checkout:
+After installing the pinned optional development tools below, run the same command locally and in CI:
 
 ```bash
-python3 tools/check.py lint
-python3 tools/check.py contracts
-python3 tools/guarded-build.py clippy --all-targets -- -D warnings
-python3 tools/guarded-build.py test --release -- --test-threads=1
-python3 tools/guarded-build.py build --release
-python3 tools/smoke.py
-./run-atlas.sh --demo --check
+python3 tools/check.py all
 ```
+
+`all` requires the exact qualified versions in `dev/versions.json`, checks formatter output, and runs every original syntax/contract/Rust/smoke/launcher check plus the dense regression suite. It also runs ordinary debug `cargo test` and release tests with four libtest threads, while the existing build guard retains one CPU and one Cargo build job. Required tools, wrong versions and failed checks are fatal; nothing is skipped. Existing `python3 tools/check.py lint` and `python3 tools/check.py contracts` remain available without installing formatter or browser packages. `format` checks only formatter output; `--dev-python` selects the isolated pinned Black interpreter.
 
 `lint` AST-parses first-party Python, syntax-checks first-party JavaScript with Node, and checks the launcher shell syntax. It is not a Python style or type checker. Clippy treats Rust warnings as errors. `contracts` lists its selected Python/Node files and runs every declared scenario for the asynchronous UI tests. Tests use mocks and tiny synthetic fixtures; they do not launch browsers or load trained models. The smoke test independently checks 26 exact source values and native/pooled PNG outputs across seven rules; other rules and dtype/slice behavior have dedicated Rust/contract coverage.
 
@@ -84,3 +80,5 @@ The supplied Black wheel hashes target Linux x86_64 with CPython 3.12. The npm p
 Mechanical formatting covers first-party Python under `tools/` and `tests/`, Rust selected by `cargo fmt --all`, and first-party JavaScript/CSS under `web/` and `tests/`. The immutable supplied behaviour lock, vendored code, JSON snapshots and HTML are outside that formatter scope. These exclusions preserve supplied and held bytes; they do not disable any existing project check.
 
 Existing syntax checks, contracts and Clippy warning enforcement remain required. Additional Python lint rules, unused-import removal, type-checking rules and structural cleanup are deferred to the separately reviewed Part 2; no new lint/type rule has been run and then suppressed in this pass.
+
+Prettier 3.9.6 reaches stable output after two passes for three chain-heavy test files. The initial safety trial also reported an AST serialization-order difference for `inference.js`; parsed structure, values and array order remained identical. Qualification retained that first failure, checked semantic AST equality in disposable copies, and required stable formatter output. The normal `format` check reports any later formatting drift.
