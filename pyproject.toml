@@ -1,0 +1,4 @@
+[tool.black]
+required-version = "26.1.0"
+target-version = ["py312"]
+force-exclude = "(^|/)tools/behaviour_lock\\.py$"
