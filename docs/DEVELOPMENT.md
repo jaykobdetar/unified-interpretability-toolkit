@@ -68,3 +68,19 @@ The evidence directory must be new and outside the model directory. `--case` sel
 The profile bundle export, host-client function boundaries and comparison mobile-media guard use whitespace-tolerant syntax matching. The original assertions remain, including disabled profile scope, exact native status, absent comparison inference routes and the 720px breakpoint. Ten benign disposable correctness mutations were caught by both the original and rewritten tests; all three rewritten tests also pass on pinned Prettier output.
 
 Optional browser gap checks use the existing resource guard. `tests/held-link-browser.cjs` cold-loads the held pre-format v2 fixture and checks native geometry, both rules, region, exact re-save spelling and reload. The fixture preserves the historical zero and observed starting re-save signed zero separately. `tests/archive_browser_driver.py --model MODEL --python CPU_PYTHON` runs `tests/archive-browser.cjs` through the actual coordinator: file import, lazy codec bytes, default redaction, save/reload/explicit restore, unchanged inputs and zero model starts. Model registration is unchanged; head-layout binding and native file-dialog permissions are separate qualifications.
+
+## Pinned optional development tools
+
+The formatter and browser development dependencies are isolated from runtime dependencies. `dev/versions.json` records the qualified tool versions. Install the hash-pinned Black wheels in a local CPython 3.12 virtual environment, and install the npm lockfile without lifecycle scripts or browser downloads:
+
+```bash
+python3 -m venv qualification/dev/black-26.1.0
+qualification/dev/black-26.1.0/bin/python -m pip install --require-hashes -r dev/requirements-format.txt
+PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm --prefix dev ci --ignore-scripts
+```
+
+The supplied Black wheel hashes target Linux x86_64 with CPython 3.12. The npm packages use official registry tarballs and lockfile integrity hashes. Playwright still requires an explicitly selected, separately installed Chromium for browser qualification. Neither installation changes the offline vendored Rust build or the existing no-install syntax and contract checks.
+
+Mechanical formatting covers first-party Python under `tools/` and `tests/`, Rust selected by `cargo fmt --all`, and first-party JavaScript/CSS under `web/` and `tests/`. The immutable supplied behaviour lock, vendored code, JSON snapshots and HTML are outside that formatter scope. These exclusions preserve supplied and held bytes; they do not disable any existing project check.
+
+Existing syntax checks, contracts and Clippy warning enforcement remain required. Additional Python lint rules, unused-import removal, type-checking rules and structural cleanup are deferred to the separately reviewed Part 2; no new lint/type rule has been run and then suppressed in this pass.

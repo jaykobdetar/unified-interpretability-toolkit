@@ -1,0 +1,10 @@
+{
+  "rustc": "1.92.0",
+  "cargo": "1.92.0",
+  "rustfmt": "1.8.0-stable",
+  "python": "3.12.3",
+  "node": "22.16.0",
+  "black": "26.1.0",
+  "prettier": "3.9.6",
+  "playwright": "1.63.0"
+}

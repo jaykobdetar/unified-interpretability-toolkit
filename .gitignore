@@ -29,3 +29,4 @@ credentials*
 !vendor/flate2/tests/corrupt-gz-file.bin
 /config/*.local.json
 /qualification/
+/dev/node_modules/

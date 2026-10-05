@@ -1,0 +1,8 @@
+{
+  "name": "unified-interpretability-toolkit-development",
+  "private": true,
+  "devDependencies": {
+    "prettier": "3.9.6",
+    "playwright": "1.63.0"
+  }
+}
