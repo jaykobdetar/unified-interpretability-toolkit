@@ -1,0 +1,380 @@
+{
+  "schema": "cpu-protocol-reference-v1",
+  "production_commit": "9d99410f061c0130f2ed15be194a2f587a920060",
+  "production_tree": "65c265e175415b3d5d23f1121b3a71c831c4aeed",
+  "source": "Held two-run complete protocols from unchanged production; public synthetic prompts only",
+  "exclusions": "Only these exact elapsed-clock paths; presence/type/finiteness/nonnegativity remain checked. No application/runtime/source fields or numeric spelling normalized.",
+  "runtime": {
+    "python": "3.12.3",
+    "torch": "2.8.0+cpu",
+    "transformers": "4.56.2",
+    "tokenizers": "0.22.2",
+    "safetensors": "0.8.0",
+    "platform": "linux",
+    "machine": "x86_64",
+    "dtype": "float32",
+    "device": "cpu",
+    "attention_backend": "eager"
+  },
+  "cases": {
+    "block": {
+      "request": {
+        "prompt": "The quick brown fox",
+        "max_new_tokens": 2,
+        "layer": 7,
+        "activation_site": "block"
+      },
+      "golden": "block.jsonl",
+      "golden_sha256": "58c222a6093dcf65c9f4a8a7b8789809fe774dae6727e12342a391fed06d81b7",
+      "clock_paths_by_event": [
+        [
+          "load_ms"
+        ],
+        [],
+        [
+          "compute_ms",
+          "compute_total_ms"
+        ],
+        [
+          "compute_ms",
+          "compute_total_ms"
+        ],
+        [
+          "compute_total_ms"
+        ]
+      ]
+    },
+    "attention_capture": {
+      "request": {
+        "prompt": "The quick brown fox",
+        "max_new_tokens": 2,
+        "layer": 7,
+        "activation_site": "attention"
+      },
+      "golden": "attention_capture.jsonl",
+      "golden_sha256": "982728c08a243621bdb99543b8ff1555a9090d3eba4980aa4b3e1d254d9f62a0",
+      "clock_paths_by_event": [
+        [
+          "load_ms"
+        ],
+        [],
+        [
+          "compute_ms",
+          "compute_total_ms"
+        ],
+        [
+          "compute_ms",
+          "compute_total_ms"
+        ],
+        [
+          "compute_total_ms"
+        ]
+      ]
+    },
+    "mlp_capture": {
+      "request": {
+        "prompt": "The quick brown fox",
+        "max_new_tokens": 2,
+        "layer": 7,
+        "activation_site": "mlp"
+      },
+      "golden": "mlp_capture.jsonl",
+      "golden_sha256": "d284bf06694751fb54847634495cef0970c092bdf0a96bc9f9151d5cf81bdce7",
+      "clock_paths_by_event": [
+        [
+          "load_ms"
+        ],
+        [],
+        [
+          "compute_ms",
+          "compute_total_ms"
+        ],
+        [
+          "compute_ms",
+          "compute_total_ms"
+        ],
+        [
+          "compute_total_ms"
+        ]
+      ]
+    },
+    "attention_observation": {
+      "request": {
+        "prompt": "The quick brown fox",
+        "max_new_tokens": 2,
+        "layer": 7,
+        "activation_site": "attention",
+        "observation": {
+          "kind": "attention",
+          "head": 0
+        }
+      },
+      "golden": "attention_observation.jsonl",
+      "golden_sha256": "50fc5f13422f2e5b40e5776803620b408b117e00f0ef82eee99708602c90102d",
+      "clock_paths_by_event": [
+        [
+          "load_ms"
+        ],
+        [],
+        [
+          "compute_ms",
+          "compute_total_ms"
+        ],
+        [
+          "compute_ms",
+          "compute_total_ms"
+        ],
+        [
+          "compute_total_ms"
+        ]
+      ]
+    },
+    "logit_lens": {
+      "request": {
+        "prompt": "The quick brown fox",
+        "max_new_tokens": 2,
+        "layer": 7,
+        "activation_site": "block",
+        "observation": {
+          "kind": "logit_lens"
+        }
+      },
+      "golden": "logit_lens.jsonl",
+      "golden_sha256": "e2303b145fc61d711b2b6e9e87ef7253371b026227454d1c54e0e57ea20fb029",
+      "clock_paths_by_event": [
+        [
+          "load_ms"
+        ],
+        [],
+        [
+          "compute_ms",
+          "compute_total_ms"
+        ],
+        [
+          "compute_ms",
+          "compute_total_ms"
+        ],
+        [
+          "compute_total_ms"
+        ]
+      ]
+    },
+    "prompt_pair_preview": {
+      "request": {
+        "mode": "prompt_pair_preview",
+        "prompts": [
+          "The quick brown fox",
+          "The quick red fox"
+        ],
+        "source_model": {
+          "repo": "HuggingFaceTB/SmolLM2-135M",
+          "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+          "weights_sha256": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1"
+        }
+      },
+      "golden": "prompt_pair_preview.jsonl",
+      "golden_sha256": "6ab0cba8cc1fa7c0e61994ccf664cf14f30fb2e03c9df75abe27410e02439d98",
+      "clock_paths_by_event": [
+        []
+      ]
+    },
+    "edit_empty": {
+      "request": {
+        "prompt": "The capital of France is",
+        "max_new_tokens": 2,
+        "layer": 0,
+        "source_model": {
+          "repo": "HuggingFaceTB/SmolLM2-135M",
+          "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+          "weights_sha256": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1"
+        },
+        "edits": []
+      },
+      "golden": "edit_empty.jsonl",
+      "golden_sha256": "bdc9d95f47ac1fef9330d2816e02684ce275a242374c977020a391791c74be69",
+      "clock_paths_by_event": [
+        [
+          "load_ms"
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          "compute_ms",
+          "compute_total_ms",
+          "baseline.compute_ms",
+          "baseline.compute_total_ms",
+          "edited.compute_ms",
+          "edited.compute_total_ms"
+        ],
+        [
+          "compute_ms",
+          "compute_total_ms",
+          "baseline.compute_ms",
+          "baseline.compute_total_ms",
+          "edited.compute_ms",
+          "edited.compute_total_ms"
+        ],
+        [
+          "compute_total_ms"
+        ]
+      ]
+    },
+    "edit_query_head_zero": {
+      "request": {
+        "prompt": "The capital of France is",
+        "max_new_tokens": 2,
+        "layer": 0,
+        "source_model": {
+          "repo": "HuggingFaceTB/SmolLM2-135M",
+          "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+          "weights_sha256": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1"
+        },
+        "edits": [
+          {
+            "tensor": "model.layers.0.self_attn.q_proj.weight",
+            "shape": [
+              576,
+              576
+            ],
+            "kind": "rows",
+            "operation": "zero",
+            "start": 0,
+            "end": 64
+          }
+        ]
+      },
+      "golden": "edit_query_head_zero.jsonl",
+      "golden_sha256": "8c7c81ba0744b27b9dc0e8a11202a88838be536d352d984e4d1995f781d95607",
+      "clock_paths_by_event": [
+        [
+          "load_ms"
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          "compute_ms",
+          "compute_total_ms",
+          "baseline.compute_ms",
+          "baseline.compute_total_ms",
+          "edited.compute_ms",
+          "edited.compute_total_ms"
+        ],
+        [
+          "compute_ms",
+          "compute_total_ms",
+          "baseline.compute_ms",
+          "baseline.compute_total_ms",
+          "edited.compute_ms",
+          "edited.compute_total_ms"
+        ],
+        [
+          "compute_total_ms"
+        ]
+      ]
+    },
+    "prompt_pair": {
+      "request": {
+        "mode": "prompt_pair",
+        "prompts": [
+          "The quick brown fox",
+          "The quick red fox"
+        ],
+        "source_model": {
+          "repo": "HuggingFaceTB/SmolLM2-135M",
+          "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+          "weights_sha256": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1"
+        },
+        "layer": 7,
+        "activation_site": "block",
+        "positions": [
+          {
+            "a": 1,
+            "b": 1
+          },
+          {
+            "a": 3,
+            "b": 3
+          }
+        ],
+        "preview_digest": "b778863e98a1d7e36ecf171142884c6b98821a2440a302dac2ab31fca62fbc3e"
+      },
+      "golden": "prompt_pair.jsonl",
+      "golden_sha256": "66784cf169966fadc0d4e2e70219089b68df9d0214b6680a4b9721d573e139f9",
+      "clock_paths_by_event": [
+        [
+          "load_ms"
+        ],
+        [],
+        [],
+        [
+          "compute_ms",
+          "compute_total_ms"
+        ],
+        [
+          "compute_ms",
+          "compute_total_ms"
+        ],
+        [
+          "compute_total_ms"
+        ]
+      ]
+    },
+    "sweep_head_zero": {
+      "request": {
+        "mode": "sweep",
+        "source_model": {
+          "repo": "HuggingFaceTB/SmolLM2-135M",
+          "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+          "weights_sha256": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1"
+        },
+        "prompts": [
+          "The quick brown fox"
+        ],
+        "targets": [
+          {
+            "kind": "head",
+            "layer": 0,
+            "head": 0
+          }
+        ],
+        "operation": "zero",
+        "seed": 17,
+        "capture_layer": 7,
+        "activation_site": "block",
+        "plan_digest": "508dd358af3ad2fe3a3abdf6870e74d417b8628cb2542d4808b9aee55c1222ee"
+      },
+      "golden": "sweep_head_zero.jsonl",
+      "golden_sha256": "3704dbcab2da04bbbada06ec0fe0af237b0ca6a84ae0ce5df5bbcb05c1907f2c",
+      "clock_paths_by_event": [
+        [
+          "load_ms"
+        ],
+        [],
+        [],
+        [
+          "compute_ms",
+          "compute_total_ms"
+        ],
+        [],
+        [],
+        [
+          "compute_ms",
+          "compute_total_ms"
+        ],
+        [],
+        [],
+        [
+          "compute_ms",
+          "compute_total_ms"
+        ],
+        [
+          "compute_total_ms"
+        ]
+      ]
+    }
+  }
+}

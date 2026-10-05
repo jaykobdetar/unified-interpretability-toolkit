@@ -53,3 +53,14 @@ The optional workspace browser harness restarts its owned fixture with identical
 The deterministic frontend tests import fresh factories from `tests/support/ui-fixture.cjs` and `tests/support/inference-fixture.cjs`. Each invocation owns its DOM, VM, transport queues and timers. Scenarios do not extract another test’s setup by source-text delimiters; their assertions remain independent of that test’s formatting. The app factory accepts an explicit source path for disposable correctness-mutation trials.
 
 `tests/ui-direct-validation.cjs` checks both invalid legend identities and fractional row/column addresses directly. These assertions queue no viewer or transport wait, so a pending async operation cannot produce a false successful process exit. The frontend correctness-fault set retains the eight original catches and adds coverage for these two former misses.
+
+The optional exact CPU protocol net uses ten fixed public synthetic scenarios in `tests/fixtures/cpu-protocols`: block/attention/MLP capture, attention observation, logit lens, tokenizer preview, empty/changed edits, prompt-pair activations and a bounded three-record sweep. Their held complete JSONL records come from unchanged starting production; the test has no recording mode. Each scenario runs in two fresh verified offline workers through the existing inference guard. Runtime versions, model/source identity, events, key order, numerical spelling, tokens, activations, scores and metrics must match exactly. Only explicitly listed elapsed-clock paths vary; their presence, numeric type, finiteness and nonnegativity remain required. Wire whitespace and duplicate keys are checked rather than normalized. The portable integrity contracts run without model packages.
+
+Run the opt-in net from a Linux x86_64 checkout using the pinned CPU runtime recorded in the fixture manifest:
+
+```bash
+python3 -B tests/cpu_protocol_reference.py --python "$ATLAS_CPU_PYTHON" \
+  --model "$ATLAS_SMOL_MODEL" --output "$EVIDENCE/cpu-protocols"
+```
+
+The evidence directory must be new and outside the model directory. `--case` selects one named scenario for diagnosis; the default runs all ten. Retain requests, raw stdout/stderr/exits, commands, exact-result hashes and lifecycle receipts. The existing direct-worker 1.5 GiB RSS cap, one CPU, 120-second wall limit, worker 3 GiB address-space/90-second CPU caps and memory admission/stop reserves remain. Sweep exec retains the guard-observed worker PID and original total-job deadline. Interrupt cleanup reuses the existing bounded PID/start-time guard cleanup and records verified survivors/errors. No inference server, model registration or activation policy is needed.
