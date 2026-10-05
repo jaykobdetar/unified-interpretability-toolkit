@@ -3,6 +3,7 @@
 
 import argparse
 import ast
+from collections.abc import Mapping, Sequence
 import os
 import json
 import re
@@ -13,7 +14,12 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run(command, *, extra_env=None, timeout=120):
+def run(
+    command: Sequence[str | Path],
+    *,
+    extra_env: Mapping[str, str] | None = None,
+    timeout: int = 120,
+) -> None:
     print("+ " + " ".join(map(str, command)), flush=True)
     env = {
         **os.environ,
@@ -24,7 +30,7 @@ def run(command, *, extra_env=None, timeout=120):
     subprocess.run(command, cwd=ROOT, env=env, check=True, timeout=timeout)
 
 
-def lint():
+def lint() -> None:
     for base in ("tools", "tests"):
         for file in sorted((ROOT / base).rglob("*.py")):
             ast.parse(file.read_text(), filename=str(file.relative_to(ROOT)))
@@ -35,7 +41,7 @@ def lint():
     run(["bash", "-n", "run-atlas.sh"])
 
 
-def contracts():
+def contracts() -> None:
     python = sorted((ROOT / "tests").glob("*contracts.py"))
     python += [
         ROOT / "tests" / name
@@ -104,13 +110,13 @@ def contracts():
     print(f"PASS: {len(python)} Python and {len(javascript)} Node contract files")
 
 
-def require_version(name, command, expected):
+def require_version(name: str, command: Sequence[str], expected: str) -> None:
     actual = subprocess.check_output(command, cwd=ROOT, text=True, timeout=30).strip()
     if actual != expected:
         raise RuntimeError(f"{name} version {actual!r}; required {expected!r}")
 
 
-def require_minimum_version(name, command, minimum):
+def require_minimum_version(name: str, command: Sequence[str], minimum: str) -> None:
     actual = subprocess.check_output(command, cwd=ROOT, text=True, timeout=30).strip()
     version = re.search(r"(?<!\d)(\d+)\.(\d+)\.(\d+)(?!\d)", actual)
     if version is None or tuple(map(int, version.groups())) < tuple(
@@ -119,7 +125,7 @@ def require_minimum_version(name, command, minimum):
         raise RuntimeError(f"{name} version {actual!r}; minimum {minimum!r}")
 
 
-def formatter_files():
+def formatter_files() -> list[str]:
     if (ROOT / ".git").exists():
         files = (
             subprocess.check_output(
@@ -143,7 +149,7 @@ def formatter_files():
     )
 
 
-def format_checks(dev_python):
+def format_checks(dev_python: Path) -> None:
     pins = json.loads((ROOT / "dev/versions.json").read_text())
     if not dev_python.is_file():
         raise RuntimeError(
@@ -199,18 +205,90 @@ def format_checks(dev_python):
     run(["cargo", "fmt", "--all", "--check"])
 
 
-def main():
+def static_checks(dev_python: Path, ruff: Path) -> None:
+    pins = json.loads((ROOT / "dev/versions.json").read_text())
+    eslint = ROOT / "dev/node_modules/eslint/bin/eslint.js"
+    if not dev_python.is_file() or not ruff.is_file() or not eslint.is_file():
+        raise RuntimeError(
+            "required pinned Ruff, ESLint and mypy development tools are missing; "
+            "use the documented development setup"
+        )
+    for name, command, expected in [
+        ("Ruff", [str(ruff), "--version"], f"ruff {pins['ruff']}"),
+        ("ESLint", ["node", str(eslint), "--version"], f"v{pins['eslint']}"),
+        (
+            "mypy",
+            [
+                str(dev_python),
+                "-c",
+                "import mypy.version; print(mypy.version.__version__)",
+            ],
+            pins["mypy"],
+        ),
+    ]:
+        require_version(name, command, expected)
+    run([str(ruff), "check", "--no-cache", "tools", "tests"])
+    javascript = [
+        path
+        for path in formatter_files()
+        if Path(path).suffix in (".js", ".cjs", ".mjs")
+    ]
+    if not javascript:
+        raise RuntimeError("ESLint scope is unexpectedly empty")
+    run(
+        [
+            "node",
+            str(eslint),
+            "--no-config-lookup",
+            "--config",
+            "dev/eslint.config.cjs",
+            "--max-warnings",
+            "0",
+            *javascript,
+        ]
+    )
+    run(
+        [
+            str(dev_python),
+            "-m",
+            "mypy",
+            "--config-file",
+            "dev/mypy.ini",
+            "--cache-dir",
+            "/dev/null",
+            "tools/check.py",
+        ]
+    )
+
+
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("suite", choices=["lint", "contracts", "format", "all"])
+    parser.add_argument(
+        "suite", choices=["lint", "contracts", "format", "static", "all"]
+    )
     parser.add_argument(
         "--dev-python",
         type=Path,
         default=ROOT / "qualification/dev/black-26.1.0/bin/python",
         help="interpreter with the pinned optional Black development tool",
     )
+    parser.add_argument(
+        "--ruff",
+        type=Path,
+        help="existing exact Ruff executable; defaults beside --dev-python",
+    )
     args = parser.parse_args()
     if args.suite in ("format", "all"):
         format_checks(args.dev_python.absolute())
+    if args.suite in ("static", "all"):
+        static_checks(
+            args.dev_python.absolute(),
+            (
+                args.ruff.absolute()
+                if args.ruff
+                else args.dev_python.absolute().parent / "ruff"
+            ),
+        )
     if args.suite in ("lint", "all"):
         lint()
     if args.suite in ("contracts", "all"):

@@ -2,3 +2,17 @@
 required-version = "26.1.0"
 target-version = ["py312"]
 force-exclude = "(^|/)tools/behaviour_lock\\.py$"
+
+[tool.ruff]
+required-version = "==0.16.8"
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.ruff.lint.per-file-ignores]
+# Module-level oracle hooks run before these dictionaries are explicitly deleted.
+# Ruff reports their later global lookup as undefined after the final del statement.
+# Numerical oracle assertions and their explicit memory cleanup remain unchanged.
+"tests/observation_reference.py" = ["F821"]
+"tests/prompt_pair_reference.py" = ["F821"]
