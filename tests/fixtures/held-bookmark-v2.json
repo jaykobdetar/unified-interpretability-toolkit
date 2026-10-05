@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "fragment": "#wa=2&s=50bfbc7d3d8d4e72eb2154bdf931368909a3d77a264f1fd50ef0051ca25b15dc&m=683f48fbdf7ef35d272ffb5ca9ee887827282cd7bb53a9048038ee712d1dc653&t=0&l=global_linear&r=tensor_asinh&b=0%2C0%2C1%2C1&z=-0.44871795%2C0%2C2.8974359%2C2",
+  "source_identity": "50bfbc7d3d8d4e72eb2154bdf931368909a3d77a264f1fd50ef0051ca25b15dc",
+  "model_identity": "683f48fbdf7ef35d272ffb5ca9ee887827282cd7bb53a9048038ee712d1dc653",
+  "revision": "fixture-A",
+  "fixture_sha256": "c0075bfc55f9e51ccac3c5511ea55a5ca19744b002921e8d2e4ae3f60d321be3",
+  "producer_binary_sha256": "c26a328641736bd5805aa214255080c7e3dd63d1053a3f06be5103bb4ec7078a",
+  "capture_report_sha256": "3280b0991090a9b69302a5a09b808da0efefebc93a69f0354b2e214555698542",
+  "provenance": "Held supported v2 bookmark captured before formatting on the fixed 26-value fixture, with a native release byte-identical to quality-pass-start.",
+  "expected_resaved_fragment": "#wa=2&s=50bfbc7d3d8d4e72eb2154bdf931368909a3d77a264f1fd50ef0051ca25b15dc&m=683f48fbdf7ef35d272ffb5ca9ee887827282cd7bb53a9048038ee712d1dc653&t=0&l=global_linear&r=tensor_asinh&b=0%2C0%2C1%2C1&z=-0.44871795%2C-0%2C2.8974359%2C2",
+  "resave_observation": "Unchanged starting release resaves native viewport Y as -0 after native-to-viewer-to-native floating arithmetic; preserve exact original and resaved strings, without zero normalization."
+}
