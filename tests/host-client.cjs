@@ -51,7 +51,7 @@ async function fetchImpl(url,options={}){
   assert(calls.every(call=>!call.url.includes(capability)));
 
   const source=fs.readFileSync(require.resolve('../web/app.js'),'utf8');
-  const snippet=source.slice(source.indexOf('function applyStatus(update){'),source.indexOf('// Pointer reads'));
+  const statusStart=source.search(/function\s+applyStatus\s*\(\s*update\s*\)\s*\{/),statusEnd=source.indexOf('// Pointer reads',statusStart);assert(statusStart>=0&&statusEnd>statusStart);const snippet=source.slice(statusStart,statusEnd);
   const model={source_identity:'a'.repeat(64),model_identity:'b'.repeat(64),parameter_count:26,
     global_max:null,calibration_complete:false,coverage:{},catalog:[{id:0,calibration_complete:false},{id:1},{id:2}]};
   const update={api_version:1,model_status_version:1,source_identity:model.source_identity,model_identity:model.model_identity,
@@ -76,7 +76,7 @@ async function fetchImpl(url,options={}){
   assert.deepEqual(context.state.tensor.slice,[1]);
   assert.deepEqual(context.state.tensor.shape,[2,3,4]);
   assert.equal(context.state.tensor.count,24,'Status never replaces original native count with slice count');
-  const sourceScope=source.slice(source.indexOf('function calibrationScope(model){'),source.indexOf('function drawCoverage(model){'));
+  const scopeStart=source.search(/function\s+calibrationScope\s*\(\s*model\s*\)\s*\{/),scopeEnd=source.search(/function\s+drawCoverage\s*\(\s*model\s*\)\s*\{/);assert(scopeStart>=0&&scopeEnd>scopeStart);const sourceScope=source.slice(scopeStart,scopeEnd);
   vm.runInContext(sourceScope,context);
   const mixed={catalog:[{id:0},{id:1},{id:2,available:false}],coverage:{calibrated_tensors:2},global_calibration_supported:false};
   const scope=context.calibrationScope(mixed);

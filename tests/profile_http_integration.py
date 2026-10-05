@@ -3,6 +3,7 @@
 from contextlib import ExitStack
 from email.message import Message
 import io, json
+import re
 from pathlib import Path
 import sys, threading, types, unittest
 from unittest.mock import Mock, patch
@@ -100,7 +101,7 @@ class Integration(unittest.TestCase):
             h = self.handler("/viewer.js", enabled=enabled)
             h.handle_action()
             script = self.sent[-1][1]
-            self.assertEqual(b"root.AtlasProfiles=api" in script, enabled)
+            self.assertEqual(re.search(rb"\broot\s*\.\s*AtlasProfiles\s*=\s*api\b", script) is not None, enabled)
         self.assertEqual(
             production_capabilities(),
             {"profiles_enabled": False, "resume_available": False},
