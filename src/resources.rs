@@ -310,6 +310,14 @@ impl Drop for Permit {
 }
 
 #[cfg(test)]
+pub(crate) fn test_workspace_guard() -> std::sync::MutexGuard<'static, ()> {
+    // Independent unit tests share the real process-global workspace ledger.
+    // Isolate their fixtures without changing admission, accounting or release.
+    static ISOLATION: Mutex<()> = Mutex::new(());
+    ISOLATION.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
@@ -419,6 +427,14 @@ mod tests {
     }
     #[test]
     fn global_workspace_is_exclusive_and_released() {
+        let _isolation = test_workspace_guard();
+        let partial = reserve(1).unwrap();
+        assert_eq!(LEDGER.lock().unwrap().used, 1);
+        assert_eq!(LEDGER.lock().unwrap().active, 1);
+        assert!(reserve(1).is_err());
+        drop(partial);
+        assert_eq!(LEDGER.lock().unwrap().used, 0);
+        assert_eq!(LEDGER.lock().unwrap().active, 0);
         let owned = reserve(JOB_WORKSPACE_BYTES).unwrap();
         assert!(reserve(1).is_err());
         drop(owned);

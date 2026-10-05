@@ -810,6 +810,7 @@ mod resource_numeric_tests {
 
     #[test]
     fn bounded_reads_and_scoped_rows_match_an_independent_scalar_oracle() {
+        let _isolation = crate::resources::test_workspace_guard();
         let root = std::env::temp_dir().join(format!("atlas-render-bands-{}", std::process::id()));
         // Total fixture payload: 5,773,320 bytes. The supported 131072-column
         // F32 case reaches a real 2 MiB raw span; source axis limits stay intact.

@@ -1,3 +1,6 @@
+#[path = "support/workspace.rs"]
+mod workspace;
+
 use std::path::PathBuf;
 use weight_atlas_rust::{render, server, source::Dtype, state::State};
 
@@ -24,6 +27,7 @@ fn fixture(label: &str, dtype: Dtype, tensors: &[(&str, Vec<u32>)]) -> (PathBuf,
 }
 #[test]
 fn signed_rank_is_absolute_mid_cdf_with_ties_and_both_zeros() {
+    let _isolation = workspace::guard();
     for (label, dtype, words) in [
         (
             "bf",
@@ -92,6 +96,7 @@ fn signed_rank_is_absolute_mid_cdf_with_ties_and_both_zeros() {
 }
 #[test]
 fn robust_zero_quantile_keeps_divisor_one_and_exact_strict_clipping_count() {
+    let _isolation = workspace::guard();
     for (label, value) in [("small", 0.5f32), ("large", 2f32), ("zero", 0f32)] {
         let mut words = vec![0; 1001];
         words[1000] = value.to_bits();
@@ -139,6 +144,7 @@ fn robust_zero_quantile_keeps_divisor_one_and_exact_strict_clipping_count() {
 }
 #[test]
 fn f32_robust_quantile_gaps_and_ties_have_exact_clipped_counts() {
+    let _isolation = workspace::guard();
     for (label, values) in [
         ("gap", vec![0f32, 1., 2., 2., 10.]),
         ("ties", vec![1f32; 100]),
@@ -162,6 +168,7 @@ fn f32_robust_quantile_gaps_and_ties_have_exact_clipped_counts() {
 }
 #[test]
 fn percentile_lut_and_tile_cache_keys_bind_the_distribution() {
+    let _isolation = workspace::guard();
     let (root, state) = fixture(
         "distribution",
         Dtype::Bf16,
@@ -212,6 +219,7 @@ fn percentile_lut_and_tile_cache_keys_bind_the_distribution() {
 }
 #[test]
 fn corrupt_histogram_refuses_rank_but_raw_inspection_remains_available() {
+    let _isolation = workspace::guard();
     let (root, state) = fixture("corrupt", Dtype::Bf16, &[("a", vec![0, 0x3f80])]);
     state.calibrate_one(0).unwrap();
     let identity = state.source.identity.clone();

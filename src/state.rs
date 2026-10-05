@@ -860,6 +860,7 @@ mod cache_tests {
 
     #[test]
     fn bound_tiles_and_prepared_overviews_match_legacy_pixels() {
+        let _isolation = crate::resources::test_workspace_guard();
         let root =
             std::env::temp_dir().join(format!("atlas-bound-overview-{}", std::process::id()));
         let model = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/tiny-bf16");
@@ -1031,6 +1032,7 @@ mod cache_tests {
 
     #[test]
     fn readers_observe_only_committed_calibration_across_publication_barriers() {
+        let _isolation = crate::resources::test_workspace_guard();
         use std::sync::mpsc::sync_channel;
         use std::time::Duration;
         let root =

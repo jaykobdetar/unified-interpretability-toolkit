@@ -1,3 +1,6 @@
+#[path = "support/workspace.rs"]
+mod workspace;
+
 use weight_atlas_rust::{
     render::{self, Stats},
     source::{json_unique, value},
@@ -129,6 +132,7 @@ fn small_model(label: &str) -> (std::path::PathBuf, std::path::PathBuf, std::pat
 }
 #[test]
 fn failed_calibration_publication_is_retryable_without_false_readiness() {
+    let _isolation = workspace::guard();
     use weight_atlas_rust::state::State;
     let (root, model, cache) = small_model("calibration-retry");
     let state = State::open(&model, &cache, None, None).unwrap();
@@ -155,6 +159,7 @@ fn failed_calibration_publication_is_retryable_without_false_readiness() {
 }
 #[test]
 fn active_source_mutation_is_refused_and_saved_statistics_invalidate() {
+    let _isolation = workspace::guard();
     use weight_atlas_rust::state::State;
     let (root, model, cache) = small_model("identity");
     let state = State::open(&model, &cache, None, None).unwrap();
@@ -177,6 +182,7 @@ fn active_source_mutation_is_refused_and_saved_statistics_invalidate() {
 }
 #[test]
 fn corrupted_checksum_and_changed_schema_cannot_claim_calibration() {
+    let _isolation = workspace::guard();
     use weight_atlas_rust::{sha, state::State};
     let (root, model, cache) = small_model("cache-schema");
     let state = State::open(&model, &cache, None, None).unwrap();
@@ -247,6 +253,7 @@ fn rejected_model_cache_paths_leave_no_directories_or_source_changes() {
 
 #[test]
 fn magnitude_cancellation_inspection_and_versioned_cache() {
+    let _isolation = workspace::guard();
     use weight_atlas_rust::{server, sha, state::State};
     let (root, model, cache) = small_model("magnitude");
     let state = State::open(&model, &cache, None, None).unwrap();

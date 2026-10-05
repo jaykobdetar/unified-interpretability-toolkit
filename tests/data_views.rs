@@ -1,3 +1,6 @@
+#[path = "support/workspace.rs"]
+mod workspace;
+
 use serde_json::json;
 use std::{
     path::PathBuf,
@@ -124,6 +127,7 @@ fn display_limit_applies_to_trailing_axes_not_large_leading_dimensions() {
 
 #[test]
 fn mixed_catalog_distinguishes_local_completion_from_unavailable_global_scope() {
+    let _isolation = workspace::guard();
     use weight_atlas_rust::state::State;
     let root = fixture(
         "mixed-calibration-status",
@@ -337,6 +341,7 @@ fn nonfinite_and_source_mutation_invalidate_profiles() {
 
 #[test]
 fn typical_magnitude_handles_ties_zero_fallback_and_pointwise_pooling() {
+    let _isolation = workspace::guard();
     for (label, values) in [
         ("zeros", vec![0., -0.]),
         ("sparse", {
@@ -386,6 +391,7 @@ fn typical_magnitude_handles_ties_zero_fallback_and_pointwise_pooling() {
 
 #[test]
 fn narrow_batches_respect_stride_edges_and_do_not_decode_gaps() {
+    let _isolation = workspace::guard();
     let mut values = (0..60).map(|v| v as f32).collect::<Vec<_>>();
     // These gap columns are read as bytes but must never enter the field.
     for row in 0..6 {

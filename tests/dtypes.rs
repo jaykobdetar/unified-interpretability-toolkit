@@ -1,3 +1,6 @@
+#[path = "support/workspace.rs"]
+mod workspace;
+
 use std::path::{Path, PathBuf};
 use weight_atlas_rust::{
     render, server,
@@ -80,6 +83,7 @@ fn exact_decimals_include_signed_zero_subnormal_and_extremes() {
 
 #[test]
 fn exact_raw_inspection_calibration_pooling_and_dtype_lookup_separation() {
+    let _isolation = workspace::guard();
     for dtype in [Dtype::Bf16, Dtype::F16, Dtype::F32] {
         let words = match dtype {
             Dtype::Bf16 => vec![0, 0x8000, 0x3f80, 0xbf80, 1, 0x7f7f],
@@ -157,6 +161,7 @@ fn exact_raw_inspection_calibration_pooling_and_dtype_lookup_separation() {
 
 #[test]
 fn nonfinite_never_publishes_statistics_or_renders_replacement_pixels() {
+    let _isolation = workspace::guard();
     for (label, dtype, word) in [
         ("half-inf", Dtype::F16, 0x7c00),
         ("half-nan", Dtype::F16, 0x7e13),
