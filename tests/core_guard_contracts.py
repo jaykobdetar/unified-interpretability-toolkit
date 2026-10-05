@@ -115,6 +115,9 @@ class Simulation:
                 self.finish_at = self.now + 0.25
             elif self.mode == "kill_fallback":
                 self.descendant_done = kind == signal.SIGKILL
+            elif self.mode == "kill_lag":
+                if kind == signal.SIGKILL:
+                    self.finish_at = self.now + 0.25
             elif self.mode == "pid_reuse":
                 self.reused = True
             else:
@@ -122,7 +125,12 @@ class Simulation:
 
 
 def exercise(
-    mode, cleanup_error=False, file_error=False, total_rss=None, available_values=None
+    mode,
+    cleanup_error=False,
+    file_error=False,
+    total_rss=None,
+    available_values=None,
+    disk_free=30 * 1024**3,
 ):
     sim, out, stdout = (
         Simulation(mode, total_rss, available_values),
@@ -145,7 +153,7 @@ def exercise(
             patch.object(
                 guard.shutil,
                 "disk_usage",
-                return_value=SimpleNamespace(free=30 * 1024**3),
+                return_value=SimpleNamespace(free=disk_free),
             )
         )
         spawn = stack.enter_context(
@@ -171,6 +179,25 @@ def exercise(
 
 
 class GuardContracts(unittest.TestCase):
+    def test_twenty_five_gib_disk_boundary_refuses_before_spawn(self):
+        refused = exercise("clean", disk_free=25 * 1024**3 - 1)
+        self.assertEqual(refused.exit_code, 1)
+        self.assertEqual(refused.spawn_count, 0)
+        self.assertEqual(refused.signals, [])
+        self.assertIn("25 GiB disk reserve", refused.receipt["failure"])
+        accepted = exercise("clean", disk_free=25 * 1024**3)
+        self.assertEqual(accepted.exit_code, 0)
+        self.assertEqual(accepted.spawn_count, 1)
+
+    def test_kill_fallback_allows_bounded_delayed_cleanup(self):
+        result = exercise("kill_lag")
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.signals, [(3, signal.SIGTERM), (3, signal.SIGKILL)])
+        self.assertTrue(result.receipt["cleanup_verified"])
+        self.assertEqual(result.receipt["remaining_owned_pids"], [])
+        self.assertGreaterEqual(result.elapsed, 2.25)
+        self.assertLess(result.elapsed, 5)
+
     def test_approved_browser_rss_boundary_is_strictly_above_one_gib(self):
         self.assertEqual(guard.BROWSER_RSS_CAP_BYTES, 1024**3)
         for total in (768 * 1024**2 + 1, 1024**3 - 1, 1024**3):
