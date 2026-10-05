@@ -10,9 +10,11 @@ Dense admission binds one exact owner-approved SmolLM2-135M source to the review
 | Revision | `93efa2f097d58c2a74874c7e644dbc9b0cee75a2` |
 | Configuration SHA-256 | `1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843` |
 | Weights SHA-256 | `80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1` |
-| Reader binary SHA-256 | `76c82c15a18497226fc90d6516ef54efd6c78b571a9aae46c40a5a12fbb99b9a` |
+| Inherited source-lane reader binary SHA-256 | `76c82c15a18497226fc90d6516ef54efd6c78b571a9aae46c40a5a12fbb99b9a` |
 
-Admission also requires the complete current owner receipt, closed filesystem/source receipts, separately supplied bundle approval and the unchanged reviewed native source/Cargo inputs. Replacing the reader requires separate review and qualification. Saved owner hashes and current fingerprints are not presented as fresh payload hashing.
+The binary pin above records the accepted source lane's reader. The integrated source pins cover the exact combined Rust/Cargo inputs, including resource and connection-reuse modules; matching them supplies no reader qualification. The combined qualified-reader digest is unset, and admission refuses before reading an owner bundle until separate combined-source review and reader qualification are accepted.
+
+Admission then also requires the complete current owner receipt, closed filesystem/source receipts and separately supplied bundle approval. Replacing the reader requires separate review and qualification. Saved owner hashes and current fingerprints are not presented as fresh payload hashing.
 
 The source receipt binds a focused runtime inventory and current Git head/tree. Reauthoring an integration commit changes that identity even if runtime bytes are unchanged. A canonical source receipt must be rebound to the integrated public identity and reviewed against the accepted runtime bytes. Private historical source receipts are not portable authority for a new tree.
 
