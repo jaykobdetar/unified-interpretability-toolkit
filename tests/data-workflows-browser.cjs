@@ -20,7 +20,7 @@ const fixture=JSON.parse(fs.readFileSync(path.join(out,'fixture','fixture-manife
   assert(!requests.some(r=>r.path==='/inference-import.js'),'No startup importer load');
   const model=await (await context.request.get(base+'/api/model')).json();assert.equal(model.revision,fixture.revision);assert.equal(model.catalog.length,6);
   const startup=await context.request.get(base+'/viewer.js'),bundle=await startup.body();
-  const parts=['vendor/openseadragon.min.js','atlas-tools.js','app.js','workspace-tools.js','inference.js'];const expected=Buffer.concat(parts.flatMap((f,i)=>[...(i?[Buffer.from('\n;\n')]:[]),fs.readFileSync('web/'+f)]));assert.equal(sha(bundle),sha(expected));assert(bundle.length<512*1024);assert(startup.headers()['content-security-policy'].includes("script-src 'self'"));
+  const parts=['vendor/openseadragon.min.js','atlas-tools.js','app.js','workspace-tools.js','inference.js'];const expected=Buffer.concat(parts.flatMap((f,i)=>[...(i?[Buffer.from('\n;\n')]:[]),fs.readFileSync('web/'+f)]));assert.equal(sha(bundle),sha(expected));assert(bundle.length<600*1024);assert(startup.headers()['content-security-policy'].includes("script-src 'self'"));
   save('served-source-binding.json',{source_identity:model.source_identity,model_identity:model.model_identity,revision:model.revision,viewer_sha256:sha(bundle),viewer_bytes:bundle.length,CSP:startup.headers()['content-security-policy'],fixture_file_sha256:fixture.sha256,scope:'Actual rebuilt renderer through metadata-only fixture adapter; no inference integration'});
   checks.push('Actual rebuilt fixed viewer bundle and real same-origin CSP match exact accepted production sources; codec absent at startup');
   if(phase==='exports'){

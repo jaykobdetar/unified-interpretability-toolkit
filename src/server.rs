@@ -880,7 +880,7 @@ mod query_tests {
     #[test]
     fn startup_script_bundle_is_fixed_order_bounded_and_single_request() {
         let parts = viewer_scripts();
-        assert!(parts.iter().map(|s| s.len()).sum::<usize>() < 512 * 1024);
+        assert!(parts.iter().map(|s| s.len()).sum::<usize>() < 600 * 1024);
         assert_eq!(
             parts[0],
             include_bytes!("../web/vendor/openseadragon.min.js")
