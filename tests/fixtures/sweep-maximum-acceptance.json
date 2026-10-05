@@ -40,9 +40,9 @@
     "activation_site": "attention"
   },
   "resolved_plan": {
-    "version": "weight-atlas-sweep-plan-v1",
+    "version": "weight-atlas-sweep-plan-v2",
     "seed": 7,
-    "control_version": "weight-atlas-sweep-control-v1",
+    "control_version": "weight-atlas-sweep-control-v2",
     "source_model": {
       "repo": "HuggingFaceTB/SmolLM2-135M",
       "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
@@ -89,12 +89,12 @@
         },
         "edits": [
           {
-            "tensor": "model.layers.0.self_attn.q_proj.weight",
+            "tensor": "model.layers.0.self_attn.o_proj.weight",
             "shape": [
               576,
               576
             ],
-            "kind": "rows",
+            "kind": "columns",
             "operation": "scale",
             "start": 0,
             "end": 64,
@@ -114,12 +114,12 @@
         },
         "edits": [
           {
-            "tensor": "model.layers.0.self_attn.q_proj.weight",
+            "tensor": "model.layers.0.self_attn.o_proj.weight",
             "shape": [
               576,
               576
             ],
-            "kind": "rows",
+            "kind": "columns",
             "operation": "scale",
             "start": 448,
             "end": 512,
@@ -127,7 +127,7 @@
           }
         ],
         "selected_cells": 36864,
-        "control_geometry": "different head-aligned contiguous 64-row range"
+        "control_geometry": "different head-aligned contiguous 64-column output block"
       },
       {
         "id": "target-2",
@@ -264,7 +264,7 @@
             6,
             7
           ],
-          "offset": 54
+          "offset": 24
         },
         "edits": [
           {
@@ -275,8 +275,8 @@
             ],
             "kind": "rows",
             "operation": "scale",
-            "start": 54,
-            "end": 55,
+            "start": 24,
+            "end": 25,
             "scale": 0.5
           },
           {
@@ -287,8 +287,8 @@
             ],
             "kind": "rows",
             "operation": "scale",
-            "start": 118,
-            "end": 119,
+            "start": 88,
+            "end": 89,
             "scale": 0.5
           },
           {
@@ -299,8 +299,8 @@
             ],
             "kind": "rows",
             "operation": "scale",
-            "start": 182,
-            "end": 183,
+            "start": 152,
+            "end": 153,
             "scale": 0.5
           },
           {
@@ -311,8 +311,8 @@
             ],
             "kind": "rows",
             "operation": "scale",
-            "start": 246,
-            "end": 247,
+            "start": 216,
+            "end": 217,
             "scale": 0.5
           },
           {
@@ -323,8 +323,8 @@
             ],
             "kind": "rows",
             "operation": "scale",
-            "start": 310,
-            "end": 311,
+            "start": 280,
+            "end": 281,
             "scale": 0.5
           },
           {
@@ -335,8 +335,8 @@
             ],
             "kind": "rows",
             "operation": "scale",
-            "start": 374,
-            "end": 375,
+            "start": 344,
+            "end": 345,
             "scale": 0.5
           },
           {
@@ -347,8 +347,8 @@
             ],
             "kind": "rows",
             "operation": "scale",
-            "start": 438,
-            "end": 439,
+            "start": 408,
+            "end": 409,
             "scale": 0.5
           },
           {
@@ -359,13 +359,13 @@
             ],
             "kind": "rows",
             "operation": "scale",
-            "start": 502,
-            "end": 503,
+            "start": 472,
+            "end": 473,
             "scale": 0.5
           }
         ],
         "selected_cells": 4608,
-        "control_geometry": "different offset: one complete row in each same named head"
+        "control_geometry": "different query offset: one complete row in each same named head"
       }
     ],
     "prompt_count": 2,
@@ -373,21 +373,69 @@
     "prefills": 20,
     "capture_layer": 7,
     "activation_site": "attention",
-    "coverage": "explicit subset only; 30 layers, 9 query heads/layer, 64 offsets/head; no complete head sweep",
+    "scope": "subset",
+    "architecture": {
+      "model_type": "llama",
+      "width": 576,
+      "layers": 30,
+      "query_heads": 9,
+      "kv_heads": 3,
+      "head_dim": 64,
+      "queries_per_kv": 3,
+      "vocab_size": 49152,
+      "intermediate_size": 1536,
+      "capture_sites": {
+        "block": "decoder block output after attention and MLP residual additions, before final RMSNorm",
+        "attention": "attention output after o_proj, before attention residual addition",
+        "mlp": "MLP output after down_proj, before MLP residual addition"
+      },
+      "layout": "llama-eager-head-major-v1",
+      "head_ablation": "o_proj columns",
+      "query_intervention": "q_proj rows"
+    },
+    "intervention_semantics": "head: o_proj columns; query_head/offset: q_proj rows; zero output block removes only that query head contribution, leaves shared K/V intact",
+    "control_semantics": "same geometry and operation; disjoint within the same projection; comparison intervention, not a null/no-effect assumption",
+    "coverage": "explicit subset only; not a complete head sweep",
     "limits": {
-      "targets": 2,
-      "interventions_including_controls": 5,
+      "targets": 9,
+      "interventions_including_controls": 19,
       "prompts": 2,
+      "subset_limits": {
+        "targets": 2,
+        "records": 10,
+        "prefills": 20
+      },
       "probes_per_prompt": 1,
-      "records": 10,
-      "prefills": 20,
+      "records": 19,
+      "prefills": 38,
       "edits": 8,
       "selected_cells": 65536,
       "wall_seconds": 120,
       "worker_cpu_seconds": 90,
-      "control_version": "weight-atlas-sweep-control-v1",
-      "scope": "explicit query-head/offset subset only; fixed prompt context; no generation or automatic resume"
+      "control_version": "weight-atlas-sweep-control-v2",
+      "full_layer_records": 19,
+      "trace_cap": 32,
+      "architecture": {
+        "model_type": "llama",
+        "width": 576,
+        "layers": 30,
+        "query_heads": 9,
+        "kv_heads": 3,
+        "head_dim": 64,
+        "queries_per_kv": 3,
+        "vocab_size": 49152,
+        "intermediate_size": 1536,
+        "capture_sites": {
+          "block": "decoder block output after attention and MLP residual additions, before final RMSNorm",
+          "attention": "attention output after o_proj, before attention residual addition",
+          "mlp": "MLP output after down_proj, before MLP residual addition"
+        },
+        "layout": "llama-eager-head-major-v1",
+        "head_ablation": "o_proj columns",
+        "query_intervention": "q_proj rows"
+      },
+      "scope": "explicit subset or all output heads in one layer; fixed context; one budget, no resume"
     },
-    "digest": "926b82e8c4dff806d94fe95b5e3d55461d893adf95d5a9cbda2bf38ab644311d"
+    "digest": "5117d5cb00e80582748b62cb58178b9a1e7833a2c96def9fd7cd978ca4994814"
   }
 }

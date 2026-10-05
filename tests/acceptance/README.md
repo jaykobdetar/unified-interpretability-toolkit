@@ -10,6 +10,8 @@ These are **unrun real-workload harnesses** added on `tests/observation-acceptan
 
 All evidence directories must be fresh. Output omits owner capabilities; private source prompts are never taken from an existing tab. These harnesses use only declared synthetic prompts. No malformed request, fault response, server crash, vulnerability reproduction or unrelated process termination occurs.
 
+The fixed maximum-subset fixture now snapshots the existing v2 plan/control contract: output-head edits select `o_proj` columns, query offsets select `q_proj` rows, and architecture metadata includes the separate single-layer ceiling. Its request remains two targets/two prompts with ten records/twenty prefills. The owner and browser harnesses retain exact whole-plan equality. A pure contract checks the snapshot against the current planner plus independently fixed geometry, control offsets, digest and resource limits; this fixture correction does not qualify the pending maximum browser workload.
+
 ## Exact pending commands
 
 Only after the parent grants the sole heavy slot and unchanged memory/disk gates pass, run from this candidate worktree. Build sequentially under the existing guard; do not copy a prior embedded-asset binary as qualification:
