@@ -416,7 +416,7 @@ async function prepareTensor(){
   deactivate();const id=state.viewEpoch,t=state.tensor;allowRawInspection();globalThis.atlasWorkspace?.rawReady();
   describeTensor();text('tensor-name',t.name);text('tensor-shape',`${t.shape.join(' × ')} native shape · ${number(t.count)} values`);
   for(const side of SIDES){text(side+'-min','—');text(side+'-max','—');text(side+'-scope','Complete selected-tensor calibration pending');text(side+'-formula','No partial bound is used');text(side+'-parameter','');text(side+'-units','');}
-  if(globalThis.AtlasHost){status('Raw inspection ready. The owner can prepare fixture color scales locally before reopening this model.');text('calibration-note','Color scales are not prepared. Model selection never starts a full scan.');$('calibration-note').hidden=false;return;}
+  if(globalThis.AtlasHost){status('Raw inspection ready. Color scales require separately reviewed owner preparation before reopening this model.');text('calibration-note','Color scales are not prepared. Model selection never starts a full scan.');$('calibration-note').hidden=false;return;}
   status('Reading the selected tensor for exact calibration. Raw addresses can already be inspected.');
   try{await calibrationAction('tensor='+t.id);if(id===state.viewEpoch)pollStatus();}catch(e){if(id===state.viewEpoch)showError(e.message);}
 }
@@ -547,7 +547,7 @@ async function initialize(){
     try{await AtlasHost.initialize(async()=>{state.tensor=null;await refreshModel();},message=>{
       state.modelEpoch++;state.modelController?.abort();deactivate();state.model=null;state.tensor=null;
       text('model-name','Reader unavailable');showError(message);
-    });}catch(e){showError(e.message);status('Choose an available installed fixture.');}
+    });}catch(e){showError(e.message);status('Choose an available installed model.');}
   }else await refreshModel();
 }
 

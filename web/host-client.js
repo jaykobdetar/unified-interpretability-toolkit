@@ -1,5 +1,5 @@
 'use strict';
-// Fixture host only. Capabilities live in this closure, never URLs or storage.
+// Owned model contexts. Capabilities live in this closure, never URLs or storage.
 (function(root,factory){
   const api=factory();
   if(typeof module==='object'&&module.exports)module.exports=api;
@@ -12,6 +12,9 @@
     let active=null,generation=0,switching=false,timer=null,onChange=async()=>{},onLost=()=>{};
     let profiles=null,profileCapabilities={profiles_enabled:false,resume_available:false},profileEpoch=0;
     let profileBinding=null,sourceUnresolved=false;
+    let staticViewsEnabled=false,entriesById=new Map();
+    const profileOptions=()=>({...profileCapabilities,profiles_enabled:profileCapabilities.profiles_enabled===true&&active?.view_kind!=='static'});
+    const eligible=item=>item?.fixture_eligible===true||(staticViewsEnabled&&item?.static_view_candidate===true&&item?.static_activation_allowed===true);
     const snapshot=()=>active?{model_id:active.model_id,context_id:active.context_id,generation}:null;
     function current(saved){return !!saved&&!!active&&saved.generation===generation&&saved.model_id===active.model_id&&saved.context_id===active.context_id;}
     function assertCurrent(saved){if(!current(saved))throw abort();}
@@ -23,7 +26,7 @@
     }
     const post=(url,body,extra={})=>request(url,{method:'POST',headers:{'Content-Type':'application/json','X-Atlas-Local':'1'},body:JSON.stringify(body),...extra});
     function note(message){const node=document?.getElementById('host-model-status');if(node)node.textContent=message;}
-    function lose(saved,message){if(!current(saved))return;profiles?.configure(profileCapabilities,null,null);profileEpoch++;active=null;generation++;cancel(timer);timer=null;note(message);onLost(message);}
+    function lose(saved,message){if(!current(saved))return;profiles?.configure(profileOptions(),null,null);profileEpoch++;active=null;generation++;cancel(timer);timer=null;note(message);onLost(message);}
     async function heartbeat(){
       const saved=snapshot();if(!saved)return;
       try{await post(`/api/view-contexts/${saved.context_id}/heartbeat`,{capability:active.capability});}
@@ -31,6 +34,7 @@
       if(current(saved))timer=schedule(heartbeat,5000);
     }
     async function select(model_id){
+      require(/^m_[0-9a-f]{64}$/.test(model_id)&&eligible(entriesById.get(model_id)),'Installed model viewing is unavailable');
       require(!switching,'A model selection is already pending');
       require(!sourceUnresolved,'Source ownership is unresolved. Reopen the page after lease cleanup.');switching=true;
       const selectNode=document?.getElementById('host-model-select');if(selectNode)selectNode.disabled=true;
@@ -43,9 +47,14 @@
         const next=await post('/api/view-contexts',body);
         require(next.model_id===model_id&&/^m_[0-9a-f]{64}$/.test(next.model_id)
           &&/^[0-9a-f]{32}$/.test(next.context_id)&&/^[0-9a-f]{64}$/.test(next.capability),'Invalid reader lease');
-        active=next;generation++;installed=true;sourceUnresolved=false;profileBinding=null;cancel(timer);timer=schedule(heartbeat,5000);
+        const kind=next.view_kind??'fixture';
+        require(kind==='fixture'||kind==='static','Invalid reader view kind');
+        require(kind==='fixture'?entriesById.get(model_id).fixture_eligible===true:
+          staticViewsEnabled&&entriesById.get(model_id).static_view_candidate===true&&entriesById.get(model_id).static_activation_allowed===true&&next.profiles_enabled===false,'Invalid static reader lease');
+        active={...next,view_kind:kind,static_verified:false};generation++;installed=true;sourceUnresolved=false;profileBinding=null;cancel(timer);timer=schedule(heartbeat,5000);
+        if(kind==='static')profiles?.configure(profileOptions(),null,null);
         if(selectNode)selectNode.value=active.model_id;
-        note('Opening selected fixture. No inference or download permission is granted.');
+        note('Opening selected model…');
         await onChange(snapshot());
         return snapshot();
       }catch(e){
@@ -64,6 +73,7 @@
       const match=/^\/(?:api\/(model|view|inspect|progress|tensor-status)|(?<tile>tile))(\?[^#]*)?$/.exec(raw);
       require(match,'Read-only model route required');
       const name=match.groups?.tile?'tile':match[1];
+      require(active.view_kind!=='static'||name==='model'||active.static_verified===true,'Read selected static model metadata before requesting values');
       const query=new URLSearchParams(raw.includes('?')?raw.slice(raw.indexOf('?')+1):'');
       require(!query.has('context'),'Caller cannot override model context');
       query.set('context',saved.context_id);
@@ -73,11 +83,27 @@
       const saved=snapshot();
       return {url:url(raw,saved),assertCurrent:()=>assertCurrent(saved),check(data){
         assertCurrent(saved);
-        require(data.host_context?.model_id===saved.model_id&&data.host_context?.context_id===saved.context_id,
-          'Response belongs to another model context');
-        if(active.source_identity)require(data.host_context.source_identity===active.source_identity
-          &&data.host_context.model_identity===active.model_identity,'Response source identity changed');
-        else{active.source_identity=data.host_context.source_identity;active.model_identity=data.host_context.model_identity;}
+        try{
+          require(data.host_context?.model_id===saved.model_id&&data.host_context?.context_id===saved.context_id,
+            'Response belongs to another model context');
+          const staticModel=active.view_kind==='static'&&/^\/api\/model(?:\?|$)/.test(raw);
+          if(staticModel){
+            require(data.view_kind==='static'&&data.static_view_ready===true&&data.profiles_enabled===false
+              &&data.inference_ready===false&&data.inference_enabled===false&&data.fit_verified===false
+              &&data.static_binding?.schema==='weight-atlas-static-binding-v1'
+              &&data.static_binding.model_id===saved.model_id
+              &&/^[0-9a-f]{64}$/.test(data.host_context.source_identity)&&/^[0-9a-f]{64}$/.test(data.host_context.model_identity)
+              &&data.static_binding.source_identity===data.host_context.source_identity
+              &&data.static_binding.model_identity===data.host_context.model_identity,'Registered static model is not ready');
+          }
+          if(active.source_identity)require(data.host_context.source_identity===active.source_identity
+            &&data.host_context.model_identity===active.model_identity,'Response source identity changed');
+          else{active.source_identity=data.host_context.source_identity;active.model_identity=data.host_context.model_identity;}
+          if(staticModel)active.static_verified=true;
+        }catch(error){
+          if(active.view_kind==='static')active.static_verified=false;
+          throw error;
+        }
       }};
     }
     async function release(){
@@ -91,7 +117,7 @@
         releaseSent=true;
         const result=await post(`/api/view-contexts/${previous.context_id}/release`,{capability:previous.capability},{keepalive:true});
         active=null;generation++;profileBinding=null;sourceUnresolved=false;cancel(timer);timer=null;
-        profiles?.configure(profileCapabilities,null,null);
+        profiles?.configure(profileOptions(),null,null);
         return result;
       }catch(error){
         if(!releaseSent||error.responseReceived===true){
@@ -106,18 +132,24 @@
       const region=document?.getElementById('host-model-picker'),selectNode=document?.getElementById('host-model-select');
       if(region)region.hidden=false;
       const catalog=await request('/api/models');
+      staticViewsEnabled=catalog.static_views_enabled===true;
       profileCapabilities={profiles_enabled:catalog.profiles_enabled===true,resume_available:false};
       const entries=catalog.models;
       require(Array.isArray(entries),'Invalid installed-model catalog');
+      require(entries.every(item=>/^m_[0-9a-f]{64}$/.test(item?.model_id))
+        &&new Set(entries.map(item=>item.model_id)).size===entries.length,'Invalid installed-model identities');
+      entriesById=new Map(entries.map(item=>[item.model_id,item]));
       if(selectNode){
         selectNode.replaceChildren(...entries.map(item=>{const option=document.createElement('option');option.value=item.model_id;
-          option.textContent=item.name+(item.fixture_eligible?'':' · unavailable in fixture mode');option.disabled=!item.fixture_eligible;return option;}));
+          option.textContent=item.name+(eligible(item)?'':' · viewing unavailable');option.disabled=!eligible(item);return option;}));
         selectNode.addEventListener('change',()=>select(selectNode.value).catch(()=>{}));
         document.getElementById('host-model-open')?.addEventListener('click',()=>select(selectNode.value).catch(()=>{}));
       }
       window?.addEventListener('pagehide',()=>release().catch(()=>{}));
-      const first=entries.find(item=>item.fixture_eligible);
-      if(first)await select(first.model_id);else note('No enabled synthetic fixture. The owner must register and enable one locally.');
+      const first=entries.find(item=>item.fixture_eligible===true);
+      if(first)await select(first.model_id);
+      else if(entries.some(eligible))note('Select an installed model and open it.');
+      else note('No installed model is available for viewing.');
     }
     async function postProfile(path,body){
       require(/^\/api\/profiles\/(start|status|page|cancel|heartbeat|reconcile)$/.test(path),'Private profile route required');
@@ -146,8 +178,8 @@
       const epoch=profileEpoch,saved=snapshot();
       if(sourceUnresolved)return;
       profileBinding=null;
-      profiles?.configure(profileCapabilities,null,null);
-      if(!profiles||!profileCapabilities.profiles_enabled||!saved||!expected)return;
+      profiles?.configure(profileOptions(),null,null);
+      if(!profiles||!profileOptions().profiles_enabled||!saved||!expected)return;
       try{
         const query=new URLSearchParams({context:saved.context_id,tensor:expected.tensor});
         if(expected.slice.leading_indices.length)query.set('slice',expected.slice.leading_indices.join(','));

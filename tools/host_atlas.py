@@ -76,6 +76,9 @@ class Renderer:
 
 class HostHandler(GuardedHandler):
     """Inherit existing absolute receive/Host/Origin/body bounds and no-store send."""
+    def dispatch_host(self,method,raw_path,data=None):
+        return dispatch(self.server.host,method,raw_path,data)
+
     def handle_action(self):
         try:
             path, length = self.validated()
@@ -97,7 +100,7 @@ class HostHandler(GuardedHandler):
                                       'error': 'Inference and analytics are disabled in fixture host mode'})
             require(self.command == 'POST' or not length, 'GET bodies are unsupported')
             data = json.loads(self.rfile.read(length)) if self.command == 'POST' else None
-            status, body, mime = dispatch(self.server.host, self.command, self.path, data)
+            status, body, mime = self.dispatch_host(self.command, self.path, data)
             self.send(status, body, mime)
         except HostError as error:
             self.send(error.status, {'api_version': 1, 'code': error.code, 'error': str(error)})

@@ -1,4 +1,4 @@
-"""One fixture reader with tab leases. No registry writes or implicit compute."""
+"""One owned reader with tab leases; registered static admission defaults closed."""
 from copy import deepcopy
 import hashlib
 import json
@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 from .common import canonical, digest, fields, require
 from .registry import fingerprint
+from .static_models import StaticPolicy
 
 FIXTURE_SHA = 'c0075bfc55f9e51ccac3c5511ea55a5ca19744b002921e8d2e4ae3f60d321be3'
 FIXTURE_FILES = [{'name': 'tiny.safetensors', 'bytes': 244, 'sha256': FIXTURE_SHA}]
@@ -68,8 +69,18 @@ class FixtureHost:
     Tests inject fake handles; only the separate launcher provides real processes.
     Every method is called by the existing serial coordinator, not HTTP threads.
     """
-    def __init__(self, registry, cache_root, factory, *, clock=time.monotonic):
+    def __init__(self, registry, cache_root, factory, *, clock=time.monotonic,
+                 static_policy=None, static_admission=None, dense_policy=None):
+        require(static_policy is None or type(static_policy) is StaticPolicy
+                and static_policy.registry is registry, 'Same-registry private static policy required')
+        require(static_admission is None or static_policy is not None and callable(static_admission),
+                'Private static admission requires its policy')
         self.registry, self.cache_root, self.factory = registry, Path(cache_root).resolve(), factory
+        from .dense_static_admission import BoundDenseStaticAdmission
+        require(dense_policy is None or type(dense_policy) is BoundDenseStaticAdmission
+                and dense_policy.registry is registry,'Same-registry sealed dense policy required')
+        self.dense_policy=dense_policy
+        self.static_policy, self.static_admission = static_policy, static_admission
         self.clock = clock
         self.entry = self.reader = None
         self.context = None
@@ -77,16 +88,56 @@ class FixtureHost:
         self.stopping = False
         self.started = 0.0
         self.source_identity = self.model_identity = None
+        self.view_kind = None
+        self.static_prepared = self.static_bound = None
+        self.observed_alive = self.observed_ready = False
+        self.observed_context = None
+
+    @property
+    def static_views_enabled(self):
+        return self.static_policy is not None and self.static_admission is not None
+
+    def _revoke_readiness(self):
+        self.source_identity = self.model_identity = None
+        self.static_prepared = self.static_bound = None
+        self.observed_alive = self.observed_ready = False
+        self.observed_context = None
+
+    def _published_ready(self):
+        # Read cached coordinator observations only. alive()/ready() can reap.
+        return bool(self.reader is not None and not self.stopping and self.context is not None
+                    and self.observed_context == self.context and self.observed_alive and self.observed_ready
+                    and self.source_identity is not None and self.model_identity is not None
+                    and any(end > self.clock() for end in self.leases.values())
+                    and (self.view_kind != 'static' or self.static_bound is not None))
+
+    def _observe_reader(self):
+        alive = self.reader.alive()
+        ready = self.reader.ready() if alive else False
+        require(type(alive) is bool and type(ready) is bool, 'Invalid owned reader health')
+        self.observed_alive, self.observed_ready = alive, ready
+        self.observed_context = self.context
+
+    def _check_source(self):
+        fresh = self.registry.owner_receipt(self.entry['model_id'])
+        require(fresh == self.entry, 'Installed receipt changed')
+        if self.view_kind == 'static':
+            require(self.static_prepared is not None, 'Static preparation revoked')
+            self.static_prepared.check()
+        else:
+            check_fixture(self.entry)
 
     def _clear(self):
         self.entry = self.reader = self.context = None
         self.leases.clear()
         self.stopping = False
-        self.source_identity = self.model_identity = None
+        self.view_kind = None
+        self._revoke_readiness()
 
     def _stop(self):
         self.stopping = True
         self.leases.clear()
+        self._revoke_readiness()  # Revoke before fallible/uncertain stop.
         if self.reader is None or self.reader.stop():
             self._clear()
             return True
@@ -100,7 +151,16 @@ class FixtureHost:
             return
         now = self.clock()
         self.leases = {cap: end for cap, end in self.leases.items() if end > now}
-        if not self.leases or not self.reader.alive() or (
+        if not self.leases:
+            self._stop()
+            return
+        try:
+            self._check_source()
+            self._observe_reader()
+        except Exception:
+            self._stop()
+            return
+        if not self.observed_alive or (self.source_identity is not None and not self.observed_ready) or (
                 self.source_identity is None and now-self.started >= 5):
             self._stop()
 
@@ -109,16 +169,24 @@ class FixtureHost:
 
     def catalog(self):
         # No tick/reap/start or payload reads from this read-only endpoint.
-        catalog = self.registry.catalog()
+        ready = self._published_ready()
+        catalog = (self.static_policy.catalog(active_binding=self.static_bound, reader_ready=ready)
+                   if self.static_policy is not None else self.registry.catalog())
         for item in catalog['models']:
-            entry = self.registry.owner_receipt(item['model_id'])
-            item['fixture_eligible'] = fixture_entry(entry) and item['state'] != 'source_changed'
+            item.setdefault('static_view_candidate', False)
+            item.setdefault('static_view_ready', False)
+            item['static_activation_allowed'] = bool(self.dense_policy is not None and self.dense_policy.allows(item['model_id']))
+            item['fixture_eligible'] = False
+            if item['hash_provenance'] == 'synthetic_fixture':
+                entry = self.registry.owner_receipt(item['model_id'])
+                current = self.registry._unchanged(entry)
+                item['state'] = 'verified_pending_renderer' if current else 'source_changed'
+                item['fixture_eligible'] = fixture_entry(entry) and current
+                item['view_ready'] = bool(item['fixture_eligible'] and entry == self.entry and ready)
             item['reader_state'] = ('stopping' if self.stopping else 'active') if (
                 self.entry and self.entry['model_id'] == item['model_id']) else 'closed'
-            item['view_ready'] = bool(item['fixture_eligible'] and entry == self.entry
-                                      and item['reader_state'] == 'active'
-                                      and self.source_identity is not None)
         return {'api_version': 1, **catalog, 'reader_capacity': 1, 'lease_capacity': 4,
+                'static_views_enabled': self.static_views_enabled,
                 'inference_enabled': False, 'downloads_enabled': False, 'profiles_enabled': False}
 
     def _owns(self, context, capability):
@@ -126,40 +194,78 @@ class FixtureHost:
                 and any(secrets.compare_digest(cap.encode(), capability.encode())
                         for cap in self.leases))
 
-    def acquire(self, data):
+    def acquire(self, data, *, operation=None):
         fields(data, ('model_id',), ('context_id', 'capability'))
         require(('context_id' in data) == ('capability' in data), 'Complete current lease required')
+        if operation is not None:operation.check()
         self.tick()
+        if operation is not None:operation.check()
         if self.stopping:
             refuse(503, 'cleanup_pending', 'Reader cleanup is pending')
-        try:
-            entry = self.registry.owner_receipt(data['model_id'])
-            check_fixture(entry, hash_bytes=True)
-        except (ValueError, OSError):
-            refuse(409, 'fixture_unavailable', 'Enabled verified synthetic fixture required')
         current = data.get('capability')
         if current is not None and not self._owns(data['context_id'], current):
             refuse(409, 'stale_context', 'Current reader lease is unavailable')
+        kind = None
+        try:
+            entry = self.registry.owner_receipt(data['model_id'])
+            kind = 'fixture' if fixture_entry(entry) else 'static'
+            if kind == 'fixture':
+                check_fixture(entry, hash_bytes=True)
+            else:
+                if not self.static_views_enabled:
+                    refuse(409, 'static_disabled', 'Registered static activation is unavailable')
+        except HostError:
+            raise
+        except (ValueError, OSError):
+            if kind == 'static':
+                refuse(409, 'static_unavailable', 'Registered static activation is unavailable')
+            refuse(409, 'fixture_unavailable', 'Enabled verified synthetic fixture required')
         if self.reader is not None and self.entry['model_id'] != entry['model_id']:
             if current is None or len(self.leases) != 1:
                 refuse(409, 'reader_busy', 'Another tab owns the reader; close its view or wait for its lease')
+        prepared = None
+        if kind == 'static':
+            try:
+                if self.dense_policy is not None:
+                    from .hosted_runtime import StaticOperation
+                    require(type(operation) is StaticOperation and operation.app.host is self
+                            and operation.app.dense_policy is self.dense_policy
+                            and operation.token.kind=='metadata' and operation.token.current(),
+                            'Original private dense acquisition required')
+                if operation is not None:operation.check()
+                prepared = (self.static_prepared if self.reader is not None and self.entry==entry
+                            else self.static_policy.prepare(data['model_id']))
+                require(prepared is not None,'Current static preparation required')
+                if operation is not None:operation.prepared=prepared;operation.check()
+                require(prepared.entry == entry, 'Static receipt changed before admission')
+                require(self.static_admission(prepared) is True, 'Static owner/resource admission refused')
+                prepared.check()
+            except (ValueError, OSError):
+                refuse(409, 'static_unavailable', 'Registered static activation is unavailable')
+        if self.reader is not None and self.entry['model_id'] != entry['model_id']:
+            if operation is not None:operation.mutated=True;operation.check()
             if not self._stop():
                 refuse(503, 'cleanup_pending', 'Previous reader cleanup is pending')
+            if operation is not None:operation.check()
             current = None
         if self.reader is None:
             cache = self.cache_root / entry['model_id']
             require(not cache.is_relative_to(Path(entry['root'])), 'Cache must be outside source')
             try:
-                reader = self.factory(deepcopy(entry), cache)
+                reader = (self.factory(deepcopy(entry),cache,prepared=prepared,operation=operation)
+                          if kind=='static' and operation is not None else self.factory(deepcopy(entry),cache))
             except (ValueError, OSError):
                 refuse(503, 'activation_failed', 'Fixture renderer could not start')
             # Own the child before any fallible pipe/readiness initialization.
             self.reader = reader
             self.entry = entry
+            self.view_kind, self.static_prepared = kind, prepared
             try:
+                if operation is not None:operation.check()
                 initialize = getattr(reader, 'initialize', None)
                 if initialize is not None:
                     initialize()
+                if operation is not None:operation.check()
             except BaseException as error:
                 try:
                     self._stop()
@@ -176,8 +282,16 @@ class FixtureHost:
                 refuse(409, 'reader_busy', 'Reader tab lease capacity reached')
             current = secrets.token_hex(32)
         self.leases[current] = self.clock()+15
+        if kind=='static' and operation is not None:
+            operation.context=self.context
+            if self.static_bound is None:
+                # Pending lease stays private until complete native binding.
+                self.read(entry['model_id'],'model',{'context':[self.context]},operation=operation)
+            operation.check()
         return {'api_version': 1, 'model_id': entry['model_id'], 'context_id': self.context,
-                'capability': current, 'lease_seconds': 15, 'state': 'active' if self.source_identity else 'starting'}
+                'capability': current, 'lease_seconds': 15, 'view_kind': kind,
+                **({'profiles_enabled': False} if kind == 'static' else {}),
+                'state': 'active' if self.source_identity else 'starting'}
 
     def heartbeat(self, context, data):
         fields(data, ('capability',))
@@ -197,22 +311,43 @@ class FixtureHost:
             self._stop()
         return {'api_version': 1, 'released': True, 'cleanup_pending': self.stopping}
 
-    def _validate_context(self, identifier, context):
+    def _validate_context(self, identifier, context, *, allow_unbound_model=False):
+        # Preserve the fixture's source_changed receipt before tick can dispose
+        # the old context. This is also the pre-channel static source check.
+        if (not self.stopping and self.entry is not None and self.context == context
+                and self.entry['model_id'] == identifier):
+            try:
+                self._check_source()
+            except (ValueError, OSError):
+                self._stop()
+                refuse(409, 'source_changed', 'Installed source changed; reopen after owner verification')
         self.tick()
         if (self.stopping or self.entry is None or self.context != context
                 or self.entry['model_id'] != identifier):
             refuse(409, 'stale_context', 'Selected model context is unavailable')
         try:
-            fresh = self.registry.owner_receipt(identifier)
-            require(fresh == self.entry, 'Installed receipt changed')
-            check_fixture(self.entry)
+            self._check_source()
         except (OSError, ValueError):
             self._stop()
             refuse(409, 'source_changed', 'Installed fixture changed; reopen after owner verification')
-        if not self.reader.ready():
+        if not self.observed_ready:
             refuse(503, 'backend_unavailable', 'Fixture renderer is starting')
+        if self.view_kind == 'static' and not allow_unbound_model and self.static_bound is None:
+            refuse(409, 'context_not_ready', 'Read selected model metadata before requesting values')
 
     def _bind_model(self, model):
+        if self.view_kind == 'static':
+            require(self.observed_alive and self.observed_ready and self.observed_context == self.context
+                    and not self.stopping and any(end > self.clock() for end in self.leases.values()),
+                    'Current owned ready reader required')
+            if self.dense_policy is not None:
+                from .dense_static_admission import check_native_model
+                check_native_model(self.static_prepared,model)
+            bound = self.static_policy.bind(self.static_prepared, model, reader_ready=True)
+            self.static_bound = bound
+            self.source_identity = bound.prepared.source_identity
+            self.model_identity = bound.prepared.model_identity
+            return
         require(type(model) is dict and model.get('api_version') == 1, 'Invalid renderer metadata')
         digest(model.get('source_identity'))
         digest(model.get('model_identity'))
@@ -236,52 +371,77 @@ class FixtureHost:
                     and model['model_identity'] == self.model_identity, 'Renderer source changed')
         self.source_identity, self.model_identity = model['source_identity'], model['model_identity']
 
-    def read(self, identifier, route, query):
+    def read(self, identifier, route, query, *, operation=None):
         require(route in READ_ROUTES, 'Unknown model read route')
         native, keys = READ_ROUTES[route]
         require(set(query) <= keys | {'context'} and 'context' in query
                 and all(type(v) is list and len(v) == 1 for v in query.values()), 'Invalid query fields')
         context = query['context'][0]
-        self._validate_context(identifier, context)
+        if operation is not None:operation.check()
+        self._validate_context(identifier, context, allow_unbound_model=route == 'model')
+        if operation is not None:
+            operation.prepared=self.static_prepared;operation.context=context;operation.check()
         if route != 'model' and self.source_identity is None:
             refuse(409, 'context_not_ready', 'Read selected model metadata before requesting values')
         if route == 'tensor-status':
             require('tensor' in query, 'Selected tensor required')
         native_query = {k: values[0] for k, values in query.items() if k != 'context'}
         path = native + ('?'+urlencode(native_query) if native_query else '')
-        status, body, mime = self.reader.read(path)
-        self._validate_context(identifier, context)
-        require(len(body) <= (16384 if route in ('progress', 'tensor-status') else 2*1024**2),
-                'Renderer response exceeds bound')
-        if status != 200:
-            # No arbitrary backend errors/source paths escape the trusted boundary.
-            refuse(503 if status >= 500 else 400, 'renderer_unavailable', 'Requested fixture data is unavailable')
-        if route == 'tile':
-            require(mime == 'image/png', 'Unexpected tile response')
-            return status, body, mime
-        model = json.loads(body)
+        owned_reader = self.reader
         try:
+            status, body, mime = (owned_reader.read(path,operation=operation) if operation is not None else owned_reader.read(path))
+            if operation is not None:operation.check()
+            self._validate_context(identifier, context, allow_unbound_model=route == 'model')
+            require(type(body) is bytes and len(body) <= (16384 if route in ('progress', 'tensor-status') else 2*1024**2),
+                    'Renderer response exceeds bound')
+            if status != 200:
+                refuse(503 if status >= 500 else 400, 'renderer_unavailable', 'Requested model data is unavailable')
+            if route == 'tile':
+                require(mime == 'image/png', 'Unexpected tile response')
+                return status, body, mime
+            require(mime == 'application/json', 'Unexpected renderer metadata response')
+            from .profile_os import strict_json
+            model = strict_json(body)
             if route == 'model':
                 self._bind_model(model)
-                for key in ('source_directory', 'inference_source_model', 'head_layout', 'head_layout_binding',
-                            'fresh_source_hashes'):
-                    model.pop(key, None)
-                model['inference_editable'] = False
-                model['content_digest'] = self.entry['content_digest']
-                model['identity_validation'] = ('Owner-registered synthetic fixture; current file identity checked. '
-                                                'Saved calibration is separate from source hash verification.')
+                if self.view_kind == 'static':
+                    model = self.static_policy.project_model(self.static_bound, model, reader_ready=self._published_ready())
+                    model['profiles_enabled'] = False
+                else:
+                    for key in ('source_directory', 'inference_source_model', 'head_layout', 'head_layout_binding',
+                                'fresh_source_hashes'):
+                        model.pop(key, None)
+                    model['inference_editable'] = False
+                    model['content_digest'] = self.entry['content_digest']
+                    model['identity_validation'] = ('Owner-registered synthetic fixture; current file identity checked. '
+                                                    'Saved calibration is separate from source hash verification.')
+                model['view_kind'] = self.view_kind
             elif route in ('progress', 'tensor-status'):
                 require(model.get('source_identity') == self.source_identity
                         and model.get('model_identity') == self.model_identity, 'Status source mismatch')
+            if self.view_kind == 'static' and route in ('view', 'inspect'):
+                require(type(model.get('source_binding')) is dict
+                        and model['source_binding'].get('source_identity') == self.source_identity
+                        and model['source_binding'].get('model_identity') == self.model_identity, 'Static value source mismatch')
             model['host_context'] = {'model_id': identifier, 'context_id': context,
                                      'source_identity': self.source_identity, 'model_identity': self.model_identity}
-        except (ValueError, TypeError, KeyError):
-            self._stop()
+        except BaseException as error:
+            if self.reader is owned_reader and self.context == context:
+                try:
+                    self._stop()
+                except Exception:
+                    pass  # Uncertain cleanup retains ownership and revoked readiness.
+            if not isinstance(error, Exception):
+                raise
+            if isinstance(error, HostError):
+                raise
             refuse(409, 'source_changed', 'Renderer receipt correspondence could not be verified')
-        return 200, canonical(model), 'application/json'
+        raw=canonical(model)
+        if operation is not None:operation.check()
+        return 200, raw, 'application/json'
 
 
-def dispatch(host, method, raw_path, data=None):
+def dispatch(host, method, raw_path, data=None, *, operation=None):
     """Pure handler router; HTTP guards run in the coordinator before this call."""
     parsed = urlsplit(raw_path)
     require(not parsed.scheme and not parsed.netloc and not parsed.fragment, 'Local route required')
@@ -290,11 +450,11 @@ def dispatch(host, method, raw_path, data=None):
     if method == 'GET' and parts == ['api', 'models'] and not query:
         return 200, canonical(host.catalog()), 'application/json'
     if method == 'POST' and parts == ['api', 'view-contexts'] and not query:
-        return 202, canonical(host.acquire(data)), 'application/json'
+        return 202, canonical(host.acquire(data,operation=operation) if operation is not None else host.acquire(data)), 'application/json'
     if method == 'POST' and len(parts) == 4 and parts[:2] == ['api', 'view-contexts'] and not query:
         action = {'heartbeat': host.heartbeat, 'release': host.release}.get(parts[3])
         if action:
             return 200, canonical(action(parts[2], data)), 'application/json'
     if method == 'GET' and len(parts) == 4 and parts[:2] == ['api', 'models']:
-        return host.read(parts[2], parts[3], query)
+        return (host.read(parts[2],parts[3],query,operation=operation) if operation is not None else host.read(parts[2],parts[3],query))
     refuse(404, 'not_found', 'Route is unavailable in fixture host mode')
