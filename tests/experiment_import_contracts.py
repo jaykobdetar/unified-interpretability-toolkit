@@ -1,13 +1,16 @@
 """Pure producer/consumer sweep archive compatibility; no model or NumPy imports."""
+
 import json
 from pathlib import Path
 import subprocess
 import sys
-sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tools'))
-from inference_sweep import build_plan,coverage
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+from inference_sweep import build_plan, coverage
 from inference_edits import SOURCE_MODEL
-ROOT=Path(__file__).resolve().parents[1]
-script=r'''
+
+ROOT = Path(__file__).resolve().parents[1]
+script = r"""
 const assert=require('node:assert/strict'),codec=require('./web/inference.js'),I=codec.AtlasExperimentImport;
 let raw='';process.stdin.on('data',x=>raw+=x);process.stdin.on('end',()=>{
  const {request,plan,coverage}=JSON.parse(raw),first=plan.cases[0];
@@ -17,8 +20,30 @@ let raw='';process.stdin.on('data',x=>raw+=x);process.stdin.on('end',()=>{
  for(const mutation of [r=>r.request.seed=-1,r=>r.request.targets[0].layer=30,r=>r.sweep_plan.records++,r=>r.sweep_plan.limits.records=-1,r=>r.sweep_plan.cases[1].edits[0].end=999999,r=>r.sweep_plan.architecture.width=577,r=>r.summary.coverage.completed_ids=[],r=>r.summary.coverage.complete=true,r=>r.steps[0].sweep.prompt_index=1,r=>r.steps[0].sweep.restoration_verified=false,r=>r.steps[0].sweep.metrics.logit_delta_rms=-1,r=>r.steps[0].sweep.candidates[0].delta=2]){const bad=JSON.parse(JSON.stringify(r));mutation(bad);assert.throws(()=>I.read(JSON.stringify(bad),codec));}
  const altered=JSON.parse(JSON.stringify(r));altered.steps[0].sweep.metrics.hidden=1;assert.throws(()=>I.read(JSON.stringify(altered),codec));
  console.log('PASS: actual pure sweep producer schema imports, redacts, preserves partial/unrun coverage, and rejects unknown nested metrics.');
-});'''
-for targets in [[{'kind':'query_head','layer':0,'head':1}],[{'kind':'layer_heads','layer':0}]]:
-    request={'mode':'sweep','source_model':SOURCE_MODEL,'prompts':['synthetic fixture'],'targets':targets,'operation':'zero','seed':42,'capture_layer':7,'activation_site':'attention'}
-    plan=build_plan(request,False);request['plan_digest']=plan['digest']
-    subprocess.run(['node','-e',script],input=json.dumps({'request':request,'plan':plan,'coverage':coverage(plan,1)}),text=True,cwd=ROOT,check=True,timeout=10)
+});"""
+for targets in [
+    [{"kind": "query_head", "layer": 0, "head": 1}],
+    [{"kind": "layer_heads", "layer": 0}],
+]:
+    request = {
+        "mode": "sweep",
+        "source_model": SOURCE_MODEL,
+        "prompts": ["synthetic fixture"],
+        "targets": targets,
+        "operation": "zero",
+        "seed": 42,
+        "capture_layer": 7,
+        "activation_site": "attention",
+    }
+    plan = build_plan(request, False)
+    request["plan_digest"] = plan["digest"]
+    subprocess.run(
+        ["node", "-e", script],
+        input=json.dumps(
+            {"request": request, "plan": plan, "coverage": coverage(plan, 1)}
+        ),
+        text=True,
+        cwd=ROOT,
+        check=True,
+        timeout=10,
+    )
