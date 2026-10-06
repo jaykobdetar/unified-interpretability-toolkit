@@ -24,7 +24,7 @@ os.environ.update(
 
 MAX_PROMPT = 128
 MAX_NEW = 32
-from inference_architecture import (
+from atlas_host.inference_architecture import (
     ARCH,
     WIDTH,
     LAYERS,
@@ -51,7 +51,7 @@ from atlas_host.inference_comparison import (
     run as run_comparison,
 )
 from atlas_host.inference_experiments import Context, Record, Request, execute
-from inference_architecture import architecture
+from atlas_host.inference_architecture import architecture
 from atlas_host.inference_services import InferenceContracts
 
 

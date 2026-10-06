@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 from typing import Any
-from inference_architecture import architecture
+from atlas_host.inference_architecture import architecture
 from atlas_host.inference_geometry import Architecture
 import inference_edits as edit_facade
 from atlas_host import inference_edit_contract as edit_contract
@@ -21,7 +21,7 @@ from inference_edits import (
     validate_edits,
     verified_parameters,
 )
-from inference_architecture import (
+from atlas_host.inference_architecture import (
     ARCH,
     WIDTH,
     LAYERS,

@@ -27,7 +27,7 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
-from inference_architecture import (
+from atlas_host.inference_architecture import (
     ARCH,
     WIDTH,
     LAYERS,
@@ -49,7 +49,7 @@ from inference_observations import (
 import inference_prompt_pair as prompt_pair
 import inference_sweep as sweep
 from atlas_host.inference_experiments import Kind, REGISTRY, for_coordinator
-from inference_architecture import architecture
+from atlas_host.inference_architecture import architecture
 from atlas_host.inference_geometry import (
     head_layout_descriptor as bound_head_layout_descriptor,
 )
