@@ -7,6 +7,7 @@ from pathlib import Path
 import resource
 import sys
 import time
+from typing import Any
 
 # Set before importing numerical libraries, including when imported by reference tests.
 for key in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
@@ -41,6 +42,13 @@ from inference_observations import (
 )
 
 from inference_generation import GenerationBindings, run as run_generation
+from inference_comparison import (
+    ComparisonBindings,
+    Event,
+    paired_step as comparison_step,
+    run as run_comparison,
+)
+from inference_experiments import Context, Record, Request, execute
 
 
 def emit(record):
@@ -114,151 +122,37 @@ def generate(
     )
 
 
-def paired_step(index, baseline, edited, baseline_scores, edited_scores, tokenizer):
-    """Union scores have both values; prefix identity is based on consumed IDs."""
-    left = baseline[index] if index < len(baseline) else None
-    right = edited[index] if index < len(edited) else None
-    left_ids = [step["token_id"] for step in baseline[:index]]
-    right_ids = [step["token_id"] for step in edited[:index]]
-    alignment = (
-        "branch_ended"
-        if left is None or right is None
-        else "matched_prefix" if left_ids == right_ids else "different_prefix"
+def paired_step(
+    index: int,
+    baseline: list[Event],
+    edited: list[Event],
+    baseline_scores: list[Any],
+    edited_scores: list[Any],
+    tokenizer: Any,
+) -> Event:
+    return comparison_step(
+        index, baseline, edited, baseline_scores, edited_scores, tokenizer
     )
-    candidates = sorted(
-        {entry["id"] for step in (left, right) if step for entry in step["top_logits"]}
-    )
-    scores = []
-    for token in candidates:
-        a = float(baseline_scores[index][token]) if left else None
-        b = float(edited_scores[index][token]) if right else None
-        scores.append(
-            {
-                "id": token,
-                "piece": tokenizer.decode([token], skip_special_tokens=False),
-                "baseline_logit": a,
-                "edited_logit": b,
-                "delta": b - a if a is not None and b is not None else None,
-            }
-        )
-
-    def summary(step, prefix):
-        return (
-            {
-                key: step[key]
-                for key in (
-                    "token_id",
-                    "token_piece",
-                    "generated_text",
-                    "eos",
-                    "compute_ms",
-                    "compute_total_ms",
-                )
-            }
-            | {"generated_ids": prefix + [step["token_id"]]}
-            if step
-            else None
-        )
-
-    return {
-        **(right or left),
-        "type": "step",
-        "index": index,
-        "baseline": summary(left, left_ids),
-        "edited": summary(right, right_ids),
-        "alignment": alignment,
-        "score_kind": "raw FP32 logits",
-        "activation_branch": "edited" if right else "baseline",
-        "candidates": scores,
-    }
 
 
-def compare(torch, tokenizer, model, request, record=emit):
-    # This model belongs exclusively to one disposable worker. No later request
-    # can reuse edited parameters. Cancellation/failure destroys this process.
+def compare(
+    torch: Any, tokenizer: Any, model: Any, request: Request, record: Record = emit
+) -> None:
     from inference_edits import apply_edits, validate_edits, verified_parameters
 
-    edits = validate_edits(request["edits"], request["source_model"])
-    verified_parameters(model)
-    baseline, baseline_scores, edited, edited_scores = [], [], [], []
-
-    def collect(target):
-        def accept(event):
-            if event["type"] == "step":
-                target.append(event)
-            elif event["type"] == "prefill":
-                record(event)
-
-        return accept
-
-    record({"type": "prefill", "comparison_phase": "baseline", "edits": edits})
-    generate(
+    return run_comparison(
         torch,
         tokenizer,
         model,
-        request["prompt"],
-        request["max_new_tokens"],
-        request["layer"],
-        collect(baseline),
-        baseline_scores.append,
-        activation_site=request.get("activation_site", "block"),
-        observation=request.get("observation"),
-    )
-    apply_edits(torch, model, edits, request["source_model"])
-    record({"type": "prefill", "comparison_phase": "edited"})
-
-    # Fresh generate invocation starts from prompt with no baseline KV cache.
-    def accept_edited(event):
-        collect(edited)(event)
-        if event["type"] == "step":
-            record(
-                paired_step(
-                    event["index"],
-                    baseline,
-                    edited,
-                    baseline_scores,
-                    edited_scores,
-                    tokenizer,
-                )
-            )
-
-    generate(
-        torch,
-        tokenizer,
-        model,
-        request["prompt"],
-        request["max_new_tokens"],
-        request["layer"],
-        accept_edited,
-        edited_scores.append,
-        activation_site=request.get("activation_site", "block"),
-        observation=request.get("observation"),
-    )
-    for index in range(len(edited), len(baseline)):
-        record(
-            paired_step(
-                index, baseline, edited, baseline_scores, edited_scores, tokenizer
-            )
-        )
-
-    def result(steps):
-        return {
-            "generated_ids": [step["token_id"] for step in steps],
-            "generated_text": steps[-1]["generated_text"],
-            "reason": "eos" if steps[-1]["eos"] else "token_limit",
-        }
-
-    record(
-        {
-            "type": "done",
-            "generated_tokens": max(len(baseline), len(edited)),
-            "comparison_phase": "complete",
-            "baseline": result(baseline),
-            "edited": result(edited),
-            "reason": "comparison_complete",
-            "compute_total_ms": baseline[-1]["compute_total_ms"]
-            + edited[-1]["compute_total_ms"],
-        }
+        request,
+        record,
+        ComparisonBindings(
+            generate=generate,
+            paired_step=paired_step,
+            validate_edits=validate_edits,
+            verified_parameters=verified_parameters,
+            apply_edits=apply_edits,
+        ),
     )
 
 
@@ -274,7 +168,7 @@ def configure_worker_limits(cpu_seconds=90):
         resource.setrlimit(kind, (limit, limit))
 
 
-def main():
+def main() -> None:
     os.sched_setaffinity(0, {min(os.sched_getaffinity(0))})
     os.nice(10)
     if len(sys.argv) not in (2, 4):
@@ -329,12 +223,24 @@ def main():
         pair_preview = prompt_pair.token_preview(preview_tokenizer, request["prompts"])
         del preview_tokenizer
         if request["mode"] == "prompt_pair_preview":
-            emit(
-                {
-                    "type": "preview_done",
-                    "preview": pair_preview,
-                    "reason": "token_preview",
-                }
+            execute(
+                request,
+                Context(
+                    torch=None,
+                    tokenizer=None,
+                    model=None,
+                    generate=generate,
+                    compare=compare,
+                    prompt_pair=prompt_pair.run,
+                    sweep=sweep.run,
+                    record=emit,
+                    capture_sites=CAPTURE_SITES,
+                    verified_parameters=None,
+                    pair_preview=pair_preview,
+                    sweep_plan=sweep_plan,
+                    sweep_deadline=sweep_deadline,
+                    cpu_allowance=cpu_allowance,
+                ),
             )
             return
         prompt_pair.validate_positions(request, pair_preview)
@@ -370,8 +276,6 @@ def main():
             },
         }
     )
-    from inference_experiments import Context, execute
-
     verify_pair_parameters = None
     if request.get("mode") == "prompt_pair":
         from inference_edits import verified_parameters

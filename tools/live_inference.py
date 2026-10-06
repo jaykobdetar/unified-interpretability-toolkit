@@ -21,6 +21,7 @@ import stat
 import subprocess
 import sys
 import time
+from typing import Any
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,6 +47,7 @@ from inference_observations import (
 )
 import inference_prompt_pair as prompt_pair
 import inference_sweep as sweep
+from inference_experiments import Kind, REGISTRY, for_coordinator
 
 MANIFEST = json.loads((ROOT / "docs/models/smollm2-135m.json").read_text())
 GIB = 1024**3
@@ -492,7 +494,7 @@ class Session:
             self.status = reason
         return True
 
-    def start(self, data):
+    def start(self, data: dict[str, Any]) -> dict[str, Any]:
         job_started = time.monotonic()
         admission_cpu_started = time.process_time()
         self.tick()
@@ -505,15 +507,16 @@ class Session:
         if self.process is not None or self.status in ("loading", "running"):
             raise ValueError("A session is active; cancel or reset it first")
         mode = data.get("mode", "generation")
+        experiment = for_coordinator(data, mode)
         sweep_plan = None
-        if mode == "sweep":
+        if experiment is REGISTRY[Kind.SWEEP]:
             sweep_plan = sweep.build_plan(data)
             request = dict(data)
             observation, layer = None, data["capture_layer"]
-        elif mode in prompt_pair.MODES:
+        elif experiment in (REGISTRY[Kind.PREVIEW], REGISTRY[Kind.PROMPT_PAIR]):
             request = prompt_pair.validate_request(data)
             observation, layer = None, request.get("layer")
-        elif mode == "generation":
+        elif experiment in (REGISTRY[Kind.GENERATION], REGISTRY[Kind.COMPARISON]):
             prompt = data.get("prompt")
             limit, layer = data.get("max_new_tokens", 16), data.get("layer", 0)
             if (

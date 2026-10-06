@@ -88,6 +88,7 @@ class Context:
 
 
 class Kind(Enum):
+    PREVIEW = "prompt_pair_preview"
     SWEEP = "sweep"
     PROMPT_PAIR = "prompt_pair"
     COMPARISON = "comparison"
@@ -98,6 +99,16 @@ class Kind(Enum):
 class Experiment:
     kind: Kind
     execute: Callable[[Context, Request], None]
+
+
+def run_preview(context: Context, request: Request) -> None:
+    context.record(
+        {
+            "type": "preview_done",
+            "preview": context.pair_preview,
+            "reason": "token_preview",
+        }
+    )
 
 
 def run_sweep(context: Context, request: Request) -> None:
@@ -148,6 +159,7 @@ def run_generation(context: Context, request: Request) -> None:
 
 REGISTRY: Mapping[Kind, Experiment] = MappingProxyType(
     {
+        Kind.PREVIEW: Experiment(Kind.PREVIEW, run_preview),
         Kind.SWEEP: Experiment(Kind.SWEEP, run_sweep),
         Kind.PROMPT_PAIR: Experiment(Kind.PROMPT_PAIR, run_prompt_pair),
         Kind.COMPARISON: Experiment(Kind.COMPARISON, run_comparison),
@@ -161,6 +173,8 @@ def select(request: Request) -> Experiment:
         return REGISTRY[Kind.SWEEP]
     elif request.get("mode") == Kind.PROMPT_PAIR.value:
         return REGISTRY[Kind.PROMPT_PAIR]
+    elif request.get("mode") == Kind.PREVIEW.value:
+        return REGISTRY[Kind.PREVIEW]
     elif "edits" in request:
         return REGISTRY[Kind.COMPARISON]
     else:
@@ -169,3 +183,16 @@ def select(request: Request) -> Experiment:
 
 def execute(request: Request, context: Context) -> None:
     select(request).execute(context, request)
+
+
+def for_coordinator(request: Request, mode: object) -> Experiment | None:
+    """Use the same registrations with the coordinator's existing closed intake."""
+    if mode == Kind.SWEEP.value:
+        return REGISTRY[Kind.SWEEP]
+    elif mode == Kind.PREVIEW.value:
+        return REGISTRY[Kind.PREVIEW]
+    elif mode == Kind.PROMPT_PAIR.value:
+        return REGISTRY[Kind.PROMPT_PAIR]
+    elif mode == Kind.GENERATION.value:
+        return REGISTRY[Kind.COMPARISON if "edits" in request else Kind.GENERATION]
+    return None
