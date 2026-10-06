@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from inference_geometry import Architecture
-import inference_geometry as geometry
+from atlas_host.inference_geometry import Architecture
+from atlas_host import inference_geometry as geometry
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = json.loads((ROOT / "docs/models/smollm2-135m.json").read_text())
@@ -65,7 +65,10 @@ def verify_attention_layout(model: Any) -> dict[str, Any]:
         LlamaAttention,
         LlamaDecoderLayer,
     )
-    from inference_engine import AttentionRuntime, verify_attention_layout as verify
+    from atlas_host.inference_engine import (
+        AttentionRuntime,
+        verify_attention_layout as verify,
+    )
 
     return verify(
         model,

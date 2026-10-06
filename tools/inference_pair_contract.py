@@ -7,7 +7,7 @@ import hashlib
 import json
 import math
 from typing import Any
-from inference_geometry import Architecture
+from atlas_host.inference_geometry import Architecture
 
 
 @dataclass(frozen=True)

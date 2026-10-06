@@ -43,7 +43,7 @@ from inference_observations import (
 )
 
 from inference_generation import GenerationBindings, run as run_generation
-from inference_engine import LoaderRuntime, load_engine as bound_load_engine
+from atlas_host.inference_engine import LoaderRuntime, load_engine as bound_load_engine
 from inference_comparison import (
     ComparisonBindings,
     Event,

@@ -50,7 +50,9 @@ import inference_prompt_pair as prompt_pair
 import inference_sweep as sweep
 from inference_experiments import Kind, REGISTRY, for_coordinator
 from inference_architecture import architecture
-from inference_geometry import head_layout_descriptor as bound_head_layout_descriptor
+from atlas_host.inference_geometry import (
+    head_layout_descriptor as bound_head_layout_descriptor,
+)
 from inference_services import InferenceContracts
 
 MANIFEST = json.loads((ROOT / "docs/models/smollm2-135m.json").read_text())

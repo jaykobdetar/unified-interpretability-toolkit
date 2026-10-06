@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from inference_geometry import Architecture
+from atlas_host.inference_geometry import Architecture
 import inference_edit_contract as edit
 import inference_observation_contract as observation
 import inference_pair_contract as pair

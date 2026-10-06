@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from inference_architecture import architecture
-from inference_geometry import Architecture
+from atlas_host.inference_geometry import Architecture
 from inference_edit_contract import EditBindings
 import inference_edit_contract as contract
 
