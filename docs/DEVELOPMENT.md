@@ -101,19 +101,21 @@ The supplied Black wheel hashes target Linux x86_64 with CPython 3.12. The npm p
 
 Mechanical formatting covers first-party Python under `tools/` and `tests/`, Rust selected by `cargo fmt --all`, and first-party JavaScript/CSS under `web/` and `tests/`. The immutable supplied behaviour lock, vendored code, JSON snapshots and HTML are outside that formatter scope. These exclusions preserve supplied and held bytes; they do not disable any existing project check.
 
-## Version 2 behaviour lock
+## Version 3 behaviour lock
 
-`tools/behaviour_lock.py` is the supplied version 2 referee, preserved exactly with SHA-256 `d4419dfd13482ba626bf910018708e70fa5332a99165491b8ec8627ed26c8fef`. Wording, numeric results, images, data, statuses and headers are strict. Served page-file hashes are reported separately. The script uses synthetic checkpoints and the Python standard library; it needs no model, browser or GPU.
+`tools/behaviour_lock.py` is the supplied version 3 referee, preserved exactly with SHA-256 `ef8f942e6924d019c3e7a45ab9ab678cdb16c5cb92838d308bce0ae18d92f1f9`. Wording, numeric results, images, data, statuses and headers are strict. Served page-file hashes are reported separately. The script uses synthetic checkpoints and the Python standard library; it needs no model, browser or GPU. Version 3 adds native input-limit boundaries, altered calibration/histogram refusal, changed-source and shared-cache checks, resource-option ranges, small tile-cache overflow and bounded malformed-request refusal cases. Hosted-renderer/profile-worker commands, accepted operating-system budgets, concurrency, speed/memory, Python services and browser interactions still require separate checks.
 
-For this quality pass, record a separately named v2 baseline from the already preserved original starting binary, SHA-256 `c26a328641736bd5805aa214255080c7e3dd63d1053a3f06be5103bb4ec7078a`. Keep the v1 script and baseline unchanged. Do not overwrite that binary with a rebuilt one or re-record a baseline to excuse differences.
+For this quality pass, record a separately named v3 baseline from the already preserved original starting binary, SHA-256 `c26a328641736bd5805aa214255080c7e3dd63d1053a3f06be5103bb4ec7078a`. Keep the v1/v2 scripts and baselines unchanged. Do not overwrite that binary with a rebuilt one or re-record a baseline to excuse differences.
 
 ```bash
-python3 tools/behaviour_lock.py --binary ../atlas-before --record ../before-v2.json
+python3 tools/behaviour_lock.py --binary ../atlas-before --record ../before-v3.json
 python3 tools/behaviour_lock.py --binary target/release/weight-atlas-rust \
-  --compare ../before-v2.json --old-binary ../atlas-before --full
+  --compare ../before-v3.json --old-binary ../atlas-before --full
 ```
 
-Use the existing resource guards for qualification. Every commit touching `src/` must compare against that v2 baseline with `--old-binary`, including all eleven upgrade checks. Do not add allow flags without an explicitly agreed change. The lock does not cover Python services, browser interactions, non-default resource settings, simultaneous requests, speed or memory use; those require their separate existing checks.
+Use the existing resource guards for qualification. Every commit touching `src/` must compare against that v3 baseline with `--old-binary`, including all eleven upgrade checks. No `--allow` is currently authorized. Any future allowance requires the user's written agreement, identified in the pull-request description. The lock does not cover Python services, browser interactions, accepted operating-system resource budgets, simultaneous requests, speed or memory use; those require their separate existing checks.
+
+Pull-request CI additionally builds the exact target-branch and pull-request heads on one runner, using the target branch's existing build guard for both. It records from the target binary and compares the pull-request binary with `--old-binary`, running the referee and qualification guard from the target checkout rather than the pull request's copies. Both runs use the same one-CPU, RSS, memory, disk, wall-time and cleanup limits. Strict differences, failed upgrades and guard failures fail the job; no allow flag is passed. The baseline, referee/binary hashes, raw stdout/stderr and cleanup receipts are retained as a CI artifact. During the referee-adoption PR the target still carries v2; subsequent PRs use v3 once the target branch contains the accepted update.
 
 Existing syntax checks, contracts and Clippy warning enforcement remain required alongside the mandatory static stage. Its selected Ruff and ESLint correctness rules and strict runner-only mypy scope are documented in [Static checks](../dev/STATIC-CHECKS.md). The two explicit F821 oracle-hook exceptions, recommended-preset diagnostics and deferred `no-promise-executor-return` rule are recorded there with their reasons. Broader lint/type scope, unused-import removal and structural cleanup remain subject to separately reviewed Part 2 work.
 

@@ -50,3 +50,86 @@ jobs:
           df -h .
       - name: Unified pinned development and CI checks
         run: python3 tools/check.py all
+  behaviour-lock:
+    if: github.event_name == 'pull_request'
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CARGO_BUILD_JOBS: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check out the target branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: referee-base
+          persist-credentials: false
+      - name: Check out the pull request
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: referee-pr
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12.3'
+      - name: Select Rust toolchain
+        run: rustup toolchain install 1.92.0 --profile minimal && rustup default 1.92.0
+      - name: Reserve build disk on the disposable hosted runner
+        if: runner.environment == 'github-hosted'
+        run: |
+          df -h .
+          if test -d '/usr/local/lib/android/sdk'; then
+            test "$(realpath -e -- '/usr/local/lib/android/sdk')" = '/usr/local/lib/android/sdk'
+            sudo rm -rf -- '/usr/local/lib/android/sdk'
+          fi
+          if test -d '/usr/share/dotnet'; then
+            test "$(realpath -e -- '/usr/share/dotnet')" = '/usr/share/dotnet'
+            sudo rm -rf -- '/usr/share/dotnet'
+          fi
+          df -h .
+      - name: Build the target binary with the target branch guard
+        working-directory: referee-base
+        run: timeout --signal=TERM --kill-after=5s 140s python3 -B tools/guarded-build.py build --release
+      - name: Build the pull request binary with the target branch guard
+        working-directory: referee-pr
+        run: timeout --signal=TERM --kill-after=5s 140s python3 -B ../referee-base/tools/guarded-build.py build --release
+      - name: Record with the target branch referee
+        run: |
+          mkdir -p "$RUNNER_TEMP/behaviour-lock"
+          sha256sum referee-base/tools/behaviour_lock.py referee-base/target/release/weight-atlas-rust referee-pr/target/release/weight-atlas-rust > "$RUNNER_TEMP/behaviour-lock/identities.sha256"
+          result=0
+          ATLAS_EVIDENCE_DIR="$RUNNER_TEMP/behaviour-lock/record-guard" \
+          timeout --signal=TERM --kill-after=5s 140s \
+            python3 -B referee-base/tools/guarded-core-ui.py \
+            python3 -B referee-base/tools/behaviour_lock.py \
+            --binary referee-base/target/release/weight-atlas-rust \
+            --record "$RUNNER_TEMP/behaviour-lock/baseline.json" \
+            --work "$RUNNER_TEMP/behaviour-lock-work/record" \
+            > "$RUNNER_TEMP/behaviour-lock/record.stdout" \
+            2> "$RUNNER_TEMP/behaviour-lock/record.stderr" || result=$?
+          cat "$RUNNER_TEMP/behaviour-lock/record.stdout" "$RUNNER_TEMP/behaviour-lock/record.stderr"
+          exit "$result"
+      - name: Compare with the target branch referee and old binary
+        run: |
+          result=0
+          ATLAS_EVIDENCE_DIR="$RUNNER_TEMP/behaviour-lock/compare-guard" \
+          timeout --signal=TERM --kill-after=5s 140s \
+            python3 -B referee-base/tools/guarded-core-ui.py \
+            python3 -B referee-base/tools/behaviour_lock.py \
+            --binary referee-pr/target/release/weight-atlas-rust \
+            --compare "$RUNNER_TEMP/behaviour-lock/baseline.json" \
+            --old-binary referee-base/target/release/weight-atlas-rust \
+            --full --work "$RUNNER_TEMP/behaviour-lock-work/compare" \
+            > "$RUNNER_TEMP/behaviour-lock/compare.stdout" \
+            2> "$RUNNER_TEMP/behaviour-lock/compare.stderr" || result=$?
+          cat "$RUNNER_TEMP/behaviour-lock/compare.stdout" "$RUNNER_TEMP/behaviour-lock/compare.stderr"
+          exit "$result"
+      - name: Retain referee baseline and raw outputs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: behaviour-lock-${{ github.event.pull_request.number }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/behaviour-lock
+          if-no-files-found: warn
