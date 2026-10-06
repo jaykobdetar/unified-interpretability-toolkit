@@ -144,14 +144,17 @@ def analyze_request(payload):
     if chosen is None:
         return catalog.model_outliers(seed=seed)
     if data.get("scope") == "svd_summary":
-        from .svd_summary import compute_with_numpy, binding
+        from .svd_summary import (
+            compute_with_numpy as compute_summary_with_numpy,
+            binding,
+        )
 
         binding(payload["model"], chosen, data["region"], seed)
         tensor = next(t for t in catalog.tensors if t.name == chosen["name"])
         values = catalog.read(tensor, data["region"])
         import numpy as np  # Same owned worker, BLAS/process caps; no general dense report.
 
-        result = compute_with_numpy(
+        summary_result = compute_summary_with_numpy(
             np,
             values,
             model=payload["model"],
@@ -160,7 +163,7 @@ def analyze_request(payload):
             seed=seed,
         )
         catalog.verify()
-        return result
+        return summary_result
     from .profiles import resolve_local
 
     options, unavailable = resolve_local(catalog.root)
