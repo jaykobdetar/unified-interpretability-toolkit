@@ -6,8 +6,8 @@ from inference_architecture import architecture
 from atlas_host.inference_geometry import Architecture
 import inference_edits as edit_facade
 from atlas_host import inference_edit_contract as edit_contract
-from inference_pair_contract import PairBindings
-import inference_pair_contract as contract
+from atlas_host.inference_pair_contract import PairBindings
+from atlas_host import inference_pair_contract as contract
 
 import hashlib
 import json

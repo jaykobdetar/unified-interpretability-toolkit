@@ -8,8 +8,8 @@ from typing import Any
 from atlas_host.inference_geometry import Architecture
 from atlas_host import inference_edit_contract as edit
 from atlas_host import inference_observation_contract as observation
-import inference_pair_contract as pair
-import inference_sweep_contract as sweep
+from atlas_host import inference_pair_contract as pair
+from atlas_host import inference_sweep_contract as sweep
 
 
 @dataclass(frozen=True)
