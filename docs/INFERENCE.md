@@ -31,6 +31,8 @@ The model is loaded through the built-in Llama implementation with local-only sa
 
 ## What the controls mean
 
+The hover line's head label identifies the zero-based attention-head group and offset for the inspected native weight row or column, using the pinned model configuration. It describes the weight layout; it does not establish a head's semantic purpose or a loaded-runtime observation. Labels appear for the pinned SmolLM2 files opened through the coordinator; with `--analytics-only`, `--revision` must also equal the pinned revision. **Head unavailable** means a verified layout binding is missing or does not match the current source or geometry. **Head not applicable** means the verified layout does not define a head mapping for the selected tensor, such as embeddings. See the [head-layout contract](HEAD-LAYOUT-CONTRACT.md) for supported projections.
+
 - **Run comparison locally** computes baseline and edited branches sequentially, each up to the selected token limit, within the same original total session deadline. A fresh process reloads the model each time; startup is separate from forward-pass timing.
 - **Pause/Resume playback**, **Single step**, and the rate control change how computed token records are displayed. They do not slow or pause inference computation. Step mode starts with no record displayed and advances one record per click.
 - **Cancel compute** signals only this session's worker. Cancellation is complete only after reaping; if cleanup is delayed, `stopping` remains active and blocks a new session while polling continues. Already received records remain available as a recorded session.
