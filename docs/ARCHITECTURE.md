@@ -24,6 +24,8 @@ The ordered native rule catalog lives in `src/rules.rs`. Each definition holds i
 
 Slice bindings and descriptors are constructed from typed borrowed records in `src/slice/response.rs`, then converted to the existing JSON value interface. This conversion uses only string, integer and array values and introduces no fallible serialization path. The identity-domain inputs and their ordered JSON derivation stay in `TensorSlice::new`; they are separate from response field construction. Held UTF-8 byte vectors protect both the identities and the serialized public responses.
 
+Native scalar inspection builds a typed record in `src/server/response.rs` at that same JSON boundary. It retains every field, including the nullable BF16 byte spelling, exact original decimal, native indices, source binding and separate transform values/errors/readiness. The conversion introduces no fallible serialization step. Request/source validation, original-byte reads, rule admission, calibration checks and classification remain in `server::inspect` before response construction; fixed response witnesses cover finite and nonfinite values, selected planes and ready/unready transforms.
+
 The native entrypoint in `src/main.rs` keeps help and argument validation ahead of resource configuration and model access. `run_args` selects the startup scope and opens the required source or state; private helpers parse option pairs, initialize custom resources and print metadata. Command dispatch delegates calibration, overview, tile output and benchmarking to separate functions. These stages retain the existing option defaults, validation order, command IDs and output fields.
 
 ## Resource and ownership boundary

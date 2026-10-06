@@ -1,3 +1,4 @@
+mod response;
 mod reuse;
 mod reuse_transport;
 use crate::{
@@ -257,9 +258,25 @@ pub fn inspect(state: &State, q: &Query) -> Result<Value> {
     } else {
         "finite"
     };
-    Ok(
-        json!({"api_version":1,"source_binding":state.slice_binding(&slice),"tensor":id,"row":row,"col":col,"raw_exact":exact_decimal_for(dtype,bits),"dtype":dtype.name(),"element_bytes":dtype.bytes(),"raw_hex_le":raw_hex,"classification":classification,"bf16_hex_le":if dtype==Dtype::Bf16{Some(raw_hex)}else{None},"shard":t.shard,"byte_offset":offset,"native_indices":slice.native_indices(row,col)?,"transformed":fields,"transform_errors":transform_errors,"transforms_ready":ready}),
-    )
+    Ok(response::Inspection {
+        source_binding: state.slice_binding(&slice),
+        tensor: id,
+        row,
+        col,
+        raw_exact: exact_decimal_for(dtype, bits),
+        dtype: dtype.name(),
+        element_bytes: dtype.bytes(),
+        raw_hex_le: &raw_hex,
+        classification,
+        bf16_hex_le: (dtype == Dtype::Bf16).then_some(raw_hex.as_str()),
+        shard: &t.shard,
+        byte_offset: offset,
+        native_indices: slice.native_indices(row, col)?,
+        transformed: fields,
+        transform_errors,
+        transforms_ready: ready,
+    }
+    .into())
 }
 type Request = (String, String, Query, BTreeMap<String, String>);
 const MAX_PENDING_HEADERS: usize = 4;
