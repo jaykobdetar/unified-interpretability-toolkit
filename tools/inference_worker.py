@@ -42,6 +42,7 @@ from inference_observations import (
 )
 
 from inference_generation import GenerationBindings, run as run_generation
+from inference_engine import LoaderRuntime, load_engine as bound_load_engine
 from inference_comparison import (
     ComparisonBindings,
     Event,
@@ -55,30 +56,28 @@ def emit(record):
     print(json.dumps(record, allow_nan=False, separators=(",", ":")), flush=True)
 
 
-def load_engine(directory):
+def load_engine(directory: Path) -> tuple[Any, Any, Any]:
     import torch
     from transformers import LlamaForCausalLM, PreTrainedTokenizerFast
 
-    torch.set_num_threads(1)
-    torch.set_num_interop_threads(1)
-    torch.manual_seed(0)
-    torch.use_deterministic_algorithms(True)
-    # Explicit built-in implementation, no AutoModel, remote Python, or pickle.
-    tokenizer = PreTrainedTokenizerFast(
-        tokenizer_file=str(directory / "tokenizer.json")
-    )
-    model = LlamaForCausalLM.from_pretrained(
-        str(directory),
-        local_files_only=True,
-        use_safetensors=True,
-        dtype=torch.float32,
-        attn_implementation="eager",
-    ).eval()
-    from inference_edits import verified_parameters
+    def verify_parameters(model: Any) -> object:
+        from inference_edits import verified_parameters
 
-    verified_parameters(model)
-    model._atlas_verified_layout = verify_attention_layout(model)
-    return torch, tokenizer, model
+        return verified_parameters(model)
+
+    def verify_layout(model: Any) -> dict[str, Any]:
+        return verify_attention_layout(model)
+
+    return bound_load_engine(
+        directory,
+        LoaderRuntime(
+            torch=torch,
+            model_factory=LlamaForCausalLM,
+            tokenizer_factory=PreTrainedTokenizerFast,
+            verified_parameters=verify_parameters,
+            verify_attention_layout=verify_layout,
+        ),
+    )
 
 
 def generate(
