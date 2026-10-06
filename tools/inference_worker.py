@@ -370,38 +370,32 @@ def main():
             },
         }
     )
-    if request.get("mode") == "sweep":
-        sweep.run(
-            torch,
-            tokenizer,
-            model,
-            request,
-            sweep_plan,
-            sweep_deadline,
-            generate,
-            emit,
-            cpu_deadline=cpu_allowance,
-        )
-    elif request.get("mode") == "prompt_pair":
+    from inference_experiments import Context, execute
+
+    verify_pair_parameters = None
+    if request.get("mode") == "prompt_pair":
         from inference_edits import verified_parameters
 
-        verified_parameters(model)
-        prompt_pair.run(
-            torch, tokenizer, model, request, pair_preview, CAPTURE_SITES, emit
-        )
-    elif "edits" in request:
-        compare(torch, tokenizer, model, request)
-    else:
-        generate(
-            torch,
-            tokenizer,
-            model,
-            request["prompt"],
-            request["max_new_tokens"],
-            request["layer"],
-            activation_site=request.get("activation_site", "block"),
-            observation=request.get("observation"),
-        )
+        verify_pair_parameters = verified_parameters
+    execute(
+        request,
+        Context(
+            torch=torch,
+            tokenizer=tokenizer,
+            model=model,
+            generate=generate,
+            compare=compare,
+            prompt_pair=prompt_pair.run,
+            sweep=sweep.run,
+            record=emit,
+            capture_sites=CAPTURE_SITES,
+            verified_parameters=verify_pair_parameters,
+            pair_preview=pair_preview,
+            sweep_plan=sweep_plan,
+            sweep_deadline=sweep_deadline,
+            cpu_allowance=cpu_allowance,
+        ),
+    )
 
 
 if __name__ == "__main__":
