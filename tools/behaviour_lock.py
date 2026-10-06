@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-r"""Behaviour lock for the Weight Atlas native binary (version 2).
+r"""Behaviour lock for the Weight Atlas native binary (version 3).
 
 Records what the binary outputs for fixed synthetic checkpoints, so that a
 refactor can be shown to leave behaviour unchanged. Standard library only
@@ -17,9 +17,12 @@ model, no browser and no GPU.
 Exit status 0 means nothing strict differs and every upgrade check passed.
 The binary's own memory and free-disk guards apply to the working files, which
 go in the system temporary directory unless `--work DIR` says otherwise; if the
-basic steps are refused the script says so and records nothing.
-Record and compare on the same machine: the last digits of some transforms
-depend on the platform's maths library. During a refactor this file is the
+basic steps are refused the script says so and records nothing. A run takes
+well under a minute and about 250 MB of working files, removed at the end.
+Record and compare on the same machine and under the same limits (the same
+processor pinning, for example): the last digits of some transforms depend on
+the platform's maths library, and a few answers depend on how many processors
+and how much memory the program is allowed. During a refactor this file is the
 referee: change the code, not the lock, and do not record a new baseline.
 
 Every observation is one entry with a category:
@@ -52,18 +55,23 @@ Covered: every command except the two below, including requests the command
 line must refuse and checkpoints it must refuse to open; the viewer server and
 the comparison server: every route, tiles requested the way the page requests
 them, calibration started through the server, answers before calibration is
-ready, and the requests they must refuse. Not covered: the hosted-renderer and
-profile-worker commands; non-default --resources settings; behaviour under
-simultaneous requests; speed and memory use; the Python tools; and what the
-page does in a browser.
+ready, and the requests they must refuse; each limit the program places on its
+inputs, exactly at the limit and one step past it; weights that are infinite or
+not numbers; saved calibration and histograms that were altered; checkpoint
+files that change under a running server; two programs wanting the same cache;
+the ranges of the --resources settings; and a tile cache small enough to
+overflow. Not covered: the hosted-renderer and profile-worker commands; what
+the memory, disk and processor budgets do once they are accepted; behaviour
+under simultaneous requests; speed and memory use; the Python tools; and what
+the page does in a browser.
 
-Version 2 adds, over version 1: the refusal and boundary cases, broken
-checkpoints, caches that are stale or damaged, the "not ready" answers,
-calibration through the server, tiles with bindings, neighbouring tiles (cache
-keys), slices over HTTP, the naming and hashing options, the comparison
-server's rules and files, and five more upgrade checks; and it treats wording
-as strict. A version 1 baseline cannot be compared; record again from the same
-preserved starting binary.
+Version 3 adds, over version 2, everything in that list from "each limit"
+onwards, plus requests written byte by byte (cut-off escapes, oversized and
+unfinished headers, odd targets). Its reach was measured by switching off the
+checks in the source files it covers, one at a time, and seeing whether a
+comparison then fails; the results, and the checks no input can reach, are in
+the audit notes delivered with it. A version 2 baseline cannot be compared;
+record again from the same preserved starting binary.
 """
 
 from __future__ import annotations
@@ -72,6 +80,7 @@ import argparse
 import hashlib
 import http.client
 import json
+import os
 import random
 import re
 import select
@@ -82,11 +91,12 @@ import subprocess
 import sys
 import tempfile
 import time
+import zlib
 from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urlencode
 
-LOCK_VERSION = 2
+LOCK_VERSION = 3
 SHOWN_PER_GROUP = 12  # differences printed per group unless --full is given
 STRICT = ("numeric", "image", "data", "status", "header", "text")
 ADVISORY = ("asset",)
@@ -94,6 +104,8 @@ COMMAND_TIMEOUT = 120
 STARTUP_SECONDS = 30
 SETTLE_SECONDS = 30  # longest wait for calibration started through a server
 TILE_SIZE = 256
+RAW_TIMEOUT = 5  # seconds to wait for a reply to hand-written request bytes
+SPACED_TILES, TICK_SECONDS = 16, 0.03  # the oldest cached tiles get distinct file times
 QUIET_ROW_EVERY, QUIET_ROW_FIRST = 7, 3  # which synthetic rows are scaled down
 
 KNOWN_RULES = [
@@ -128,6 +140,22 @@ EXTRA_TENSORS = [
 ]
 EXTRA_SLICES = {"conv.weight": ["0,0", "1,2"]}
 SMALL_TENSORS = [("w.weight", "F32", (4, 6)), ("b.bias", "BF16", (16,))]
+# Values a weight file should never hold but can: not-a-number and the two infinities.
+SPECIAL_TENSORS = [
+    ("clean.weight", "BF16", (8, 8)),
+    ("inf.weight", "F32", (4, 8)),
+    ("nan.weight", "BF16", (6, 6)),
+    ("ninf.weight", "F16", (4, 8)),
+]
+SPECIAL_VALUES = {
+    "inf.weight": float("inf"),
+    "nan.weight": float("nan"),
+    "ninf.weight": float("-inf"),
+}
+SPECIAL_POSITION = 9  # the cell holding the special value in each of those tensors
+HEADER_LIMIT = 8192  # the most request bytes the servers read before the blank line
+LARGEST_HEADER = 8 * 1024 * 1024  # the longest header one checkpoint file may declare
+MOST_TENSORS = 10000  # the longest catalog the reader accepts
 
 # JSON keys whose values depend on the machine or the moment, never on behaviour.
 VOLATILE_KEY = re.compile(r"(^|_)(seconds|ms|mib|gib|rss|cpu|elapsed|wall|pid|port)($|_)")
@@ -244,6 +272,26 @@ PARAMETER_PROBES = {
     "tile-level-not-a-number": "/tile?tensor=0&rule=tensor_linear&level=x&x=0&y=0",
     "tile-negative-x": "/tile?tensor=0&rule=tensor_linear&level=0&x=-1&y=0",
     "tile-empty-rule": "/tile?tensor=0&rule=&level=0&x=0&y=0",
+}
+# More of the same, added in version 3: characters that queries treat specially.
+PARAMETER_EDGES = {
+    "tensor-with-a-plus-sign": "/api/view?tensor=+1",
+    "tensor-with-an-encoded-plus": "/api/view?tensor=%2B1",
+    "tensor-with-an-encoded-space": "/api/view?tensor=%201",
+    "tensor-with-a-leading-zero": "/api/view?tensor=01",
+    "name-without-a-value": "/api/view?tensor",
+    "value-without-a-name": "/api/view?=1&tensor=0",
+    "spare-ampersands": "/api/view?&&tensor=0&&",
+    "encoded-ampersand-in-a-value": "/api/view?tensor=0%26tensor%3D1",
+    "inspect-row-with-a-plus-sign": "/api/inspect?tensor=0&row=+1&col=0",
+    "tile-level-with-a-plus-sign": "/tile?tensor=0&rule=tensor_linear&level=+0&x=0&y=0",
+}
+COMPARISON_EDGES = {
+    "pair-with-a-plus-sign": "/api/comparison/view?tensor=+1",
+    "pair-with-an-encoded-space": "/api/comparison/view?tensor=%201",
+    "name-without-a-value": "/api/comparison/view?tensor",
+    "inspect-column-at-the-edge": "/api/comparison/inspect?tensor=0&row=0&col=130",
+    "inspect-row-at-the-edge": "/api/comparison/inspect?tensor=0&row=260&col=0",
 }
 # What a server with an empty cache is asked before, during and after calibration.
 FRESH_VIEW = "/api/view?tensor=0&left=tensor_linear&right=tensor_asinh"
@@ -393,6 +441,144 @@ def build_checkpoint(directory: Path, tensors, variant: str, shards: int = 1) ->
     (directory / "model.safetensors.index.json").write_text(json.dumps(index))
 
 
+def resource_probes() -> dict[str, dict | list]:
+    """label -> settings for --resources: each range at its ends and one step outside.
+
+    A setting inside its range is paired with the largest allowed memory floor, which
+    almost no machine has free. The program then stops with its "not enough memory"
+    answer, and that tells a setting it accepted from one it refused, without the
+    outcome depending on how much memory or disk happens to be free.
+    """
+    mib, gib = 1024 * 1024, 1024 * 1024 * 1024
+    floor = {"available_floor_bytes": 128 * gib}
+    ranges = {
+        "cpu-count": ("cpu_count", 1, 8),
+        "address-space": ("address_space_bytes", 256 * mib, 8 * gib),
+        "disk-reserve": ("disk_reserve_bytes", gib, 1024 * gib),
+        "tile-cache-bytes": ("tile_cache_bytes", 16 * mib, 64 * gib),
+        "tile-cache-files": ("tile_cache_files", 64, 100000),
+    }
+    probes: dict[str, dict | list] = {
+        "nothing-set": {},
+        "nothing-set-but-the-floor": dict(floor),
+        "unknown-setting": {"speed": 1},
+        "a-list": [1],
+        "version-0": {"version": 0, **floor},
+        "version-1": {"version": 1, **floor},
+        "version-2": {"version": 2, **floor},
+        "floor-one-below-smallest": {"available_floor_bytes": 512 * mib - 1},
+        "floor-largest": {"available_floor_bytes": 128 * gib},
+        "floor-one-above-largest": {"available_floor_bytes": 128 * gib + 1},
+        "workspace-one-below-smallest": {"workspace_bytes": 64 * mib - 1, **floor},
+        "workspace-smallest": {"workspace_bytes": 64 * mib, **floor},
+        "workspace-largest": {"workspace_bytes": gib, "address_space_bytes": 2 * gib, **floor},
+        "workspace-one-above-largest": {
+            "workspace_bytes": gib + 1,
+            "address_space_bytes": 4 * gib,
+            **floor,
+        },
+        "workspace-half-the-address-space": {
+            "workspace_bytes": 128 * mib,
+            "address_space_bytes": 256 * mib,
+            **floor,
+        },
+        "workspace-over-half-the-address-space": {
+            "workspace_bytes": 128 * mib + 1,
+            "address_space_bytes": 256 * mib,
+            **floor,
+        },
+        "count-is-negative": {"cpu_count": -1},
+        "count-is-a-fraction": {"cpu_count": 1.5},
+        "count-is-text": {"cpu_count": "1"},
+    }
+    for label, (name, smallest, largest) in ranges.items():
+        probes[f"{label}-one-below-smallest"] = {name: smallest - 1, **floor}
+        probes[f"{label}-smallest"] = {name: smallest, **floor}
+        probes[f"{label}-largest"] = {name: largest, **floor}
+        probes[f"{label}-one-above-largest"] = {name: largest + 1, **floor}
+    return probes
+
+
+def histogram_forgeries(original: bytes, infinity: int) -> dict[str, bytes]:
+    """label -> unpacked histogram: wrong counts that a matching digest would vouch for."""
+    try:
+        counts = list(struct.unpack("<65536Q", zlib.decompress(original)))
+    except (zlib.error, struct.error):
+        return {}
+    busiest = max(range(65536), key=counts.__getitem__)
+
+    def changed(*changes: tuple[int, int]) -> bytes:
+        edited = counts.copy()
+        for position, by in changes:
+            edited[position] += by
+        return struct.pack("<65536Q", *edited)
+
+    return {
+        "same-counts": changed(),
+        "one-value-too-many": changed((busiest, 1)),
+        "one-value-too-few": changed((busiest, -1)),
+        "one-value-moved-to-infinity": changed((busiest, -1), (infinity, 1)),
+        "no-values-at-all": bytes(65536 * 8),
+    }
+
+
+def build_special_checkpoint(directory: Path, variant: str) -> None:
+    """A checkpoint in which three tensors each hold one not-a-number or infinite value."""
+    directory.mkdir(parents=True)
+    ready: list[tuple[str, str, tuple[int, ...], bytes]] = []
+    for name, dtype, shape in SPECIAL_TENSORS:
+        values = synthetic_values(name, shape, variant)
+        if name in SPECIAL_VALUES:
+            values[SPECIAL_POSITION] = SPECIAL_VALUES[name]
+        ready.append((name, dtype, shape, encode(dtype, values)))
+    write_shard(directory / "model.safetensors", ready)
+
+
+def reader_limits() -> dict[str, tuple[bytes, bytes]]:
+    """label -> (header bytes, payload): files at, and just past, what the reader allows."""
+    good = encoded(SMALL_TENSORS)
+    header, payload = header_and_payload(good)
+    first, second = header["w.weight"], header["b.bias"]
+    end_of_first = first["data_offsets"][1]
+
+    def changed(**replacement) -> bytes:
+        return json.dumps({**header, **replacement}, separators=(",", ":")).encode()
+
+    def renamed(name: str) -> bytes:
+        return json.dumps({name: first, "z.bias": second}, separators=(",", ":")).encode()
+
+    def first_with(**fields) -> bytes:
+        return changed(**{"w.weight": {**first, **fields}})
+
+    return {
+        "metadata-entry-holds-a-number": (changed(__metadata__={"format": 5}), payload),
+        "metadata-entry-is-a-list": (changed(__metadata__=["pt"]), payload),
+        "name-is-empty": (renamed(""), payload),
+        "name-of-511-bytes": (renamed("n" * 511), payload),
+        "name-of-512-bytes": (renamed("n" * 512), payload),
+        "format-name-is-empty": (first_with(dtype=""), payload),
+        "format-name-of-64-bytes": (first_with(dtype="Q" * 64), payload),
+        "format-name-of-65-bytes": (first_with(dtype="Q" * 65), payload),
+        "format-name-is-a-number": (first_with(dtype=32), payload),
+        "rank-of-32": (first_with(shape=[1] * 30 + [4, 6]), payload),
+        "rank-of-33": (first_with(shape=[1] * 31 + [4, 6]), payload),
+        "no-dimensions": (first_with(shape=[]), payload),
+        "dimension-is-text": (first_with(shape=["4", 6]), payload),
+        "dimension-is-a-fraction": (first_with(shape=[4.5, 6]), payload),
+        "dimensions-overflow": (first_with(shape=[1 << 40, 1 << 40]), payload),
+        "shape-is-a-number": (first_with(shape=24), payload),
+        "one-offset": (first_with(data_offsets=[0]), payload),
+        "three-offsets": (first_with(data_offsets=[0, end_of_first, end_of_first]), payload),
+        "offset-is-text": (first_with(data_offsets=["0", end_of_first]), payload),
+        "offset-is-negative": (first_with(data_offsets=[-1, end_of_first]), payload),
+        "entry-is-a-number": (changed(**{"w.weight": 7}), payload),
+        "entry-without-offsets": (
+            changed(**{"w.weight": {"dtype": "F32", "shape": [4, 6]}}),
+            payload,
+        ),
+    }
+
+
 def broken_headers() -> dict[str, tuple[bytes, bytes]]:
     """label -> (header bytes, payload): single files the reader must judge."""
     good = encoded(SMALL_TENSORS)
@@ -486,7 +672,88 @@ def broken_checkpoints(root: Path) -> dict[str, Path]:
     (cases["linked-index"] / "model.safetensors.index.json").symlink_to(
         root / "elsewhere.index.json"
     )
+    cases.update(limit_checkpoints(root))
     return cases
+
+
+def stretched(header: bytes, payload: bytes, length: int) -> bytes:
+    """A checkpoint file whose header is padded with spaces to the given length."""
+    padded = header + b" " * (length - len(header))
+    return struct.pack("<Q", len(padded)) + padded + payload
+
+
+def limit_checkpoints(root: Path) -> dict[str, Path]:
+    """More directories for the reader to judge: each of its limits, and one step past."""
+    cases = {}
+
+    def new(label: str) -> Path:
+        cases[label] = root / label
+        cases[label].mkdir(parents=True)
+        return cases[label]
+
+    def compact(value) -> bytes:
+        return json.dumps(value, separators=(",", ":")).encode()
+
+    good = encoded(SMALL_TENSORS)
+    plain = compact(header_and_payload(good)[0])
+    whole = b"".join(payload for _, _, _, payload in good)
+    files = {label: shard_bytes(*parts) for label, parts in reader_limits().items()}
+    files.update(
+        {
+            "header-length-of-zero": struct.pack("<Q", 0) + plain + whole,
+            "header-length-of-one": struct.pack("<Q", 1) + b" " + plain + whole,
+            "header-length-one-past-the-file": struct.pack("<Q", len(plain) + len(whole) + 1)
+            + plain
+            + whole,
+            "largest-header": stretched(plain, whole, LARGEST_HEADER),
+            "header-one-step-too-long": stretched(plain, whole, LARGEST_HEADER + 8),
+        }
+    )
+    for label, content in files.items():
+        (new(label) / "model.safetensors").write_bytes(content)
+    counted = {
+        "sixty-four-files": (64, 0),
+        "three-largest-headers": (3, LARGEST_HEADER),
+        "four-largest-headers": (4, LARGEST_HEADER),
+    }
+    for label, (count, length) in counted.items():
+        directory = new(label)
+        for number in range(count):
+            one = encoded([(f"t{number:02d}.weight", "BF16", (2, 2))])
+            header = compact(header_and_payload(one)[0])
+            content = (
+                stretched(header, one[0][3], length) if length else shard_bytes(header, one[0][3])
+            )
+            (directory / f"s{number:02d}.safetensors").write_bytes(content)
+    everything = json.dumps({"weight_map": {name: "model.safetensors" for name, _, _, _ in good}})
+    indexes = {
+        "index-of-eight-mebibytes": everything + " " * (LARGEST_HEADER - len(everything)),
+        "index-over-eight-mebibytes": everything + " " * (LARGEST_HEADER + 1 - len(everything)),
+        "index-file-name-is-a-number": json.dumps({"weight_map": {"w.weight": 5, "b.bias": 5}}),
+        "index-weight-map-is-a-list": json.dumps({"weight_map": ["model.safetensors"]}),
+        "index-names-a-file-of-another-kind": everything.replace("model.safetensors", "model.bin"),
+        "index-names-the-folder-itself": everything.replace("model.safetensors", "."),
+    }
+    for label, text in indexes.items():
+        write_shard(new(label) / "model.safetensors", good)
+        (cases[label] / "model.safetensors.index.json").write_text(text)
+    (new("folder-named-like-a-file") / "model.safetensors").mkdir()
+    (new("file-with-another-ending") / "model.bin").write_bytes(shard_bytes(plain, whole))
+    return cases
+
+
+def catalog_of(count: int) -> bytes:
+    """One checkpoint file holding `count` two-byte tensors."""
+    header = {
+        f"t{number:05d}": {
+            "dtype": "BF16",
+            "shape": [1],
+            "data_offsets": [2 * number, 2 * number + 2],
+        }
+        for number in range(count)
+    }
+    raw = json.dumps(header, separators=(",", ":")).encode()
+    return shard_bytes(raw, b"\0" * (2 * count))
 
 
 # --------------------------------------------------------------------------
@@ -506,12 +773,20 @@ def flags(**options) -> list[str]:
     return arguments
 
 
-def run_command(binary: str, *arguments: str) -> subprocess.CompletedProcess | None:
+def run_command(
+    binary: str, *arguments: str, variables: dict[str, str] | None = None
+) -> subprocess.CompletedProcess | None:
     """Run one command to completion; None means it timed out."""
     command = [binary, *arguments]
+    environment = {**os.environ, **variables} if variables else None
     try:
         return subprocess.run(
-            command, capture_output=True, text=True, timeout=COMMAND_TIMEOUT, check=False
+            command,
+            capture_output=True,
+            text=True,
+            timeout=COMMAND_TIMEOUT,
+            check=False,
+            env=environment,
         )
     except subprocess.TimeoutExpired:
         return None
@@ -587,6 +862,188 @@ def http_json(port: int, path: str):
         return status, json.loads(body)
     except ValueError:
         return status, None
+
+
+def raw_exchange(port: int, request: bytes, close_after_sending: bool = False) -> tuple[str, str]:
+    """Send bytes exactly as given: (status line, body) of the reply, or (what went wrong, "")."""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=RAW_TIMEOUT) as raw:
+            raw.sendall(request)
+            if close_after_sending:
+                raw.shutdown(socket.SHUT_WR)
+            reply = b""
+            while b"\r\n\r\n" not in reply and len(reply) < 16384:
+                part = raw.recv(4096)
+                if not part:
+                    break
+                reply += part
+            head, _, body = reply.partition(b"\r\n\r\n")
+            declared = re.search(rb"(?i)\r\ncontent-length: *(\d+)", head)
+            wanted = min(int(declared.group(1)), 4096) if declared else 0
+            while len(body) < wanted:
+                part = raw.recv(4096)
+                if not part:
+                    break
+                body += part
+    except OSError as error:
+        return type(error).__name__, ""
+    if not reply:
+        return "no reply", ""
+    return head.split(b"\r\n")[0].decode("latin-1"), body[:wanted].decode("latin-1")
+
+
+def calibration_failed(_status, body) -> bool:
+    """Whether a progress answer reports that a requested calibration was refused."""
+    return bool(body and (body.get("coverage") or {}).get("calibration_error"))
+
+
+def reseal(saved: str, change) -> str | None:
+    """A saved calibration with one change to its contents and a matching checksum again."""
+    try:
+        payload = json.loads(json.loads(saved)["payload"])
+        change(payload)
+    except (ValueError, KeyError, TypeError, IndexError, StopIteration):
+        return None
+    text = json.dumps(payload, separators=(",", ":"))
+    return json.dumps({"payload": text, "sha256": sha256(text.encode())}, separators=(",", ":"))
+
+
+def first_entry(payload: dict) -> dict:
+    """The saved statistics with the lowest tensor number."""
+    tensors = payload["tensors"]
+    return tensors[min(tensors, key=int)]
+
+
+def wide_entry(payload: dict) -> dict:
+    """The saved statistics of the first tensor stored as 32-bit values."""
+    return next(entry for entry in payload["tensors"].values() if entry["dtype"] == "F32")
+
+
+def calibration_edits() -> dict:
+    """label -> change: a saved viewer calibration that is wrong although its checksum is right."""
+
+    def set_first(**fields):
+        return lambda payload: first_entry(payload).update(fields)
+
+    def count_plus(field: str, more: int):
+        return lambda payload: first_entry(payload).update(
+            {field: first_entry(payload)["count"] + more}
+        )
+
+    def count_plus_one(field: str):
+        return count_plus(field, 1)
+
+    def largest_times(field: str, factor: float):
+        return lambda payload: first_entry(payload).update(
+            {field: first_entry(payload)["max_abs"] * factor}
+        )
+
+    return {
+        "nothing-changed": lambda payload: None,
+        "newer-version": lambda payload: payload.update(version=payload["version"] + 1),
+        "another-checkpoint": lambda payload: payload.update(source_identity="0" * 64),
+        "negative-q99": set_first(q99=-1.0),
+        "q99-above-the-largest-value": lambda payload: first_entry(payload).update(
+            q99=first_entry(payload)["max_abs"] * 2
+        ),
+        "negative-largest-value": set_first(max_abs=-1.0, q99=-2.0),
+        "negative-median": set_first(median_nonzero_abs=-1.0),
+        "count-one-more": count_plus_one("count"),
+        "more-zeros-than-values": count_plus_one("exact_zero_count"),
+        "more-clipped-than-values": count_plus_one("robust_clipped_count"),
+        "another-number-format": lambda payload: first_entry(payload).update(
+            dtype="F32" if first_entry(payload)["dtype"] != "F32" else "BF16"
+        ),
+        "another-histogram-digest": set_first(histogram_sha256="0" * 64),
+        "tensor-that-does-not-exist": lambda payload: payload["tensors"].update(
+            {"9999": dict(first_entry(payload))}
+        ),
+        # Exactly at a limit: these must still be believed.
+        "q99-zero": set_first(q99=0.0),
+        "q99-equal-to-the-largest-value": largest_times("q99", 1),
+        "median-zero": set_first(median_nonzero_abs=0.0),
+        "median-equal-to-the-largest-value": largest_times("median_nonzero_abs", 1),
+        "everything-zero": set_first(max_abs=0.0, q99=0.0, median_nonzero_abs=0.0),
+        "as-many-zeros-as-values": count_plus("exact_zero_count", 0),
+        "as-many-clipped-as-values": count_plus("robust_clipped_count", 0),
+        # One step past a limit, and digests of the wrong form.
+        "median-above-the-largest-value": largest_times("median_nonzero_abs", 2),
+        "digest-of-63-characters": set_first(histogram_sha256="0" * 63),
+        "digest-of-65-characters": set_first(histogram_sha256="0" * 65),
+        "digest-with-a-letter-outside-hex": set_first(histogram_sha256="g" * 64),
+        "no-digest-for-16-bit-values": set_first(histogram_sha256=None),
+        "digest-for-32-bit-values": lambda payload: wide_entry(payload).update(
+            histogram_sha256="0" * 64
+        ),
+    }
+
+
+def comparison_edits() -> dict:
+    """The same for a saved comparison calibration."""
+
+    def set_first(**fields):
+        return lambda payload: first_entry(payload).update(fields)
+
+    def times_largest(factor: float):
+        return lambda payload: first_entry(payload).update(
+            difference_max=first_entry(payload)["shared_raw_max"] * factor
+        )
+
+    def count_plus_one(field: str):
+        return lambda payload: first_entry(payload).update(
+            {field: first_entry(payload)["count"] + 1}
+        )
+
+    return {
+        "nothing-changed": lambda payload: None,
+        "newer-version": lambda payload: payload.update(version=payload["version"] + 1),
+        "another-pair": lambda payload: payload.update(comparison_identity="0" * 64),
+        "negative-largest-value": set_first(shared_raw_max=-1.0),
+        "negative-largest-difference": set_first(difference_max=-1.0),
+        "difference-at-twice-the-largest-value": times_largest(2),
+        "difference-above-twice-the-largest-value": times_largest(2.5),
+        "count-one-more": count_plus_one("count"),
+        "more-differences-than-values": count_plus_one("nonzero_difference_count"),
+        "pair-that-does-not-exist": lambda payload: payload["tensors"].update(
+            {"9999": dict(first_entry(payload))}
+        ),
+        "everything-zero": set_first(shared_raw_max=0.0, difference_max=0.0),
+        "no-difference": set_first(difference_max=0.0),
+        "as-many-differences-as-values": lambda payload: first_entry(payload).update(
+            nonzero_difference_count=first_entry(payload)["count"]
+        ),
+    }
+
+
+def histogram_damage(original: bytes) -> dict[str, bytes | None]:
+    """label -> new contents (None removes the file) for one saved percentile histogram."""
+    limit, whole = 1024 * 1024, 65536 * 8
+    return {
+        "untouched": original,
+        "cut-short": original[: len(original) // 2],
+        "not-compressed": b"this is not compressed data",
+        "empty": b"",
+        "another-histogram": zlib.compress(bytes(whole)),
+        "too-long-once-unpacked": zlib.compress(bytes(whole + 8)),
+        "too-short-once-unpacked": zlib.compress(bytes(whole - 8)),
+        "one-mebibyte": original + bytes(limit - len(original)),
+        "over-one-mebibyte": original + bytes(limit + 1 - len(original)),
+        "missing": None,
+    }
+
+
+def change_checkpoint(model: Path, how: str) -> None:
+    """Alter a checkpoint that a server already has open."""
+    shard = sorted(model.glob("*.safetensors"))[0]
+    if how == "index-rewritten":
+        index = model / "model.safetensors.index.json"
+        index.write_text(index.read_text() + " ")
+    elif how == "weights-touched":
+        os.utime(shard, ns=(10**18, 10**18))  # the date only; not one byte differs
+    else:
+        data = bytearray(shard.read_bytes())
+        data[-1] ^= 1
+        shard.write_bytes(bytes(data))
 
 
 def tile_plan(tensor: dict) -> list[tuple[int, int, int]]:
@@ -694,7 +1151,90 @@ def command_line_probes(work: Path, core: Path, other: Path, extras: Path) -> di
         "compare-inspect-outside": ["compare-inspect", *pair, *flags(tensor=0, row=999999)],
         "resources-not-json": ["metadata", *flags(model=core, resources="not json")],
         "resources-empty-object": ["calibrate", *source, *flags(resources="{}")],
+        **command_line_limits(work, core, other, extras),
     }
+
+
+def command_line_limits(work: Path, core: Path, other: Path, extras: Path) -> dict[str, list[str]]:
+    """label -> arguments: requests exactly at, and one past, each limit (added in version 3)."""
+    source = flags(model=core, cache=work / "cache-core")
+    sliced = flags(model=extras, cache=work / "cache-extras")
+    pair = flags(model=core, compare_model=other, cache=work / "cache-pair")
+    out = flags(out=work / "probe")
+    tile = [*flags(rules="tensor_linear"), *out]
+    shape = min(CORE_TENSORS)[2]  # tensor 0 is the first by name
+    values = shape[0] * shape[1]
+    largest = 64 * 1024 * 1024
+    four, five = ",".join(KNOWN_RULES[2:6]), ",".join(KNOWN_RULES[2:7])
+    twice = "tensor_linear,tensor_linear"
+    itself = flags(model=extras, compare_model=extras, cache=work / "cache-extras-pair")
+    probes = {
+        "overview-four-rules": ["overview", *source, *flags(tensor=0, rules=four)],
+        "overview-five-rules": ["overview", *source, *flags(tensor=0, rules=five)],
+        "overview-empty-rule-list": ["overview", *source, *flags(tensor=0, rules="")],
+        "overview-repeated-rule": ["overview", *source, *flags(tensor=0, rules=twice)],
+        "overview-budget-exact": ["overview", *source, *flags(tensor=0, max_values=values)],
+        "overview-budget-one-short": [
+            "overview",
+            *source,
+            *flags(tensor=0, max_values=values - 1),
+        ],
+        "overview-budget-zero": ["overview", *source, *flags(tensor=0, max_values=0)],
+        "overview-budget-largest": ["overview", *source, *flags(tensor=0, max_values=largest)],
+        "overview-budget-over-largest": [
+            "overview",
+            *source,
+            *flags(tensor=0, max_values=largest + 1),
+        ],
+        "overview-budget-not-a-number": ["overview", *source, *flags(tensor=0, max_values="x")],
+        "bench-thirty-repeats": ["bench", *source, *flags(tensor=0, repeats=30)],
+        "bench-thirty-one-repeats": ["bench", *source, *flags(tensor=0, repeats=31)],
+        "bench-undecodable": ["bench", *sliced, *flags(tensor=2, repeats=1)],
+        "calibrate-undecodable": ["calibrate", *sliced, *flags(tensor=2)],
+        "inspect-without-slice": ["inspect", *sliced, *flags(tensor=0)],
+        "overview-without-slice": ["overview", *sliced, *flags(tensor=0)],
+        "resources-on-a-comparison": ["compare-metadata", *pair, *flags(resources="{}")],
+        "resources-at-the-length-limit": [
+            "metadata",
+            *flags(model=core, resources="{" + " " * 4094 + "}"),
+        ],
+        "resources-over-the-length-limit": [
+            "metadata",
+            *flags(model=core, resources="{" + " " * 4095 + "}"),
+        ],
+        "inspect-row-with-a-plus-sign": ["inspect", *source, *flags(tensor=0, row="+1")],
+        "tile-level-above-the-top": ["tile", *source, *tile, *flags(tensor=0, level=10)],
+        "port-not-a-number": ["serve", *source, *flags(port="x")],
+        "compare-tile-level-above-the-top": [
+            "compare-tile",
+            *pair,
+            *out,
+            *flags(tensor=0, level=10),
+        ],
+        "compare-tile-outside": ["compare-tile", *pair, *out, *flags(tensor=0, x=9999)],
+        "compare-inspect-column-at-the-edge": [
+            "compare-inspect",
+            *pair,
+            *flags(tensor=0, row=0, col=shape[1]),
+        ],
+        "compare-rank-four": ["compare-metadata", *itself],
+    }
+    slices = {
+        "first-index-at-dimension": "2,0",
+        "second-index-at-dimension": "0,3",
+        "one-index-too-many": "0,0,0",
+        "empty-part": "0,",
+        "plus-sign": "+0,0",
+        "space": " 0,0",
+        "list-of-256-characters": ",".join(["0"] * 127 + ["00"]),
+        "list-of-257-characters": ",".join(["0"] * 129),
+    }
+    for label, chosen in slices.items():
+        where = flags(tensor=0, slice=chosen)
+        probes[f"tile-slice-{label}"] = ["tile", *sliced, *tile, *where]
+        probes[f"inspect-slice-{label}"] = ["inspect", *sliced, *where]
+        probes[f"overview-slice-{label}"] = ["overview", *sliced, *where]
+    return probes
 
 
 # --------------------------------------------------------------------------
@@ -732,9 +1272,9 @@ class Recorder:
 
     # ---- command line ----
 
-    def run(self, key: str, *arguments: str):
+    def run(self, key: str, *arguments: str, variables: dict[str, str] | None = None):
         """Run one command; record its exit code and JSON output or error text."""
-        done = run_command(self.binary, *arguments)
+        done = run_command(self.binary, *arguments, variables=variables)
         if done is None:
             self.put(f"{key}/exit", "status", "timeout")
             return None
@@ -858,6 +1398,19 @@ class Recorder:
         """Checkpoints the reader must refuse to open, and two plain ones it must accept."""
         for label, directory in broken_checkpoints(self.work / "broken").items():
             self.run(f"broken/{label}", "metadata", *flags(model=directory))
+        sizes = {"most-tensors": MOST_TENSORS, "one-tensor-too-many": MOST_TENSORS + 1}
+        for label, count in sizes.items():
+            directory = self.work / "broken" / label
+            directory.mkdir(parents=True)
+            (directory / "model.safetensors").write_bytes(catalog_of(count))
+            done = run_command(self.binary, "metadata", *flags(model=directory))
+            described = json_output(done) or {}
+            code = "timeout" if done is None else done.returncode
+            self.put(f"broken/{label}/exit", "status", code)
+            self.put(f"broken/{label}/tensors", "data", described.get("tensor_count"))
+            if done is not None and done.returncode != 0:
+                lines = done.stderr.strip().splitlines()
+                self.put(f"broken/{label}/stderr", "text", lines[-1] if lines else "")
 
     def record_stepwise_calibration(self, model: Path) -> None:
         """One tensor first, then the rest, then nothing left to do."""
@@ -1095,6 +1648,11 @@ class Recorder:
             kind = "image" if path.startswith("/tile") else "json"
             self.fetch(f"http/parameters/{label}", path, kind=kind)
         self.fetch("http/more/model-afterwards", "/api/model")
+        for label, path in PARAMETER_EDGES.items():
+            kind = "image" if path.startswith("/tile") else "json"
+            self.fetch(f"http/edges/{label}", path, kind=kind)
+        self.record_request_edges("http/edges", "/api/model", "/api/view?tensor=")
+        self.fetch("http/edges/model-afterwards", "/api/model")
 
     def record_sliced_server(self, model: Path, catalog: dict) -> None:
         """Slices and an undecodable tensor over HTTP; this checkpoint can never be complete."""
@@ -1123,6 +1681,22 @@ class Recorder:
                 "httpx/rules/tile-without-slice", "/tile", {"tensor": conv, "rule": "tensor_linear"}
             )
             self.fetch("httpx/progress", "/api/progress")
+            edges = {
+                "first-index-at-dimension": "2,0",
+                "second-index-at-dimension": "0,3",
+                "one-index-too-many": "0,0,0",
+                "plus-sign": "+0,0",
+            }
+            for label, chosen in edges.items():
+                where = {"tensor": conv, "slice": chosen}
+                self.fetch(f"httpx/edges/view-{label}", "/api/view?" + urlencode(where))
+                self.fetch(f"httpx/edges/inspect-{label}", "/api/inspect?" + urlencode(where))
+                tile = {**where, "rule": "tensor_linear", "level": 0, "x": 0, "y": 0}
+                self.fetch_tile(f"httpx/edges/tile-{label}", "/tile", tile)
+            undecodable = catalog.get("quant.codes", {}).get("id", 0)
+            asked = f"/api/calibrate?tensor={undecodable}"
+            self.fetch("httpx/edges/calibrate-undecodable", asked, method="POST", headers=LOCAL)
+            self.fetch("httpx/edges/progress-afterwards", "/api/progress")
         finally:
             stop_server(process)
 
@@ -1197,6 +1771,12 @@ class Recorder:
             for name, pair in pairs.items():
                 self.record_comparison_extras(name, pair, identity)
             self.record_more_rules("pairhttp/rules", COMPARISON_RULES, "/api/comparison/model")
+            for label, path in COMPARISON_EDGES.items():
+                self.fetch(f"pairhttp/edges/{label}", path)
+            self.record_request_edges(
+                "pairhttp/edges", "/api/comparison/model", "/api/comparison/view?tensor="
+            )
+            self.fetch("pairhttp/edges/model-afterwards", "/api/comparison/model")
         finally:
             stop_server(process)
 
@@ -1270,6 +1850,302 @@ class Recorder:
         finally:
             stop_server(process)
 
+    def put_reply(self, key: str, status: str, body: str) -> None:
+        """Record a reply read from a raw socket: its status line and its JSON or text."""
+        self.put(f"{key}/status", "status", status)
+        try:
+            self.put_json(f"{key}/body", json.loads(body))
+        except ValueError:
+            self.put(f"{key}/body", "text", body[:200])
+
+    def record_request_edges(self, tag: str, model_path: str, numbered: str) -> None:
+        """Requests at the limits of what a server reads: sizes, escapes and odd targets."""
+        port = str(self.port).encode()
+        end = b" HTTP/1.1\r\nHost: 127.0.0.1:" + port + b"\r\n"
+        target, number = model_path.encode(), numbered.encode()
+
+        def padded(total: int) -> bytes:
+            start = b"GET " + target + end + b"X-Pad: "
+            return start + b"a" * (total - len(start) - 4) + b"\r\n\r\n"
+
+        cases = {
+            "escape-cut-short": b"GET " + number + b"%2" + end + b"\r\n",
+            "percent-sign-alone": b"GET " + number + b"%" + end + b"\r\n",
+            "escape-at-the-very-end": b"GET " + number + b"%30" + end + b"\r\n",
+            "two-leading-slashes": b"GET /" + target + end + b"\r\n",
+            "whole-address-as-target": b"GET http://127.0.0.1:" + port + target + end + b"\r\n",
+            "no-leading-slash": b"GET " + target[1:] + end + b"\r\n",
+            "headers-at-the-size-limit": padded(HEADER_LIMIT),
+            "headers-over-the-size-limit": padded(HEADER_LIMIT + 1),
+            "length-of-zero-declared": b"GET " + target + end + b"Content-Length: 0\r\n\r\n",
+            "host-in-capitals": b"GET "
+            + target
+            + b" HTTP/1.1\r\nHOST: 127.0.0.1:"
+            + port
+            + b"\r\n\r\n",
+            "headers-never-finished": b"GET " + target + end,
+            "nothing-sent": b"",
+        }
+        for label, request in cases.items():
+            status, body = raw_exchange(self.port, request, close_after_sending=not request)
+            self.put_reply(f"{tag}/{label}", status, body)
+
+    def record_special_values(self, model: Path, other: Path) -> None:
+        """Not-a-number and infinite weights: every command must treat them predictably."""
+        source = flags(model=model, cache=self.work / "cache-special")
+        metadata = self.run("special/metadata", "metadata", *flags(model=model)) or {}
+        catalog = metadata.get("catalog", [])
+        self.run("special/calibrate-everything", "calibrate", *source)
+        prefix = str(self.work / "special")
+        for tensor in catalog:
+            name, where = tensor["name"], source + flags(tensor=tensor["id"])
+            row, col = divmod(SPECIAL_POSITION, tensor["cols"])
+            self.run(f"special/{name}/calibrate", "calibrate", *where)
+            for left, right in INSPECT_RULE_PAIRS:
+                key = f"special/{name}/inspect/{left}+{right}"
+                self.run(key, "inspect", *where, *flags(row=row, col=col, left=left, right=right))
+            for rule in KNOWN_RULES:
+                key = f"special/{name}/tile/{rule}"
+                self.run(key, "tile", *where, *flags(rules=rule, out=prefix))
+                self.record_written_files(key, f"{prefix}-{rule}")
+            self.run(f"special/{name}/overview", "overview", *where)
+        process = self.serve("specialhttp", "serve", source)
+        if process is not None:
+            try:
+                self.fetch("specialhttp/model", "/api/model")
+                for tensor in catalog:
+                    self.record_special_tensor(tensor)
+                unreadable = next((t["id"] for t in catalog if t["name"] == "nan.weight"), 0)
+                asked = f"/api/calibrate?tensor={unreadable}"
+                self.fetch("specialhttp/calibrate-refused", asked, method="POST", headers=LOCAL)
+                self.settle("specialhttp/calibrate-refused", "/api/progress", calibration_failed)
+                self.fetch("specialhttp/progress-afterwards", "/api/progress")
+                status = f"/api/tensor-status?tensor={unreadable}"
+                self.fetch("specialhttp/status-afterwards", status)
+            finally:
+                stop_server(process)
+        pair = flags(model=model, compare_model=other, cache=self.work / "cache-special-pair")
+        described = self.run("specialpair/metadata", "compare-metadata", *pair) or {}
+        for entry in described.get("catalog", []):
+            where = pair + flags(tensor=entry["id"])
+            row, col = divmod(SPECIAL_POSITION, entry["cols"])
+            tag = f"specialpair/{entry['name']}"
+            self.run(f"{tag}/calibrate", "compare-calibrate", *where)
+            self.run(f"{tag}/inspect", "compare-inspect", *where, *flags(row=row, col=col))
+            options = flags(quantity="delta", mapping="linear", out=prefix)
+            self.run(f"{tag}/tile", "compare-tile", *where, *options)
+            self.record_written_files(f"{tag}/tile", prefix)
+
+    def record_special_tensor(self, tensor: dict) -> None:
+        tag, where = f"specialhttp/{tensor['name']}", {"tensor": tensor["id"]}
+        row, col = divmod(SPECIAL_POSITION, tensor["cols"])
+        rules = {"left": "tensor_linear", "right": "tensor_asinh"}
+        self.fetch(f"{tag}/status", "/api/tensor-status?" + urlencode(where))
+        self.fetch(f"{tag}/view", "/api/view?" + urlencode({**where, **rules}))
+        cell = {**where, "row": row, "col": col, **rules}
+        self.fetch(f"{tag}/inspect", "/api/inspect?" + urlencode(cell))
+        tile = {**where, "rule": "tensor_linear", "level": tensor["max_level"], "x": 0, "y": 0}
+        self.fetch_tile(f"{tag}/tile", "/tile", tile)
+
+    def record_cache_placement(self) -> None:
+        """Where a cache may live, and what happens when two programs want the same one."""
+        model, other = self.work / "placed-a", self.work / "placed-b"
+        build_checkpoint(model, SMALL_TENSORS, "a")
+        build_checkpoint(other, SMALL_TENSORS, "b")
+        for directory in (model, other):
+            (directory / "inner").mkdir()
+        link = self.work / "link-into-model"
+        link.symlink_to(model / "inner")
+        single = flags(model=model)
+        places = {"the-model": model, "a-link-into-the-model": link, "below-that-link": link / "x"}
+        for label, cache in places.items():
+            self.run(f"placement/cache-is-{label}", "calibrate", *single, *flags(cache=cache))
+        busy = single + flags(cache=self.work / "cache-busy")
+        process = self.serve("placement/busy", "serve", busy)
+        if process is not None:
+            try:
+                self.run("placement/busy/second-program", "calibrate", *busy)
+                self.run("placement/busy/second-reader", "inspect", *busy)
+            finally:
+                stop_server(process)
+        self.run("placement/busy/afterwards", "calibrate", *busy)
+        pair = flags(model=model, compare_model=other)
+        inside = {"first": model / "inner", "second": other / "inner", "link": link}
+        for label, cache in inside.items():
+            key = f"placement/pair/cache-in-{label}"
+            self.run(key, "compare-metadata", *pair, *flags(cache=cache))
+        shared = pair + flags(cache=self.work / "cache-busy-pair")
+        for label, out in (("first", model / "inner" / "t"), ("second", other / "inner" / "t")):
+            key = f"placement/pair/output-in-{label}"
+            self.run(key, "compare-tile", *shared, *flags(tensor=0, out=out))
+        process = self.serve("placement/pair/busy", "compare-serve", shared)
+        if process is not None:
+            try:
+                self.run("placement/pair/busy/second-program", "compare-metadata", *shared)
+            finally:
+                stop_server(process)
+        self.run("placement/pair/busy/afterwards", "compare-metadata", *shared)
+
+    def record_edited_caches(self, core: Path, other: Path) -> None:
+        """Saved calibration that was altered but still carries a matching checksum."""
+        cache, prefix = self.work / "cache-edited", str(self.work / "edited")
+        source = flags(model=core, cache=cache)
+        self.run("edited/prepare", "calibrate", *source)
+        saved = cache / "calibration.json"
+        pristine = saved.read_text() if saved.is_file() else ""
+        look = flags(tensor=0, row=0, col=6, left="tensor_linear", right="tensor_robust99")
+        ranked = flags(tensor=0, rules="tensor_signed_percentile", out=prefix)
+        percentile, written = ["tile", *source, *ranked], f"{prefix}-tensor_signed_percentile"
+        for label, change in calibration_edits().items():
+            resealed = reseal(pristine, change)
+            self.put(f"edited/{label}/resealed", "status", resealed is not None)
+            if resealed is not None:
+                saved.write_text(resealed)
+                self.run(f"edited/{label}/inspect", "inspect", *source, *look)
+                self.run(f"edited/{label}/percentile", *percentile)
+                self.record_written_files(f"edited/{label}/percentile", written)
+                self.run(f"edited/{label}/calibrate", "calibrate", *source, *flags(tensor=0))
+        sizes = {"largest-file": LARGEST_HEADER - 1, "file-too-large": LARGEST_HEADER}
+        for label, size in sizes.items():
+            saved.write_text(pristine + " " * (size - len(pristine)))
+            self.run(f"edited/{label}/inspect", "inspect", *source, *look)
+        saved.write_text(pristine)
+        self.record_edited_histograms(cache, pristine, percentile, written)
+        self.record_edited_comparison(core, other)
+
+    def record_edited_histograms(
+        self, cache: Path, pristine: str, percentile: list[str], written: str
+    ) -> None:
+        """A saved percentile histogram that was damaged, or replaced and vouched for."""
+        saved = cache / "calibration.json"
+        found = sorted((cache / "histograms").glob("*-0000.u64le.zlib"))
+        self.put("edited/histogram/found", "status", len(found))
+        if len(found) != 1:
+            return
+        original = found[0].read_bytes()
+        for label, contents in histogram_damage(original).items():
+            if contents is None:
+                found[0].unlink()
+            else:
+                found[0].write_bytes(contents)
+            self.run(f"edited/histogram/{label}", *percentile)
+            self.record_written_files(f"edited/histogram/{label}", written)
+        infinity = {"F16": 0x7C00, "BF16": 0x7F80}.get(min(CORE_TENSORS)[1], 0x7C00)
+        for label, forged in histogram_forgeries(original, infinity).items():
+            digest = sha256(forged)
+            vouched = reseal(
+                pristine,
+                lambda payload, digest=digest: first_entry(payload).update(histogram_sha256=digest),
+            )
+            found[0].write_bytes(zlib.compress(forged))
+            saved.write_text(vouched or pristine)
+            self.run(f"edited/forged-histogram/{label}", *percentile)
+            self.record_written_files(f"edited/forged-histogram/{label}", written)
+        found[0].write_bytes(original)
+        saved.write_text(pristine)
+
+    def record_edited_comparison(self, core: Path, other: Path) -> None:
+        """The same alterations for a saved comparison calibration."""
+        cache = self.work / "cache-edited-pair"
+        pair = flags(model=core, compare_model=other, cache=cache)
+        self.run("edited/pair/prepare", "compare-calibrate", *pair, *flags(tensor=0))
+        saved = cache / "comparison-calibration.json"
+        pristine = saved.read_text() if saved.is_file() else ""
+        cell = flags(tensor=0, row=0, col=6)
+        for label, change in comparison_edits().items():
+            resealed = reseal(pristine, change)
+            self.put(f"edited/pair/{label}/resealed", "status", resealed is not None)
+            if resealed is not None:
+                saved.write_text(resealed)
+                self.run(f"edited/pair/{label}/metadata", "compare-metadata", *pair)
+                self.run(f"edited/pair/{label}/inspect", "compare-inspect", *pair, *cell)
+
+    def record_resource_settings(self, model: Path) -> None:
+        """Every --resources range at its ends, and one step outside each."""
+        for label, settings in resource_probes().items():
+            chosen = json.dumps(settings, separators=(",", ":"))
+            self.run(f"resources/{label}", "metadata", *flags(model=model, resources=chosen))
+        # A reserve no ordinary disk can spare: the free-space guard itself must answer.
+        reserve = json.dumps({"disk_reserve_bytes": 1024 * 1024**3}, separators=(",", ":"))
+        guarded = flags(model=model, cache=self.work / "cache-reserve", resources=reserve)
+        self.run("resources/disk-reserve-largest-on-a-cache", "calibrate", *guarded)
+        allowed = min(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else 0
+        choices = {
+            "an-allowed-processor": str(allowed),
+            "a-processor-that-does-not-exist": "1023",
+            "past-the-last-processor-number": "1024",
+            "not-a-number": "first",
+            "negative": "-1",
+            "empty": "",
+        }
+        for label, value in choices.items():
+            for command in ("metadata", "compare-metadata"):
+                source = flags(model=model)
+                if command == "compare-metadata":
+                    source += flags(compare_model=model, cache=self.work / "cache-cpu")
+                key = f"resources/cpu-variable/{label}/{command}"
+                self.run(key, command, *source, variables={"ATLAS_CPU": value})
+
+    def record_small_tile_cache(self, model: Path, catalog: dict) -> None:
+        """A server allowed to keep only a few tiles must forget the oldest ones."""
+        allowed = json.dumps({"tile_cache_files": 64}, separators=(",", ":"))
+        source = flags(model=model, cache=self.work / "cache-small", resources=allowed)
+        self.run("smallcache/calibrate", "calibrate", *source)
+        wanted = [
+            {"tensor": tensor["id"], "rule": rule, "level": level, "x": x, "y": y}
+            for tensor in catalog.values()
+            for rule in KNOWN_RULES[2:6]
+            for level, x, y in tile_grid(tensor)
+        ][:70]
+        for turn in ("first", "restarted"):
+            process = self.serve(f"smallcache/{turn}", "serve", source)
+            if process is None:
+                return
+            try:
+                if turn == "first":
+                    for number, tile in enumerate(wanted):
+                        self.fetch_tile(f"smallcache/fill[{number:02d}]", "/tile", tile)
+                        if number < SPACED_TILES:
+                            time.sleep(TICK_SECONDS)  # so that file times tell these apart
+                self.fetch(f"smallcache/{turn}/progress", "/api/progress")
+                for number in (0, 1, len(wanted) - 2, len(wanted) - 1):
+                    key = f"smallcache/{turn}/again[{number:02d}]"
+                    self.fetch_tile(key, "/tile", wanted[number])
+                self.fetch(f"smallcache/{turn}/progress-afterwards", "/api/progress")
+            finally:
+                stop_server(process)
+
+    def record_changed_source(self) -> None:
+        """Checkpoint files that change under a running server must stop being served."""
+        probes = {
+            "model": "/api/model",
+            "progress": "/api/progress",
+            "status": "/api/tensor-status?tensor=0",
+            "view": "/api/view?tensor=0&left=tensor_linear&right=tensor_asinh",
+            "inspect": "/api/inspect?tensor=0&row=0&col=5",
+        }
+        tile = {"tensor": 0, "rule": "tensor_linear", "level": 0, "x": 0, "y": 0}
+        for how in ("index-rewritten", "weights-touched", "weights-rewritten"):
+            model, tag = self.work / f"changing-{how}", f"changing/{how}"
+            build_checkpoint(model, SMALL_TENSORS, "a", shards=2)
+            source = flags(model=model, cache=self.work / f"cache-changing-{how}")
+            self.run(f"{tag}/calibrate", "calibrate", *source)
+            process = self.serve(tag, "serve", source)
+            if process is None:
+                continue
+            try:
+                for stage in ("before", "after"):
+                    if stage == "after":
+                        change_checkpoint(model, how)
+                    for label, path in probes.items():
+                        self.fetch(f"{tag}/{stage}/{label}", path)
+                    self.fetch_tile(f"{tag}/{stage}/tile", "/tile", tile)
+                    again = "/api/calibrate?tensor=0"
+                    self.fetch(f"{tag}/{stage}/calibrate", again, method="POST", headers=LOCAL)
+            finally:
+                stop_server(process)
+            self.run(f"{tag}/opened-again", "calibrate", *source)
+
     def record_help(self) -> None:
         shown = run_command(self.binary, "--help")
         self.put("help/exit", "status", "timeout" if shown is None else shown.returncode)
@@ -1297,6 +2173,15 @@ class Recorder:
         self.record_fresh_viewer(core_a)
         self.record_named_server(core_a)
         self.record_fresh_comparison(core_a, core_b)
+        special_a, special_b = self.work / "special-a", self.work / "special-b"
+        build_special_checkpoint(special_a, "a")
+        build_special_checkpoint(special_b, "b")
+        self.record_special_values(special_a, special_b)
+        self.record_cache_placement()
+        self.record_edited_caches(core_a, core_b)
+        self.record_changed_source()
+        self.record_resource_settings(core_a)
+        self.record_small_tile_cache(core_a, catalog)
         return self.entries
 
 
