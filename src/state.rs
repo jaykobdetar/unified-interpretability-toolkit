@@ -333,7 +333,7 @@ impl State {
     ) -> Result<Arc<render::Mapping>> {
         let dtype = Dtype::parse(&t.dtype)?;
         render::validate_rule_dtype(rule, dtype)?;
-        if rule != "tensor_signed_percentile" {
+        if !crate::rules::definition(rule)?.requires_histogram() {
             return self.mapping(rule, l, dtype);
         }
         self.source.check()?;

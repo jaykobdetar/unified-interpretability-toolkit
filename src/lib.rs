@@ -4,6 +4,7 @@ pub mod hosted_renderer;
 pub mod profile_worker;
 pub mod render;
 pub mod resources;
+mod rules;
 pub mod server;
 pub mod slice;
 pub mod source;

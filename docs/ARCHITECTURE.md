@@ -18,6 +18,8 @@ Model files are opened read-only. Safetensors headers/indexes establish supporte
 
 Calibration scans complete original tensors. Opening a checkpoint reads headers, not all payloads. Tensor rules become ready after that tensor's calibration; global rules need the whole supported checkpoint. Source changes invalidate cached results. Cache paths must be outside model trees; cache locking prevents concurrent mutation. Local checksums detect inconsistent cache content but are not authentication. Explicit full hashing is available through the native `verify` command.
 
+The ordered native rule catalog lives in `src/rules.rs`. Each definition holds its public ID, title, formula, checkpoint or tensor scope, transform, required statistics and supported numeric formats. Metadata, legend controls, pointwise mapping, percentile admission and palette selection consume those typed facts. `render::RULES` and the existing public rendering functions retain their interfaces and serialized metadata. Mapping still transforms each original value before pooling; sliced views use complete original-tensor calibration. Exact percentile ranks remain limited to BF16/F16, with the existing F32 refusal and histogram checks.
+
 ## Resource and ownership boundary
 
 Native operations use one CPU, a 768 MiB address-space limit, bounded source bands, bounded output/cache budgets, and memory/disk admission checks. Coordinators preserve their own lower work budgets and stop reserves. A caller never acquires another session's worker; unknown cleanup remains blocking. Only owned children are terminated/reaped. Logging/export requires explicit user actions.

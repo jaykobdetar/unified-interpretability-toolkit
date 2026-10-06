@@ -1,0 +1,7 @@
+# Extending the native reader and renderer
+
+Native color rules are declared in the ordered catalog in `src/rules.rs`. An entry states the public ID, title, exact formula, scope, transform, statistics requirements and supported formats. Keep the public order and existing IDs stable: saved viewer state, API metadata and cache keys use them. Rendering code selects behavior from the typed definition rather than recognizing an ID by spelling.
+
+A rule must describe original-tensor or complete-checkpoint calibration explicitly. Pointwise transformation happens before pooling, and a trailing slice uses the original tensor's calibration. Preserve bounded source reads and output budgets. Exact rank rules require the original histogram and its checked digest; a format without an exact implementation must retain an explicit refusal rather than use an approximation.
+
+Compatibility tests in `tests/rule_compatibility_vectors.rs` pin metadata bytes, format admission, legend controls and numeric endpoints against held original-binary vectors. `tests/rule_boundary_vectors.rs` additionally pins rank ties and signed zero, palette rounding and distribution-bound mapping caches. Existing rule, dtype, pooling and source-change tests remain required. Run the complete pinned project check and the unchanged behaviour referee against the preserved starting binary before accepting a source change; retain raw outputs and any separately authorized difference. See [Development](DEVELOPMENT.md) for commands and resource guards.
