@@ -194,3 +194,117 @@ fn dispatch(
         server::error(socket, 404, "Not found on read-only comparison server")
     }
 }
+
+#[cfg(test)]
+mod dispatch_vectors {
+    //! Tiny comparison dispatch vectors; no listener loop or numeric worker.
+    use super::*;
+    use std::{
+        io::Read,
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+        time::Duration,
+    };
+
+    struct Fixture {
+        state: Comparison,
+        root: PathBuf,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let root = std::env::temp_dir().join(format!(
+                "atlas-comparison-dispatch-vectors-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let header = br#"{"weights":{"dtype":"BF16","shape":[1,2],"data_offsets":[0,4]}}"#;
+            for (name, payload) in [("a", [0x80, 0x3f, 0x80, 0xbf]), ("b", [0, 0x40, 0, 0xc0])] {
+                let model = root.join(name);
+                std::fs::create_dir_all(&model).unwrap();
+                let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+                bytes.extend_from_slice(header);
+                bytes.extend_from_slice(&payload);
+                std::fs::write(model.join("tiny.safetensors"), bytes).unwrap();
+            }
+            let state =
+                Comparison::open(&root.join("a"), &root.join("b"), &root.join("cache")).unwrap();
+            Self { state, root }
+        }
+
+        fn request(&self, path: &str) -> (String, Value) {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let address = listener.local_addr().unwrap();
+            let mut client = TcpStream::connect_timeout(&address, Duration::from_secs(3)).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let (socket, _) = listener.accept().unwrap();
+            let (sender, _receiver) = sync_channel(8);
+            let raw = format!("GET {path} HTTP/1.1\r\nHost: {address}\r\n\r\n");
+            dispatch(&self.state, &sender, socket, raw.as_bytes(), address.port());
+            let mut bytes = Vec::new();
+            client.read_to_end(&mut bytes).unwrap();
+            assert!(bytes.len() < 64 * 1024, "tiny comparison response bound");
+            let response = String::from_utf8(bytes).unwrap();
+            let (head, body) = response.split_once("\r\n\r\n").unwrap();
+            (
+                head.lines().next().unwrap().to_owned(),
+                serde_json::from_str(body).unwrap(),
+            )
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.root).unwrap();
+        }
+    }
+
+    #[test]
+    fn model_route_keeps_comparison_catalog_and_coordinate_space() {
+        let _isolation = crate::resources::test_workspace_guard();
+        let fixture = Fixture::new();
+        let (status, body) = fixture.request("/api/comparison/model");
+        assert_eq!(status, "HTTP/1.1 200 OK", "comparison model route status");
+        assert_eq!(body["api_version"], 1);
+        assert_eq!(body["coordinate_space"], "checkpoint-comparison-v1");
+        assert_eq!(body["inference_editable"], false);
+        assert_eq!(body["compatibility"]["tensor_count"], 1);
+        assert_eq!(body["catalog"][0]["name"], "weights");
+        assert_eq!(body["catalog"][0]["calibration_complete"], false);
+        assert_eq!(body["comparison_identity"], fixture.state.identity);
+    }
+
+    #[test]
+    fn inspect_route_keeps_selected_originals_and_difference_direction() {
+        let _isolation = crate::resources::test_workspace_guard();
+        let fixture = Fixture::new();
+        let (status, body) = fixture.request("/api/comparison/inspect?tensor=0&row=0&col=1");
+        assert_eq!(status, "HTTP/1.1 200 OK", "comparison inspect route status");
+        assert_eq!(body["native_indices"], json!([0, 1]));
+        assert_eq!(body["originals"]["a"]["raw_exact"], "-1");
+        assert_eq!(body["originals"]["b"]["raw_exact"], "-2");
+        assert_eq!(body["difference"]["value"], -1.0);
+        assert_eq!(body["difference"]["direction"], "B-A");
+        assert_eq!(body["difference"]["derived"], true);
+        assert_eq!(body["inference_editable"], false);
+    }
+
+    #[test]
+    fn unknown_asset_keeps_comparison_not_found_wording() {
+        let _isolation = crate::resources::test_workspace_guard();
+        let fixture = Fixture::new();
+        let (status, body) = fixture.request("/missing-fixture-asset");
+        assert_eq!(
+            status, "HTTP/1.1 404 Not Found",
+            "comparison missing asset status"
+        );
+        assert_eq!(
+            body,
+            json!({"api_version":1,"error":"Not found on read-only comparison server"}),
+            "comparison missing asset body"
+        );
+    }
+}
