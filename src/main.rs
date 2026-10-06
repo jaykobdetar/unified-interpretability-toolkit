@@ -9,7 +9,7 @@ use std::{
 };
 use weight_atlas_rust::{
     atomic_write,
-    command::{parse_options, HELP},
+    command::{defaults, parse_options, HELP},
     configure, configure_standalone, headroom, peak_rss_mib, render, require, server,
     slice::{parse_indices, TensorSlice},
     source::{Dtype, Source},
@@ -141,22 +141,30 @@ fn run_overview(state: &State, opts: &BTreeMap<String, String>) -> Result<()> {
         .get("tensor")
         .ok_or("Overview requires explicit --tensor ID")?
         .parse()?;
-    let leading = parse_indices(&get("slice", ""))?;
-    let rules = get("rules", "tensor_linear,tensor_asinh");
+    let leading = parse_indices(&get("slice", defaults::OVERVIEW_SLICE))?;
+    let rules = get("rules", defaults::OVERVIEW_RULES);
     let rules = rules.split(',').collect::<Vec<_>>();
-    let report =
-        state.prepare_overview(id, &leading, &rules, get("max-values", "16777216").parse()?)?;
+    let report = state.prepare_overview(
+        id,
+        &leading,
+        &rules,
+        get("max-values", defaults::OVERVIEW_MAX_VALUES).parse()?,
+    )?;
     println!("{}", report);
     Ok(())
 }
 
 fn run_tile(state: &State, opts: &BTreeMap<String, String>, start: Instant) -> Result<()> {
     let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
-    let id: usize = get("tensor", "0").parse()?;
-    let slice = TensorSlice::new(&state.source, id, &parse_indices(&get("slice", ""))?)?;
+    let id: usize = get("tensor", defaults::TILE_TENSOR).parse()?;
+    let slice = TensorSlice::new(
+        &state.source,
+        id,
+        &parse_indices(&get("slice", defaults::TILE_SLICE))?,
+    )?;
     let t = &slice.tensor;
     let level: u32 = get("level", &t.max_level.to_string()).parse()?;
-    let rules = get("rules", "global_linear,global_asinh");
+    let rules = get("rules", defaults::TILE_RULES);
     let rules = rules.split(',').collect::<Vec<_>>();
     let luts = rules
         .iter()
@@ -172,10 +180,10 @@ fn run_tile(state: &State, opts: &BTreeMap<String, String>, start: Instant) -> R
         t,
         &refs,
         level,
-        get("x", "0").parse()?,
-        get("y", "0").parse()?,
+        get("x", defaults::TILE_X).parse()?,
+        get("y", defaults::TILE_Y).parse()?,
     )?;
-    let out = get("out", "tile");
+    let out = get("out", defaults::TILE_OUT);
     for (rule, field) in rules.iter().zip(&fields) {
         std::fs::write(
             format!("{out}-{rule}.png"),
@@ -200,9 +208,9 @@ fn run_benchmark(
     start: Instant,
 ) -> Result<()> {
     let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
-    let id = get("tensor", "0").parse()?;
+    let id = get("tensor", defaults::BENCH_TENSOR).parse()?;
     let t = state.source.tensor(id)?;
-    let reps: usize = get("repeats", "3").parse()?;
+    let reps: usize = get("repeats", defaults::BENCH_REPEATS).parse()?;
     require((1..=30).contains(&reps), "repeats 1–30")?;
     let mut records = Vec::new();
     for f in [1usize, 4, 16] {

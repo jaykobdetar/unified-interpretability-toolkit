@@ -9,7 +9,12 @@ macro_rules! native_commands {
         public: [$first:ident => $first_id:literal $(, $rest:ident => $rest_id:literal)* $(,)?],
         comparison: [$compare_first:ident => $compare_first_id:literal $(, $compare_rest:ident => $compare_rest_id:literal)* $(,)?],
         private: [$($private:ident => $private_id:literal),+ $(,)?],
-        help_tail: $help_tail:literal $(,)?
+        rendering: {
+            overview: { slice: $overview_slice:literal, rules: $overview_rules:literal, max_values: $overview_max:literal },
+            tile: { tensor: $tile_tensor:literal, slice: $tile_slice:literal, rules: $tile_rules:literal, x: $tile_x:literal, y: $tile_y:literal, out: $tile_out:literal },
+            bench: { tensor: $bench_tensor:literal, repeats: $bench_repeats:literal }
+        },
+        help_parts: [$help0:literal, $help1:literal, $help2:literal, $help3:literal, $help4:literal] $(,)?
     ) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub enum Command {
@@ -39,12 +44,28 @@ macro_rules! native_commands {
             }
         }
 
+        /// Command-specific fallback facts; they do not insert or validate options.
+        pub mod defaults {
+            pub const OVERVIEW_SLICE: &str = $overview_slice;
+            pub const OVERVIEW_RULES: &str = $overview_rules;
+            pub const OVERVIEW_MAX_VALUES: &str = $overview_max;
+            pub const TILE_TENSOR: &str = $tile_tensor;
+            pub const TILE_SLICE: &str = $tile_slice;
+            pub const TILE_RULES: &str = $tile_rules;
+            pub const TILE_X: &str = $tile_x;
+            pub const TILE_Y: &str = $tile_y;
+            pub const TILE_OUT: &str = $tile_out;
+            pub const BENCH_TENSOR: &str = $bench_tensor;
+            pub const BENCH_REPEATS: &str = $bench_repeats;
+        }
+
         pub const HELP: &str = concat!(
             "Weight Atlas Rust\nCommands: ",
             $first_id, $(" | ", $rest_id,)*
             "\nComparison: ",
             $compare_first_id, $(" | ", $compare_rest_id,)*
-            $help_tail
+            $help0, $overview_rules, $help1, $overview_max,
+            $help2, $tile_rules, $help3, $bench_repeats, $help4
         );
     };
 }
@@ -71,7 +92,18 @@ native_commands! {
         HostedRenderer => "hosted-renderer",
         ProfileWorker => "profile-worker",
     ],
-    help_tail: "; explicit --model A --compare-model B; --cache outside both\nComparison tile: --tensor ID --quantity a|b|delta|abs_delta --mapping linear|asinh|magnitude --out PREFIX; compare-calibrate requires --tensor ID\nRequired: --model DIRECTORY\nCommon: --cache DIRECTORY (default ./cache) --name NAME --revision REVISION\nserve: --port 8775 --verify-sha false; true hashes all bytes before listening; no remote binding\ncalibrate: --tensor ID (omit for all); resumes valid calibration\nverify: full SHA-256 reads, compares local model-api.json if present\noverview: --tensor ID --slice INDICES --rules tensor_linear,tensor_asinh --max-values 16777216; explicit bounded coarse preparation\ntile: --tensor ID --rules global_linear,global_asinh --level L --x X --y Y --out PREFIX\ninspect: --tensor ID --row R --col C\nbench: --tensor ID --repeats 3; factors 1,4,16, both global rules\nDefaults: one CPU, 768 MiB address-space budget, >=3 GiB effective RAM reserve plus process budget, >=25 GiB disk reserve.\n--resources JSON selects validated standalone budgets; see docs/RESOURCES.md.\nCache identity checks do not claim a fresh full-content hash.",
+    rendering: {
+        overview: { slice: "", rules: "tensor_linear,tensor_asinh", max_values: "16777216" },
+        tile: { tensor: "0", slice: "", rules: "global_linear,global_asinh", x: "0", y: "0", out: "tile" },
+        bench: { tensor: "0", repeats: "3" }
+    },
+    help_parts: [
+        "; explicit --model A --compare-model B; --cache outside both\nComparison tile: --tensor ID --quantity a|b|delta|abs_delta --mapping linear|asinh|magnitude --out PREFIX; compare-calibrate requires --tensor ID\nRequired: --model DIRECTORY\nCommon: --cache DIRECTORY (default ./cache) --name NAME --revision REVISION\nserve: --port 8775 --verify-sha false; true hashes all bytes before listening; no remote binding\ncalibrate: --tensor ID (omit for all); resumes valid calibration\nverify: full SHA-256 reads, compares local model-api.json if present\noverview: --tensor ID --slice INDICES --rules ",
+        " --max-values ",
+        "; explicit bounded coarse preparation\ntile: --tensor ID --rules ",
+        " --level L --x X --y Y --out PREFIX\ninspect: --tensor ID --row R --col C\nbench: --tensor ID --repeats ",
+        "; factors 1,4,16, both global rules\nDefaults: one CPU, 768 MiB address-space budget, >=3 GiB effective RAM reserve plus process budget, >=25 GiB disk reserve.\n--resources JSON selects validated standalone budgets; see docs/RESOURCES.md.\nCache identity checks do not claim a fresh full-content hash."
+    ],
 }
 
 /// Parse key/value arguments after a present command token, in original order.
