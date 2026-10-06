@@ -42,7 +42,7 @@ from inference_observations import (
     validate_record,
 )
 
-from inference_generation import GenerationBindings, run as run_generation
+from atlas_host.inference_generation import GenerationBindings, run as run_generation
 from atlas_host.inference_engine import LoaderRuntime, load_engine as bound_load_engine
 from atlas_host.inference_comparison import (
     ComparisonBindings,
@@ -50,7 +50,7 @@ from atlas_host.inference_comparison import (
     paired_step as comparison_step,
     run as run_comparison,
 )
-from inference_experiments import Context, Record, Request, execute
+from atlas_host.inference_experiments import Context, Record, Request, execute
 from inference_architecture import architecture
 from inference_services import InferenceContracts
 

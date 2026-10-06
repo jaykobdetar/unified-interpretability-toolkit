@@ -48,7 +48,7 @@ from inference_observations import (
 )
 import inference_prompt_pair as prompt_pair
 import inference_sweep as sweep
-from inference_experiments import Kind, REGISTRY, for_coordinator
+from atlas_host.inference_experiments import Kind, REGISTRY, for_coordinator
 from inference_architecture import architecture
 from atlas_host.inference_geometry import (
     head_layout_descriptor as bound_head_layout_descriptor,

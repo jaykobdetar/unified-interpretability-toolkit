@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from inference_experiments import Generate, Record, Request
+from atlas_host.inference_experiments import Generate, Record, Request
 
 # Trace envelopes retain arbitrary legacy fields; no new schema or coercion.
 Event = dict[str, Any]
