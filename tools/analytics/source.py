@@ -5,18 +5,31 @@ No directory discovery, source writes, whole tensor reads, or persistent cache.
 """
 
 from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
 import math
 import os
 from pathlib import Path
 import stat
 import struct
 import time
+from typing import (
+    Any,
+    Literal,
+    NotRequired,
+    Protocol,
+    TypedDict,
+    TypeAlias,
+    TypeVar,
+    Unpack,
+    cast,
+)
 
 from .core import (
     MAX_AXIS,
     MAX_TENSORS,
     MAX_TOP,
     MAX_VALUES,
+    AnalyticsReport,
     analyze,
     digest,
     geometry,
@@ -24,12 +37,97 @@ from .core import (
     statistics,
 )
 
+_Path: TypeAlias = str | os.PathLike[str]
+Fingerprint: TypeAlias = tuple[int, int, int, int, int]
+_Cached = TypeVar("_Cached", bound=Mapping[str, Any])
 
-def fingerprint(st):
+
+class AnalyzeOptions(TypedDict, total=False):
+    top: int
+    seed: int
+    config: Mapping[str, Any] | None
+    evidence: Mapping[str, Any] | None
+    reviewed_profiles: Mapping[tuple[Any, Any], str] | None
+
+
+class TensorCoverage(TypedDict):
+    tensor: str
+    total_values: int
+    visited_values: int
+    full_tensor: bool
+    region: Mapping[str, int] | None
+    excluded_reason: NotRequired[str | None]
+
+
+class _CoverageUpdate(Protocol):
+    def update(
+        self,
+        *,
+        visited_values: int,
+        full_tensor: bool,
+        region: Mapping[str, int],
+        excluded_reason: str | None,
+    ) -> None: ...
+
+
+class ModelCoverage(TypedDict):
+    total_tensors: int
+    visited_tensors: int
+    total_values: int
+    visited_values: int
+    full_model: bool
+    tensors: list[TensorCoverage]
+    selection: str
+
+
+class Outlier(TypedDict):
+    index: int
+    tensor: str
+    region: Mapping[str, int]
+    full_axis: bool | None
+    score_scope: str
+    row: NotRequired[int]
+    col: NotRequired[int]
+    value: NotRequired[float]
+    abs: NotRequired[float]
+    mean_abs: NotRequired[float]
+    count: NotRequired[int]
+    native_indices: NotRequired[list[int]]
+    control_position: NotRequired[list[int]]
+    source_native_indices: NotRequired[list[int]]
+
+
+class ModelControl(TypedDict):
+    seed: int
+    kind: str
+    statistics: str
+
+
+class ModelOutliers(TypedDict):
+    schema: str
+    source_identity: str
+    coverage: ModelCoverage
+    rankings: dict[str, dict[str, list[Outlier]]]
+    control: ModelControl
+    warning: str
+
+
+class LayoutEvidence(TypedDict):
+    config_sha256: str
+    config_canonical_sha256: str
+    implementation_sha256: str
+    review_requirement: str
+    model: NotRequired[str]
+    revision: NotRequired[str]
+    linear_implementation_sha256: NotRequired[str]
+    implementation_package: NotRequired[str]
+
+
+def fingerprint(st: os.stat_result) -> Fingerprint:
     return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
 
 
-def optional_index_fingerprint(root):
+def optional_index_fingerprint(root: _Path) -> Fingerprint | None:
     try:
         st = (Path(root) / "model.safetensors.index.json").lstat()
     except FileNotFoundError:
@@ -42,13 +140,15 @@ def optional_index_fingerprint(root):
 @dataclass(frozen=True)
 class Tensor:
     name: str
-    shape: tuple
+    shape: tuple[int, ...]
     shard: str
     byte_offset: int
 
 
 class Catalog:
-    def __init__(self, root, tensors, source_identity):
+    def __init__(
+        self, root: _Path, tensors: Sequence[Tensor], source_identity: str
+    ) -> None:
         self.root = Path(root).resolve(strict=True)
         if not source_identity or not isinstance(source_identity, str):
             raise ValueError("Validated host source identity required")
@@ -57,7 +157,7 @@ class Catalog:
                 "Catalog must contain 1..512 tensors; never silently truncate catalog"
             )
         self.tensors = tuple(tensors)
-        self.files = {}
+        self.files: dict[str, Fingerprint] = {}
         names = set()
         for tensor in self.tensors:
             if (
@@ -95,7 +195,7 @@ class Catalog:
             }
         )
 
-    def verify(self):
+    def verify(self) -> None:
         if optional_index_fingerprint(self.root) != self.index_fingerprint:
             raise ValueError(
                 "Source index identity changed; discard analytics and caches"
@@ -106,7 +206,7 @@ class Catalog:
                     "Source identity changed; discard analytics and caches"
                 )
 
-    def read(self, tensor, region):
+    def read(self, tensor: Tensor, region: Mapping[str, int]) -> list[float]:
         if tensor not in self.tensors:
             raise ValueError("Tensor not in validated catalog")
         r, c, h, w = geometry(tensor.shape, region)
@@ -118,7 +218,7 @@ class Catalog:
         try:
             if fingerprint(os.fstat(fd)) != self.files[tensor.shard]:
                 raise ValueError("Source changed before read")
-            values = []
+            values: list[float] = []
             for row in range(r, r + h):
                 raw = os.pread(
                     fd, 2 * w, tensor.byte_offset + 2 * (row * full_cols + c)
@@ -136,7 +236,9 @@ class Catalog:
         finally:
             os.close(fd)
 
-    def region(self, name, region, **options):
+    def region(
+        self, name: str, region: Mapping[str, int], **options: Unpack[AnalyzeOptions]
+    ) -> AnalyticsReport:
         tensor = next((t for t in self.tensors if t.name == name), None)
         if tensor is None:
             raise ValueError("Unknown tensor")
@@ -149,14 +251,16 @@ class Catalog:
             **options,
         )
 
-    def validate_cached(self, result):
+    def validate_cached(self, result: _Cached) -> _Cached:
         self.verify()
         if result.get("source_identity") != self.identity:
             raise ValueError("Cached analytics belong to another source")
         # Caller must also match the exact request cache key. This validates source only.
         return result
 
-    def model_outliers(self, top=16, value_budget=MAX_VALUES, seed=1):
+    def model_outliers(
+        self, top: int = 16, value_budget: int = MAX_VALUES, seed: int = 1
+    ) -> ModelOutliers:
         """Deterministic catalog-order prefix windows, not a representative sample.
 
         Full model is possible only for catalogs whose entire values fit the cap.
@@ -169,8 +273,8 @@ class Catalog:
         self.verify()
         deadline = time.monotonic() + 2.0
         remaining = value_budget
-        coverage = []
-        results = {
+        coverage: list[TensorCoverage] = []
+        results: dict[str, dict[str, list[Outlier]]] = {
             side: {"values": [], "rows": [], "columns": []}
             for side in ("original", "shuffled")
         }
@@ -180,7 +284,7 @@ class Catalog:
             row_count, col_count = (
                 (1, tensor.shape[0]) if len(tensor.shape) == 1 else tensor.shape
             )
-            entry = {
+            entry: TensorCoverage = {
                 "tensor": tensor.name,
                 "total_values": total,
                 "visited_values": 0,
@@ -211,7 +315,7 @@ class Catalog:
             used = len(values)
             remaining -= used
             visited += used
-            entry.update(
+            cast(_CoverageUpdate, entry).update(
                 visited_values=used,
                 full_tensor=used == total,
                 region=region,
@@ -222,6 +326,7 @@ class Catalog:
                 ),
             )
             coverage.append(entry)
+            side: Literal["original", "shuffled"]
             for side in ("original", "shuffled"):
                 s = pair[side]
                 for kind, items in (
@@ -251,7 +356,9 @@ class Catalog:
                                 ),
                             }
                         )
-                    score = "abs" if kind == "values" else "mean_abs"
+                    score: Literal["abs", "mean_abs"] = (
+                        "abs" if kind == "values" else "mean_abs"
+                    )
                     results[side][kind] = sorted(
                         results[side][kind],
                         key=lambda x: (-x[score], x["tensor"], x["index"]),
@@ -280,7 +387,9 @@ class Catalog:
         }
 
 
-def read_layout_evidence(config_path, implementation_path):
+def read_layout_evidence(
+    config_path: _Path, implementation_path: _Path
+) -> tuple[Any, LayoutEvidence]:
     """Hash bounded local evidence files; a hash alone does not review semantics.
 
     The returned digest pair must match an application-owned reviewed profile.
@@ -289,7 +398,7 @@ def read_layout_evidence(config_path, implementation_path):
     import hashlib
     import json
 
-    def read(path):
+    def read(path: _Path) -> bytes:
         path = Path(path)
         before = path.lstat()
         if not stat.S_ISREG(before.st_mode) or before.st_size > 1024 * 1024:
@@ -309,8 +418,8 @@ def read_layout_evidence(config_path, implementation_path):
         finally:
             os.close(fd)
 
-    def unique(pairs):
-        out = {}
+    def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        out: dict[str, Any] = {}
         for key, value in pairs:
             if key in out:
                 raise ValueError("Duplicate configuration key")
@@ -319,7 +428,7 @@ def read_layout_evidence(config_path, implementation_path):
 
     config_raw = read(config_path)
     config = json.loads(config_raw, object_pairs_hook=unique)
-    evidence = {
+    evidence: LayoutEvidence = {
         "config_sha256": hashlib.sha256(config_raw).hexdigest(),
         "config_canonical_sha256": digest(config),
         "implementation_sha256": hashlib.sha256(read(implementation_path)).hexdigest(),
