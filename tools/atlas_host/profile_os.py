@@ -15,6 +15,7 @@ import threading
 import time
 
 from .common import canonical, fields, require, _unique
+from .memory import available_bytes
 from .registry import fingerprint
 from .profile_observation import SpawnObservationPending
 from .startup_diagnostics import safe_error, error_chain, diagnose, diagnosed
@@ -110,20 +111,6 @@ def children(pid):
         require(len(raw) <= 4096, "Owned child inventory exceeds bound")
         found.update(int(p) for p in raw.split())
     return found
-
-
-def available_bytes():
-    raw = Path("/proc/meminfo").read_text()
-    return (
-        int(
-            next(
-                line.split()[1]
-                for line in raw.splitlines()
-                if line.startswith("MemAvailable:")
-            )
-        )
-        * 1024
-    )
 
 
 class ThreadMeter:

@@ -37,6 +37,7 @@ from inference_architecture import (
     head_layout_descriptor,
     bind_viewer_head_layout,
 )
+from atlas_host.memory import available_bytes as available
 from inference_edits import SOURCE_MODEL, schema, validate_edits, validate_pair
 from inference_observations import (
     schema as observation_schema,
@@ -196,19 +197,6 @@ def signal_and_reap(process, *, terminate=False, timeout=0.2):
         return True
     except (OSError, subprocess.TimeoutExpired):
         return False
-
-
-def available():
-    return (
-        int(
-            next(
-                s
-                for s in Path("/proc/meminfo").read_text().splitlines()
-                if s.startswith("MemAvailable:")
-            ).split()[1]
-        )
-        * 1024
-    )
 
 
 class SweepAdmissionBudget:

@@ -4,22 +4,9 @@
 import argparse, hashlib, json, os
 from pathlib import Path
 
+from atlas_host.memory import guard
+
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def guard():
-    available = (
-        int(
-            next(
-                line
-                for line in Path("/proc/meminfo").read_text().splitlines()
-                if line.startswith("MemAvailable:")
-            ).split()[1]
-        )
-        * 1024
-    )
-    if available < 3 * 1024**3:
-        raise RuntimeError("Paused: fewer than 3 GiB available RAM")
 
 
 def main():
