@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from atlas_host.inference_geometry import Architecture
-import inference_edit_contract as edit
-import inference_observation_contract as observation
+from atlas_host import inference_edit_contract as edit
+from atlas_host import inference_observation_contract as observation
 import inference_pair_contract as pair
 import inference_sweep_contract as sweep
 

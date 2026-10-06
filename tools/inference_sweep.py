@@ -5,7 +5,7 @@ from typing import Any
 from inference_architecture import architecture
 from atlas_host.inference_geometry import Architecture
 import inference_edits as edit_facade
-import inference_edit_contract as edit_contract
+from atlas_host import inference_edit_contract as edit_contract
 from inference_sweep_contract import SweepBindings
 import inference_sweep_contract as contract
 

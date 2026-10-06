@@ -6,8 +6,8 @@ from typing import Any
 
 from inference_architecture import architecture
 from atlas_host.inference_geometry import Architecture
-from inference_observation_contract import ObservationBindings
-import inference_observation_contract as contract
+from atlas_host.inference_observation_contract import ObservationBindings
+from atlas_host import inference_observation_contract as contract
 from inference_architecture import (
     ARCH,
     WIDTH,
