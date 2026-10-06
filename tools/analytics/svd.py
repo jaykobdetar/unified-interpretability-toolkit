@@ -14,6 +14,8 @@ import subprocess
 import sys
 
 from .core import checked_values, permutation
+from atlas_host.memory import available_bytes as _available_bytes
+from .runtime import configure_svd_worker as _configure_worker
 
 MAX_SVD_AXIS = 64
 MAX_SVD_VALUES = 4096
@@ -52,16 +54,7 @@ def run(values, shape, region, seed=1, python=sys.executable):
             "reason": "Excluded: SVD cap is 64 by 64 / 4096 values; select a bounded native window",
         }
     permutation(0, seed)  # Validate before spawning.
-    mem = (
-        int(
-            next(
-                x
-                for x in Path("/proc/meminfo").read_text().splitlines()
-                if x.startswith("MemAvailable:")
-            ).split()[1]
-        )
-        * 1024
-    )
+    mem = _available_bytes()
     if mem < 3 * 1024**3 + 768 * 1024**2 or shutil.disk_usage(".").free < 25 * 1024**3:
         return {
             "available": False,
@@ -121,16 +114,7 @@ def run(values, shape, region, seed=1, python=sys.executable):
 
 
 def worker():
-    os.sched_setaffinity(0, {min(os.sched_getaffinity(0))})
-    os.nice(10)
-    # Do not raise inherited caps.
-    for kind, ceiling in (
-        (resource.RLIMIT_AS, 768 * 1024**2),
-        (resource.RLIMIT_CPU, 4),
-    ):
-        soft, hard = resource.getrlimit(kind)
-        cap = min(x for x in (ceiling, soft, hard) if x != resource.RLIM_INFINITY)
-        resource.setrlimit(kind, (cap, cap))
+    _configure_worker()
     raw = sys.stdin.read(200001)
     if len(raw) > 200000:
         raise ValueError("Worker input cap exceeded")

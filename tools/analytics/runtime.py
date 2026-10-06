@@ -22,3 +22,16 @@ def configure() -> None:
     mem = available_bytes()
     if mem < 3.25 * 1024**3:
         raise ValueError("Memory reserve reached")
+
+
+def configure_svd_worker() -> None:
+    os.sched_setaffinity(0, {min(os.sched_getaffinity(0))})
+    os.nice(10)
+    # Do not raise inherited caps.
+    for kind, ceiling in (
+        (resource.RLIMIT_AS, 768 * 1024**2),
+        (resource.RLIMIT_CPU, 4),
+    ):
+        soft, hard = resource.getrlimit(kind)
+        cap = min(x for x in (ceiling, soft, hard) if x != resource.RLIM_INFINITY)
+        resource.setrlimit(kind, (cap, cap))
