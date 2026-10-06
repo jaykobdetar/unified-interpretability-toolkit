@@ -30,6 +30,8 @@ The native entrypoint in `src/main.rs` keeps help and argument validation ahead 
 
 Native operations use one CPU, a 768 MiB address-space limit, bounded source bands, bounded output/cache budgets, and memory/disk admission checks. Coordinators preserve their own lower work budgets and stop reserves. A caller never acquires another session's worker; unknown cleanup remains blocking. Only owned children are terminated/reaped. Logging/export requires explicit user actions.
 
+The private native profile worker in `src/profile_worker.rs` admits its options and original grant before source access, then bounds and validates the candidate descriptor. A borrowed context passes the same source, identity, seed, value allowance and scan deadline to profile creation or restoration and bounded advancement. Final snapshot writing, sealing, source checks and the original deadline remain ordered before candidate output. The original model-identity expression stays in the entry function, and the owner still decides whether to publish the candidate.
+
 The services bind only to loopback. There is no hosted authentication/deployment architecture or general remote model browser. See [API semantics](API-PROGRESSIVE.md), [data/slice binding](DATA-VIEWER-CONTRACT.md), and [profile worker interface](profile-worker/PROFILE-WORKER-INTERFACE.md).
 
 ## Experimental owner fixture workflow

@@ -38,6 +38,72 @@ fn check_deadline(end: Instant) -> Result<()> {
 
 pub fn run(options: &BTreeMap<String, String>) -> Result<()> {
     let entered = Instant::now();
+    let (deadline, scan_deadline) = admit_options(options, entered)?;
+    let source = Source::open(Path::new(&options["model"]))?;
+    let slice = TensorSlice::new(
+        &source,
+        options["tensor"].parse()?,
+        &parse_indices(&options["slice"])?,
+    )?;
+    let model_identity = sha(json!([
+        "weight-atlas-model-v1",
+        source.identity,
+        options["revision"]
+    ])
+    .to_string()
+    .as_bytes());
+    let binding = slice.binding(&model_identity).to_string();
+    require(
+        binding == options["binding"],
+        "Worker source/slice correspondence mismatch",
+    )?;
+    let layout = snapshot::layout(slice.tensor.rows, slice.tensor.cols, binding.len())?;
+    limit_output(layout.frame_bytes)?;
+    let seed: u64 = options["seed"].parse()?;
+    require(seed <= u32::MAX as u64, "Worker seed must fit uint32")?;
+    let values: usize = options["values"].parse()?;
+    let mut output = candidate_output(options)?;
+    let context = ProfileContext {
+        source: &source,
+        options,
+        model_identity: &model_identity,
+        seed,
+        values,
+        scan_deadline,
+        frame_bytes: layout.frame_bytes,
+    };
+    let mut profile = create_profile(&context, slice)?;
+    let before = advance_profile(&context, &mut profile)?;
+    output.seek(SeekFrom::Start(0))?;
+    let revision = profile.write_snapshot(&source, &mut output, deadline)?;
+    seal_candidate(&output, layout.frame_bytes)?;
+    source.check()?;
+    check_deadline(deadline)?;
+    // Candidate only. Owner must validate the SAME handle, source and final
+    // rusage/reap within its original grant before any terminal publication.
+    println!(
+        "{}",
+        json!({"schema":"weight-atlas.profile-candidate.v1","revision":revision,
+        "visited_values":profile.visited_values(),"new_values":profile.visited_values()-before,
+        "frame_bytes":layout.frame_bytes,"live_bytes":layout.live_bytes})
+    );
+    Ok(())
+}
+
+struct ProfileContext<'a> {
+    source: &'a Source,
+    options: &'a BTreeMap<String, String>,
+    model_identity: &'a str,
+    seed: u64,
+    values: usize,
+    scan_deadline: Instant,
+    frame_bytes: usize,
+}
+
+fn admit_options(
+    options: &BTreeMap<String, String>,
+    entered: Instant,
+) -> Result<(Instant, Instant)> {
     let required = [
         "model",
         "revision",
@@ -86,106 +152,96 @@ pub fn run(options: &BTreeMap<String, String>) -> Result<()> {
     )?;
     // RLIMIT_CPU is coarse; aggregate subsecond enforcement belongs to owner.
     check_deadline(scan_deadline)?;
-    let source = Source::open(Path::new(&options["model"]))?;
-    let slice = TensorSlice::new(
-        &source,
-        options["tensor"].parse()?,
-        &parse_indices(&options["slice"])?,
-    )?;
-    let model_identity = sha(json!([
-        "weight-atlas-model-v1",
-        source.identity,
-        options["revision"]
-    ])
-    .to_string()
-    .as_bytes());
-    let binding = slice.binding(&model_identity).to_string();
-    require(
-        binding == options["binding"],
-        "Worker source/slice correspondence mismatch",
-    )?;
-    let layout = snapshot::layout(slice.tensor.rows, slice.tensor.cols, binding.len())?;
+    Ok((deadline, scan_deadline))
+}
+
+fn limit_output(frame_bytes: usize) -> Result<()> {
     let output_limit = libc::rlimit {
-        rlim_cur: layout.frame_bytes as u64,
-        rlim_max: layout.frame_bytes as u64,
+        rlim_cur: frame_bytes as u64,
+        rlim_max: frame_bytes as u64,
     };
     require(
         unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &output_limit) } == 0,
         "Cannot bound child output",
     )?;
-    let seed: u64 = options["seed"].parse()?;
-    require(seed <= u32::MAX as u64, "Worker seed must fit uint32")?;
-    let values: usize = options["values"].parse()?;
-    let mut output = fd(&options["output-fd"])?;
+    Ok(())
+}
+
+fn candidate_output(options: &BTreeMap<String, String>) -> Result<File> {
+    let output = fd(&options["output-fd"])?;
     require(
         output.metadata()?.len() == 0,
         "Candidate output must be empty",
     )?;
     let seals = unsafe { libc::fcntl(output.as_raw_fd(), libc::F_GET_SEALS) };
     require(seals == 0, "Candidate must be a new sealable memfd")?;
-    let mut profile = if let Some(input) = options.get("input-fd") {
+    Ok(output)
+}
+
+fn create_profile(context: &ProfileContext<'_>, slice: TensorSlice) -> Result<StrengthProfile> {
+    let profile = if let Some(input) = context.options.get("input-fd") {
         require(
-            input != &options["output-fd"],
+            input != &context.options["output-fd"],
             "Input and output must differ",
         )?;
         let mut input = fd(input)?;
-        sealed(&input, layout.frame_bytes)?;
+        sealed(&input, context.frame_bytes)?;
         input.seek(SeekFrom::Start(0))?;
         StrengthProfile::restore_snapshot(
-            &source,
+            context.source,
             slice,
-            &model_identity,
-            seed,
-            input.take(layout.frame_bytes as u64 + 1),
-            layout.frame_bytes,
-            &options["input-sha"],
-            scan_deadline,
+            context.model_identity,
+            context.seed,
+            input.take(context.frame_bytes as u64 + 1),
+            context.frame_bytes,
+            &context.options["input-sha"],
+            context.scan_deadline,
         )?
     } else {
         StrengthProfile::new(
-            &source,
+            context.source,
             slice,
-            &model_identity,
-            seed,
-            values,
+            context.model_identity,
+            context.seed,
+            context.values,
             Duration::from_nanos(1),
         )?
     };
-    check_deadline(scan_deadline)?;
+    Ok(profile)
+}
+
+fn advance_profile(context: &ProfileContext<'_>, profile: &mut StrengthProfile) -> Result<usize> {
+    check_deadline(context.scan_deadline)?;
     let before = profile.visited_values();
     profile.authorize(
-        values,
-        scan_deadline.saturating_duration_since(Instant::now()),
+        context.values,
+        context
+            .scan_deadline
+            .saturating_duration_since(Instant::now()),
     )?;
-    while profile.visited_values() - before < values && Instant::now() < scan_deadline {
+    while profile.visited_values() - before < context.values
+        && Instant::now() < context.scan_deadline
+    {
         let previous = profile.visited_values();
         profile.advance_until(
-            &source,
-            CHUNK_VALUES.min(values - (previous - before)),
-            scan_deadline,
+            context.source,
+            CHUNK_VALUES.min(context.values - (previous - before)),
+            context.scan_deadline,
         )?;
         if profile.visited_values() == previous {
             break;
         }
     }
-    output.seek(SeekFrom::Start(0))?;
-    let revision = profile.write_snapshot(&source, &mut output, deadline)?;
+    Ok(before)
+}
+
+fn seal_candidate(output: &File, frame_bytes: usize) -> Result<()> {
     let required_seals =
         libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
     require(
         unsafe { libc::fcntl(output.as_raw_fd(), libc::F_ADD_SEALS, required_seals) } == 0,
         "Cannot seal candidate",
     )?;
-    sealed(&output, layout.frame_bytes)?;
-    source.check()?;
-    check_deadline(deadline)?;
-    // Candidate only. Owner must validate the SAME handle, source and final
-    // rusage/reap within its original grant before any terminal publication.
-    println!(
-        "{}",
-        json!({"schema":"weight-atlas.profile-candidate.v1","revision":revision,
-        "visited_values":profile.visited_values(),"new_values":profile.visited_values()-before,
-        "frame_bytes":layout.frame_bytes,"live_bytes":layout.live_bytes})
-    );
+    sealed(output, frame_bytes)?;
     Ok(())
 }
