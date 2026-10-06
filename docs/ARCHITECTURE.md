@@ -24,6 +24,8 @@ The ordered native rule catalog lives in `src/rules.rs`. Each definition holds i
 
 Slice bindings and descriptors are constructed from typed borrowed records in `src/slice/response.rs`, then converted to the existing JSON value interface. This conversion uses only string, integer and array values and introduces no fallible serialization path. The identity-domain inputs and their ordered JSON derivation stay in `TensorSlice::new`; they are separate from response field construction. Held UTF-8 byte vectors protect both the identities and the serialized public responses.
 
+The native entrypoint in `src/main.rs` keeps help and argument validation ahead of resource configuration and model access. `run_args` selects the startup scope and opens the required source or state; private helpers parse option pairs, initialize custom resources and print metadata. Command dispatch delegates calibration, overview, tile output and benchmarking to separate functions. These stages retain the existing option defaults, validation order, command IDs and output fields.
+
 ## Resource and ownership boundary
 
 Native operations use one CPU, a 768 MiB address-space limit, bounded source bands, bounded output/cache budgets, and memory/disk admission checks. Coordinators preserve their own lower work budgets and stop reserves. A caller never acquires another session's worker; unknown cleanup remains blocking. Only owned children are terminated/reaped. Logging/export requires explicit user actions.
