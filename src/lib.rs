@@ -1,3 +1,4 @@
+pub mod api;
 pub mod comparison;
 pub mod comparison_http;
 pub mod hosted_renderer;

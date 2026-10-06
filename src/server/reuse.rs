@@ -176,7 +176,7 @@ pub(super) fn candidate(
 ) -> bool {
     framing_candidate(raw)
         && method == "GET"
-        && path == "/tile"
+        && path == crate::api::viewer::TILE
         && binding.len() == 64
         && binding
             .bytes()

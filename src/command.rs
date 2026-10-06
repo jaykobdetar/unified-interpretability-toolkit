@@ -173,3 +173,72 @@ mod tests {
         }
     }
 }
+
+/// Legacy unknown-prefix routing remains separate from exact command lookup.
+pub const COMPARISON_PREFIX: &str = "compare-";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Options {
+    pub common: &'static [&'static str],
+    pub specific: &'static [&'static str],
+}
+
+pub mod options {
+    // Common documented arguments stay known even when an early command ignores
+    // them. Existing resource-policy refusal remains separate from key spelling.
+    pub const COMMON: &[&str] = &["model", "cache", "name", "revision", "resources"];
+    pub const PROFILE_REQUIRED: &[&str] = &[
+        "model",
+        "revision",
+        "tensor",
+        "slice",
+        "seed",
+        "values",
+        "wall-ms",
+        "cpu-ms",
+        "binding",
+        "output-fd",
+    ];
+    pub const PROFILE_RESTORE: &[&str] = &["input-fd", "input-sha"];
+}
+
+impl Command {
+    /// Audited option names; ordinary command intake remains permissive here.
+    pub fn options(self) -> Options {
+        use crate::api::parameter::{
+            COL, LEFT, LEVEL, MAPPING, QUANTITY, RIGHT, ROW, SLICE, TENSOR, X, Y,
+        };
+        let specific: &[&str] = match self {
+            Self::Metadata | Self::Verify => &[],
+            Self::Serve => &["port", "verify-sha"],
+            Self::Calibrate => &[TENSOR],
+            Self::Overview => &[TENSOR, SLICE, "rules", "max-values"],
+            Self::Tile => &[TENSOR, SLICE, "rules", LEVEL, X, Y, "out"],
+            Self::Inspect => &[TENSOR, SLICE, ROW, COL, LEFT, RIGHT],
+            Self::Bench => &[TENSOR, "repeats"],
+            Self::CompareMetadata | Self::CompareCalibrate => &["compare-model", TENSOR],
+            Self::CompareServe => &["compare-model", TENSOR, "port"],
+            Self::CompareTile => &[
+                "compare-model",
+                TENSOR,
+                QUANTITY,
+                MAPPING,
+                LEVEL,
+                X,
+                Y,
+                "out",
+            ],
+            Self::CompareInspect => &["compare-model", TENSOR, ROW, COL],
+            Self::HostedRenderer => &["channel-fd"],
+            Self::ProfileWorker => options::PROFILE_RESTORE,
+        };
+        Options {
+            common: if self == Self::ProfileWorker {
+                options::PROFILE_REQUIRED
+            } else {
+                options::COMMON
+            },
+            specific,
+        }
+    }
+}

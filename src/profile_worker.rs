@@ -104,22 +104,12 @@ fn admit_options(
     options: &BTreeMap<String, String>,
     entered: Instant,
 ) -> Result<(Instant, Instant)> {
-    let required = [
-        "model",
-        "revision",
-        "tensor",
-        "slice",
-        "seed",
-        "values",
-        "wall-ms",
-        "cpu-ms",
-        "binding",
-        "output-fd",
-    ];
+    let required = crate::command::options::PROFILE_REQUIRED;
     require(
         required.iter().all(|k| options.contains_key(*k))
             && options.keys().all(|k| {
-                required.contains(&k.as_str()) || ["input-fd", "input-sha"].contains(&k.as_str())
+                required.contains(&k.as_str())
+                    || crate::command::options::PROFILE_RESTORE.contains(&k.as_str())
             }),
         "Unknown or missing worker option",
     )?;

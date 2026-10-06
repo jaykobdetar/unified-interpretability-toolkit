@@ -1,5 +1,6 @@
 //! Dedicated read-only comparison routes on the existing bounded loopback transport.
 use crate::{
+    api,
     comparison::Comparison,
     headroom, require,
     server::{self, Query},
@@ -88,13 +89,13 @@ fn dispatch(
             return;
         }
     };
-    if !q.get("comparison_identity", "").is_empty()
-        && q.get("comparison_identity", "") != state.identity
+    if !q.get(api::parameter::COMPARISON_IDENTITY, "").is_empty()
+        && q.get(api::parameter::COMPARISON_IDENTITY, "") != state.identity
     {
         server::error(socket, 400, "Comparison identity changed; refresh required");
         return;
     }
-    if method == "POST" && path == "/api/comparison/calibrate" {
+    if method == "POST" && path == api::comparison::CALIBRATION {
         reply_calibration(state, sender, socket, &q, &headers);
         return;
     }
@@ -106,7 +107,7 @@ fn dispatch(
         );
         return;
     }
-    if path == "/api/comparison/tile" {
+    if path == api::comparison::TILE {
         enqueue_tile(sender, socket, q);
         return;
     }
@@ -172,20 +173,20 @@ fn enqueue_tile(sender: &SyncSender<Job>, socket: TcpStream, q: Query) {
 
 fn read_api(state: &Comparison, path: &str, q: &Query) -> Option<Result<Value>> {
     match path {
-        "/api/comparison/model" => Some(state.model()),
-        "/api/comparison/view" => Some((|| {
+        api::comparison::MODEL => Some(state.model()),
+        api::comparison::VIEW => Some((|| {
             state.view(
-                q.int("tensor", "0")?,
-                q.get("left", "a"),
-                q.get("right", "b"),
-                q.get("mapping", "linear"),
+                q.int(api::parameter::TENSOR, "0")?,
+                q.get(api::parameter::LEFT, "a"),
+                q.get(api::parameter::RIGHT, "b"),
+                q.get(api::parameter::MAPPING, "linear"),
             )
         })()),
-        "/api/comparison/inspect" => Some((|| {
+        api::comparison::INSPECT => Some((|| {
             state.inspect(
-                q.int("tensor", "0")?,
-                q.int("row", "0")?,
-                q.int("col", "0")?,
+                q.int(api::parameter::TENSOR, "0")?,
+                q.int(api::parameter::ROW, "0")?,
+                q.int(api::parameter::COL, "0")?,
             )
         })()),
         _ => None,

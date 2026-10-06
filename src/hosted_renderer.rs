@@ -1,6 +1,6 @@
 //! Inactive hosted renderer: one inherited Unix channel, no listener or work queue.
 use crate::{
-    require, server,
+    api, require, server,
     slice::{parse_indices, TensorSlice},
     state::State,
     Result,
@@ -34,16 +34,7 @@ struct Command {
 
 fn execute(state: &State, request: &Request) -> Result<(String, Vec<u8>)> {
     state.source.check()?;
-    let allowed: &[&str] = match request.route.as_str() {
-        "model" => &[],
-        "progress" | "tensor-status" => &["tensor"],
-        "binding" => &["tensor", "slice"],
-        "view" => &["tensor", "slice", "left", "right"],
-        "inspect" => &["tensor", "slice", "row", "col", "left", "right"],
-        "tile" => &["tensor", "slice", "rule", "level", "x", "y"],
-        "calibration" => &["tensor"],
-        _ => return Err("Unknown hosted route".into()),
-    };
+    let allowed = api::hosted::parameters(&request.route).ok_or("Unknown hosted route")?;
     require(
         request.query.keys().all(|k| allowed.contains(&k.as_str())),
         "Unknown hosted field",
@@ -56,17 +47,23 @@ fn execute(state: &State, request: &Request) -> Result<(String, Vec<u8>)> {
             .collect::<Vec<_>>(),
     );
     let body = match request.route.as_str() {
-        "model" => state.model()?,
-        "progress" | "tensor-status" => state.status(if request.query.contains_key("tensor") {
-            Some(q.int("tensor", "0")?)
-        } else {
-            None
-        })?,
-        "inspect" => server::inspect(state, &q)?,
-        "binding" | "view" => {
-            let id = q.int("tensor", "0")?;
-            let slice = TensorSlice::new(&state.source, id, &parse_indices(q.get("slice", ""))?)?;
-            if request.route == "binding" {
+        api::hosted::MODEL => state.model()?,
+        api::hosted::PROGRESS | api::hosted::TENSOR_STATUS => {
+            state.status(if request.query.contains_key(api::parameter::TENSOR) {
+                Some(q.int(api::parameter::TENSOR, "0")?)
+            } else {
+                None
+            })?
+        }
+        api::hosted::INSPECT => server::inspect(state, &q)?,
+        api::hosted::BINDING | api::hosted::VIEW => {
+            let id = q.int(api::parameter::TENSOR, "0")?;
+            let slice = TensorSlice::new(
+                &state.source,
+                id,
+                &parse_indices(q.get(api::parameter::SLICE, ""))?,
+            )?;
+            if request.route == api::hosted::BINDING {
                 json!({"api_version":1,"source_binding":state.slice_binding(&slice)})
             } else {
                 let t = state.source.tensor(id)?;
@@ -75,26 +72,26 @@ fn execute(state: &State, request: &Request) -> Result<(String, Vec<u8>)> {
                 selected["slice_identity"] = json!(slice.identity);
                 selected["slice_count"] = json!(slice.tensor.count);
                 json!({"api_version":1,"tensor":selected,"source_binding":state.slice_binding(&slice),
-                    "legends":state.legends(t,q.get("left","global_linear"),q.get("right","global_asinh"))?,
+                    "legends":state.legends(t,q.get(api::parameter::LEFT,"global_linear"),q.get(api::parameter::RIGHT,"global_asinh"))?,
                     "tile_size":256,"overlap":0,"source_values_unchanged":true})
             }
         }
-        "calibration" => {
+        api::hosted::CALIBRATION => {
             require(
-                request.query.contains_key("tensor"),
+                request.query.contains_key(api::parameter::TENSOR),
                 "One explicit tensor required",
             )?;
-            state.calibrate_one(q.int("tensor", "0")?)?;
+            state.calibrate_one(q.int(api::parameter::TENSOR, "0")?)?;
             json!({"api_version":1,"complete":true})
         }
-        "tile" => {
+        api::hosted::TILE => {
             let (png, _, _) = state.tile_slice(
-                q.int("tensor", "0")?,
-                &parse_indices(q.get("slice", ""))?,
-                q.get("rule", "global_linear"),
-                q.int("level", "0")?.try_into()?,
-                q.int("x", "0")?,
-                q.int("y", "0")?,
+                q.int(api::parameter::TENSOR, "0")?,
+                &parse_indices(q.get(api::parameter::SLICE, ""))?,
+                q.get(api::parameter::RULE, "global_linear"),
+                q.int(api::parameter::LEVEL, "0")?.try_into()?,
+                q.int(api::parameter::X, "0")?,
+                q.int(api::parameter::Y, "0")?,
             )?;
             return Ok(("image/png".into(), png));
         }

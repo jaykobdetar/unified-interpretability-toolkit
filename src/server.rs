@@ -2,7 +2,7 @@ mod response;
 mod reuse;
 mod reuse_transport;
 use crate::{
-    headroom, render, require,
+    api, headroom, render, require,
     slice::{parse_indices, TensorSlice},
     source::{exact_decimal_for, Dtype},
     state::State,
@@ -664,7 +664,7 @@ fn dispatch(
         raw,
         &method,
         &path,
-        q.get("binding", ""),
+        q.get(api::parameter::BINDING, ""),
         headers.get("connection").map(String::as_str).unwrap_or(""),
     );
     let Connection {
@@ -672,7 +672,7 @@ fn dispatch(
         lease,
         eligible,
     } = connection;
-    if method == "POST" && path == "/api/calibrate" {
+    if method == "POST" && path == api::viewer::CALIBRATION {
         reply_calibration(state, sender, socket, &q, &headers);
         return;
     }
@@ -684,7 +684,7 @@ fn dispatch(
         );
         return;
     }
-    if path == "/tile" {
+    if path == api::viewer::TILE {
         enqueue_tile(
             sender,
             Connection {
@@ -696,25 +696,25 @@ fn dispatch(
         );
         return;
     }
-    if path == "/api/progress" || path == "/api/tensor-status" {
+    if path == api::viewer::PROGRESS || path == api::viewer::TENSOR_STATUS {
         reply_status(state, socket, &path, &q);
         return;
     }
-    if path == "/api/model" {
+    if path == api::viewer::MODEL {
         match state.model() {
             Ok(v) => json_reply(socket, 200, v),
             Err(e) => error(socket, 400, e),
         }
         return;
     }
-    if path == "/api/inspect" {
+    if path == api::viewer::INSPECT {
         match inspect(state, &q) {
             Ok(v) => json_reply(socket, 200, v),
             Err(e) => error(socket, 400, e),
         }
         return;
     }
-    if path == "/api/view" {
+    if path == api::viewer::VIEW {
         reply_view(state, socket, &q);
         return;
     }
@@ -795,9 +795,14 @@ fn enqueue_tile(sender: &SyncSender<Job>, connection: Connection, q: Query) {
 
 fn reply_status(state: &State, socket: TcpStream, path: &str, q: &Query) {
     let result = (|| -> Result<Value> {
-        let selected = if path == "/api/tensor-status" || !q.get("tensor", "").is_empty() {
-            require(!q.get("tensor", "").is_empty(), "Selected tensor required")?;
-            Some(q.int("tensor", "0")?)
+        let selected = if path == api::viewer::TENSOR_STATUS
+            || !q.get(api::parameter::TENSOR, "").is_empty()
+        {
+            require(
+                !q.get(api::parameter::TENSOR, "").is_empty(),
+                "Selected tensor required",
+            )?;
+            Some(q.int(api::parameter::TENSOR, "0")?)
         } else {
             None
         };

@@ -9,7 +9,7 @@ use std::{
 };
 use weight_atlas_rust::{
     atomic_write,
-    command::{defaults, parse_options, Command, HELP},
+    command::{defaults, parse_options, Command, COMPARISON_PREFIX, HELP},
     configure, configure_standalone, headroom, peak_rss_mib, render, require, server,
     slice::{parse_indices, TensorSlice},
     source::{Dtype, Source},
@@ -40,7 +40,7 @@ fn run_args(
     let command = &args[0];
     let opts = parse_options(&args)?;
     initialize_resources(command, &opts)?;
-    if command == "profile-worker" {
+    if Command::lookup(command) == Some(Command::ProfileWorker) {
         return weight_atlas_rust::profile_worker::run(&opts);
     }
     let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
@@ -49,10 +49,10 @@ fn run_args(
         command,
     ))?;
     let start = Instant::now();
-    if command == "metadata" {
+    if Command::lookup(command) == Some(Command::Metadata) {
         return print_metadata(&model, cpu, start);
     }
-    if command.starts_with("compare-") {
+    if command.starts_with(COMPARISON_PREFIX) {
         return run_comparison(command, &opts, &model, cpu);
     }
     let state = Arc::new(State::open(
@@ -61,7 +61,9 @@ fn run_args(
         opts.get("name").cloned(),
         opts.get("revision").cloned(),
     )?);
-    if command == "serve" && get("verify-sha", defaults::INTAKE_VERIFY_SHA) == "true" {
+    if Command::lookup(command) == Some(Command::Serve)
+        && get("verify-sha", defaults::INTAKE_VERIFY_SHA) == "true"
+    {
         verify_source(&state, cpu, Instant::now())?;
     }
     dispatch_command(command, &opts, state, cpu, start)
