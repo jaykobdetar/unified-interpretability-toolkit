@@ -275,3 +275,59 @@ fn comparison_serve_default_and_override_keep_bind_refusals() {
     let error = TcpListener::bind(selected.local_addr().unwrap()).unwrap_err();
     fixture.refusal("compare-serve", &["--port", &port], &error.to_string());
 }
+
+#[test]
+fn dispatch_catalog_keeps_unknown_comparison_constructor_and_parse_order() {
+    let fixture = Fixture::new();
+    fixture.refusal("compare-unknown", &[], "Unknown comparison command");
+    fixture.refusal(
+        "compare-unknown",
+        &["--tensor", "not-an-index"],
+        "invalid digit found in string",
+    );
+    let cache = fixture.a.to_str().unwrap();
+    fixture.refusal(
+        "compare-unknown",
+        &["--cache", cache, "--tensor", "not-an-index"],
+        "Comparison cache must be outside both source directories",
+    );
+    let mut missing = Command::new(env!("CARGO_BIN_EXE_weight-atlas-rust"));
+    missing
+        .current_dir(&fixture.output)
+        .arg("compare-unknown")
+        .arg("--model")
+        .arg(&fixture.a)
+        .args(["--tensor", "not-an-index"]);
+    assert_refusal(
+        bounded_output(missing),
+        "--compare-model DIRECTORY is required for comparison",
+    );
+}
+
+#[test]
+fn dispatch_catalog_keeps_private_channel_and_case_refusals() {
+    let fixture = Fixture::new();
+    fixture.refusal("hosted-renderer", &[], "Private channel required");
+    fixture.refusal(
+        "hosted-renderer",
+        &["--channel-fd", "not-a-descriptor"],
+        "invalid digit found in string",
+    );
+    fixture.refusal("Inspect", &[], "Unknown command; use --help");
+    fixture.refusal("Compare-inspect", &[], "Unknown command; use --help");
+}
+
+#[test]
+fn dispatch_catalog_keeps_eager_tensor_parse_for_comparison_metadata_and_serve() {
+    let fixture = Fixture::new();
+    fixture.refusal(
+        "compare-metadata",
+        &["--tensor", "not-an-index"],
+        "invalid digit found in string",
+    );
+    fixture.refusal(
+        "compare-serve",
+        &["--tensor", "not-an-index", "--port", "65536"],
+        "invalid digit found in string",
+    );
+}
