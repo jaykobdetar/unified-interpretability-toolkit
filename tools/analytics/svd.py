@@ -12,8 +12,10 @@ import resource
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
+from typing import Any, Literal, TYPE_CHECKING, TypedDict
 
-from .core import checked_values, permutation
+from .core import Unavailable, checked_values, permutation
 from atlas_host.memory import available_bytes as _available_bytes
 from .runtime import configure_svd_worker as _configure_worker
 
@@ -22,9 +24,29 @@ MAX_SVD_VALUES = 4096
 TIMEOUT_SECONDS = 5
 
 
-def compute_with_numpy(np, values, rows, cols, seed):
+class Fit(TypedDict):
+    singular_values: list[float]
+    energy_fractions: list[float | None]
+    rank_one_residual_energy_fraction: float | None
+    rank_one_residual: list[float]
+    zero_energy: bool
+
+
+class Available(TypedDict):
+    available: Literal[True]
+    scope: str
+    region: Mapping[str, int]
+    seed: int
+    control: str
+    centered: bool
+    results: Any
+
+
+def compute_with_numpy(
+    np: Any, values: Sequence[float], rows: int, cols: int, seed: int
+) -> dict[str, Fit]:
     """Called only inside a resource-limited child; separately fits both matrices."""
-    results = {}
+    results: dict[str, Fit] = {}
     order = permutation(len(values), seed)
     for label, data in [("original", values), ("shuffled", [values[i] for i in order])]:
         matrix = np.asarray(data, dtype=np.float64).reshape(rows, cols)
@@ -45,7 +67,13 @@ def compute_with_numpy(np, values, rows, cols, seed):
     return results
 
 
-def run(values, shape, region, seed=1, python=sys.executable):
+def run(
+    values: Sequence[float],
+    shape: Sequence[int],
+    region: Mapping[str, int],
+    seed: int = 1,
+    python: str | os.PathLike[str] = sys.executable,
+) -> Available | Unavailable:
     checked_values(values, shape, region)
     h, w = region["rows"], region["cols"]
     if h > MAX_SVD_AXIS or w > MAX_SVD_AXIS or len(values) > MAX_SVD_VALUES:
@@ -113,7 +141,7 @@ def run(values, shape, region, seed=1, python=sys.executable):
     }
 
 
-def worker():
+def worker() -> None:
     _configure_worker()
     raw = sys.stdin.read(200001)
     if len(raw) > 200000:
@@ -127,7 +155,11 @@ def worker():
     checked_values(
         data["values"], [rows, cols], {"row": 0, "col": 0, "rows": rows, "cols": cols}
     )
-    import numpy as np
+    if TYPE_CHECKING:
+        # The actual optional numerical module remains an opaque external boundary.
+        np: Any
+    else:
+        import numpy as np
 
     print(
         json.dumps(
