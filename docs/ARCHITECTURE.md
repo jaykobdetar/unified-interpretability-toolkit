@@ -20,6 +20,8 @@ Calibration scans complete original tensors. Opening a checkpoint reads headers,
 
 The ordered native rule catalog lives in `src/rules.rs`. Each definition holds its public ID, title, formula, checkpoint or tensor scope, transform, required statistics and supported numeric formats. Metadata, legend controls, pointwise mapping, percentile admission and palette selection consume those typed facts. `render::RULES` and the existing public rendering functions retain their interfaces and serialized metadata. Mapping still transforms each original value before pooling; sliced views use complete original-tensor calibration. Exact percentile ranks remain limited to BF16/F16, with the existing F32 refusal and histogram checks.
 
+Slice bindings and descriptors are constructed from typed borrowed records in `src/slice/response.rs`, then converted to the existing JSON value interface. This conversion uses only string, integer and array values and introduces no fallible serialization path. The identity-domain inputs and their ordered JSON derivation stay in `TensorSlice::new`; they are separate from response field construction. Held UTF-8 byte vectors protect both the identities and the serialized public responses.
+
 ## Resource and ownership boundary
 
 Native operations use one CPU, a 768 MiB address-space limit, bounded source bands, bounded output/cache budgets, and memory/disk admission checks. Coordinators preserve their own lower work budgets and stop reserves. A caller never acquires another session's worker; unknown cleanup remains blocking. Only owned children are terminated/reaped. Logging/export requires explicit user actions.

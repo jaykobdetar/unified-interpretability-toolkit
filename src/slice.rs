@@ -5,6 +5,7 @@ use crate::{
     Result,
 };
 use serde_json::{json, Value};
+mod response;
 
 #[derive(Clone, Debug)]
 pub struct TensorSlice {
@@ -109,16 +110,34 @@ impl TensorSlice {
     }
 
     pub fn binding(&self, model_identity: &str) -> Value {
-        json!({"version":2,"model_identity":model_identity,"source_identity":self.source_identity,
-            "tensor":self.tensor.id,"name":self.tensor.name,"dtype":self.tensor.dtype,"shape":self.native_shape,
-            "rows":self.tensor.rows,"cols":self.tensor.cols,
-            "slice":{"leading_indices":self.leading,"display_axes":if self.native_shape.len()==1 {vec![0]} else {vec![self.native_shape.len()-2,self.native_shape.len()-1]}}})
+        response::Binding {
+            model_identity,
+            source_identity: &self.source_identity,
+            tensor: self.tensor.id,
+            name: &self.tensor.name,
+            dtype: &self.tensor.dtype,
+            shape: &self.native_shape,
+            rows: self.tensor.rows,
+            cols: self.tensor.cols,
+            slice: response::Selection {
+                leading_indices: &self.leading,
+                display_axes: response::display_axes(self.native_shape.len()),
+            },
+        }
+        .into()
     }
 
     pub fn descriptor(&self) -> Value {
-        json!({"version":1,"identity":self.identity,"leading_indices":self.leading,
-            "native_shape":self.native_shape,"display_axes":if self.native_shape.len()==1 {vec![0]} else {vec![self.native_shape.len()-2,self.native_shape.len()-1]},
-            "element_start":self.element_start,"count":self.tensor.count,"byte_offset":self.tensor.byte_offset})
+        response::Descriptor {
+            identity: &self.identity,
+            leading_indices: &self.leading,
+            native_shape: &self.native_shape,
+            display_axes: response::display_axes(self.native_shape.len()),
+            element_start: self.element_start,
+            count: self.tensor.count,
+            byte_offset: self.tensor.byte_offset,
+        }
+        .into()
     }
 }
 
