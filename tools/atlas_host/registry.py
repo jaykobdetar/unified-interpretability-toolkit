@@ -1,5 +1,6 @@
 """Owner-managed installed-file receipts. No network or model loading code."""
 
+from collections.abc import Callable, Iterator
 import fcntl
 import hashlib
 import os
@@ -11,7 +12,9 @@ import time
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
+from os import PathLike
 from pathlib import Path
+from typing import Any, TypedDict, cast
 
 from .common import (
     canonical,
@@ -25,6 +28,24 @@ from .common import (
 )
 from .config import LOCAL_LIMITS
 from .progress import model_id
+
+
+class RegistryEntry(TypedDict):
+    model_id: str
+    content_digest: str
+    name: str
+    root: str
+    manifest: dict[str, Any]
+    fingerprints: dict[str, dict[str, int]]
+    verified_at: str
+    enabled: bool
+
+
+class RegistryData(TypedDict):
+    version: int
+    revision: int
+    models: list[RegistryEntry]
+
 
 MAX_REGISTRY_BYTES = 512 * 1024
 MAX_ENTRIES = 128
@@ -44,7 +65,7 @@ DATA_NAMES = {
 }
 
 
-def validate_manifest(value):
+def validate_manifest(value: dict[str, Any]) -> dict[str, Any]:
     fields(
         value, ("version", "repository", "revision", "license", "provenance", "files")
     )
@@ -82,7 +103,7 @@ def validate_manifest(value):
         type(value["files"]) is list and 1 <= len(value["files"]) <= 80,
         "Invalid file count",
     )
-    names = set()
+    names: set[str] = set()
     shards = 0
     for item in value["files"]:
         fields(item, ("name", "bytes", "sha256"))
@@ -122,7 +143,7 @@ def validate_manifest(value):
     return result
 
 
-def content_digest(manifest):
+def content_digest(manifest: dict[str, Any]) -> str:
     manifest = validate_manifest(manifest)
     # Acceptance and local bookkeeping do not alter the underlying file content.
     return identity(
@@ -140,7 +161,7 @@ def content_digest(manifest):
     )
 
 
-def fingerprint(info):
+def fingerprint(info: os.stat_result) -> dict[str, int]:
     require(stat.S_ISREG(info.st_mode), "Source must be a regular file")
     return {
         "device": info.st_dev,
@@ -152,14 +173,14 @@ def fingerprint(info):
 
 
 def reservation(
-    free_bytes,
+    free_bytes: int,
     *,
-    remaining_download=0,
-    staging=0,
-    cache_growth=0,
-    metadata=65536,
-    reserve=LOCAL_LIMITS["disk_reserve_bytes"],
-):
+    remaining_download: int = 0,
+    staging: int = 0,
+    cache_growth: int = 0,
+    metadata: int = 65536,
+    reserve: int = LOCAL_LIMITS["disk_reserve_bytes"],
+) -> dict[str, int]:
     """Pure planner. Does not acquire space, evict files, or grant a download."""
     values = [remaining_download, staging, cache_growth, metadata]
     for number in [free_bytes, reserve, *values]:
@@ -175,25 +196,31 @@ def reservation(
 
 
 class Registry:
-    def __init__(self, path, *, free_bytes=None, clock=time.monotonic):
+    def __init__(
+        self,
+        path: str | PathLike[str],
+        *,
+        free_bytes: Callable[[Path], int] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self.path = Path(path).resolve()
         self.clock = clock
         self._free_bytes = free_bytes or (lambda path: shutil.disk_usage(path).free)
 
-    def _disk_guard(self, extra):
+    def _disk_guard(self, extra: int) -> dict[str, int]:
         parent = self.path.parent
         while not parent.exists():
             parent = parent.parent
         return reservation(self._free_bytes(parent), metadata=extra)
 
-    def _load(self):
+    def _load(self) -> RegistryData:
         if not self.path.exists():
             return {"version": 1, "revision": 0, "models": []}
         require(
             self.path.is_file() and not self.path.is_symlink(),
             "Registry must be a regular file",
         )
-        data = read_json(self.path, MAX_REGISTRY_BYTES)
+        data: RegistryData = read_json(self.path, MAX_REGISTRY_BYTES)
         fields(data, ("version", "revision", "models"))
         integer(data["version"], 1, 1)
         integer(data["revision"])
@@ -201,7 +228,7 @@ class Registry:
             type(data["models"]) is list and len(data["models"]) <= MAX_ENTRIES,
             "Too many models",
         )
-        identifiers = set()
+        identifiers: set[str] = set()
         for entry in data["models"]:
             fields(
                 entry,
@@ -242,7 +269,7 @@ class Registry:
         return data
 
     @contextmanager
-    def _writer(self):
+    def _writer(self) -> Iterator[None]:
         self._disk_guard(MAX_REGISTRY_BYTES + 65536)
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         lock_path = self.path.with_name(self.path.name + ".lock")
@@ -262,7 +289,7 @@ class Registry:
         finally:
             os.close(fd)
 
-    def _save(self, data):
+    def _save(self, data: RegistryData) -> None:
         raw = canonical(data)
         require(len(raw) <= MAX_REGISTRY_BYTES, "Registry exceeds byte bound")
         self._disk_guard(len(raw) + 65536)
@@ -286,14 +313,14 @@ class Registry:
 
     def register(
         self,
-        root,
-        manifest,
-        name,
+        root: str | PathLike[str],
+        manifest: dict[str, Any],
+        name: str,
         *,
-        max_bytes=1024**2,
-        timeout_ms=1000,
-        publish_disabled=False,
-    ):
+        max_bytes: int = 1024**2,
+        timeout_ms: int = 1000,
+        publish_disabled: bool = False,
+    ) -> dict[str, Any]:
         """Verify already installed files. No renderer/inference readiness claim."""
         manifest = validate_manifest(manifest)
         label(name, 128)
@@ -309,7 +336,7 @@ class Registry:
         )
         end = self.clock() + timeout_ms / 1000
 
-        def checkpoint():
+        def checkpoint() -> None:
             require(self.clock() < end, "Verification time allowance exhausted")
 
         with self._writer():
@@ -324,7 +351,7 @@ class Registry:
                 old is not None or len(data["models"]) < MAX_ENTRIES,
                 "Registry model limit reached",
             )
-            fingerprints = {}
+            fingerprints: dict[str, dict[str, int]] = {}
             for item in manifest["files"]:
                 checkpoint()
                 path = root / item["name"]
@@ -356,7 +383,7 @@ class Registry:
                     )
                     fingerprints[item["name"]] = before
             checkpoint()
-            entry = {
+            entry: RegistryEntry = {
                 "model_id": identifier,
                 "content_digest": content,
                 "name": name,
@@ -394,7 +421,7 @@ class Registry:
             }
 
     @staticmethod
-    def _unchanged(entry):
+    def _unchanged(entry: RegistryEntry) -> bool:
         try:
             return all(
                 fingerprint((Path(entry["root"]) / name).lstat()) == expected
@@ -403,7 +430,7 @@ class Registry:
         except (OSError, ValueError):
             return False
 
-    def set_enabled(self, identifier, enabled):
+    def set_enabled(self, identifier: str, enabled: bool) -> dict[str, Any]:
         model_id(identifier)
         require(type(enabled) is bool, "Enabled must be boolean")
         with self._writer():
@@ -413,6 +440,7 @@ class Registry:
                 None,
             )
             require(entry is not None, "Unknown installed model")
+            entry = cast(RegistryEntry, entry)
             require(
                 not enabled or self._unchanged(entry),
                 "Source changed; reverify before enabling",
@@ -426,9 +454,9 @@ class Registry:
             "registry_revision": data["revision"],
         }
 
-    def catalog(self):
+    def catalog(self) -> dict[str, Any]:
         data = self._load()
-        models = []
+        models: list[dict[str, Any]] = []
         for entry in data["models"]:
             if not entry["enabled"]:
                 continue
@@ -453,7 +481,7 @@ class Registry:
             )
         return {"version": 1, "registry_revision": data["revision"], "models": models}
 
-    def owner_receipt(self, identifier):
+    def owner_receipt(self, identifier: str) -> RegistryEntry:
         """Local owner CLI only; deliberately not a visitor HTTP projection."""
         model_id(identifier)
         entry = next(
@@ -465,4 +493,4 @@ class Registry:
             None,
         )
         require(entry is not None, "Unknown installed model")
-        return deepcopy(entry)
+        return deepcopy(cast(RegistryEntry, entry))
