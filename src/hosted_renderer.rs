@@ -222,3 +222,148 @@ mod diagnostic_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod declaration_vectors {
+    use super::*;
+    use serde_json::Value;
+    use std::{
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+    struct Fixture {
+        state: State,
+        root: PathBuf,
+    }
+    impl Fixture {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let root = std::env::temp_dir().join(format!(
+                "atlas-hosted-declaration-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let model = root.join("model");
+            std::fs::create_dir_all(&model).unwrap();
+            let header = br#"{"weights":{"dtype":"BF16","shape":[1,2],"data_offsets":[0,4]}}"#;
+            let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+            bytes.extend_from_slice(header);
+            bytes.extend_from_slice(&[0x80, 0x3f, 0x80, 0xbf]);
+            std::fs::write(model.join("tiny.safetensors"), bytes).unwrap();
+            let state = State::open(
+                &model,
+                &root.join("cache"),
+                Some("hosted declaration".into()),
+                Some("fixture-v1".into()),
+            )
+            .unwrap();
+            Self { state, root }
+        }
+        fn request(&self, route: &str, query: &[(&str, &str)]) -> Result<(String, Vec<u8>)> {
+            execute(
+                &self.state,
+                &Request {
+                    route: route.into(),
+                    query: query
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                },
+            )
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.root).unwrap();
+        }
+    }
+    #[test]
+    fn every_private_route_keeps_its_existing_direct_contract() {
+        let _isolation = crate::resources::test_workspace_guard();
+        let fixture = Fixture::new();
+        for (route, query) in [
+            ("model", vec![]),
+            ("progress", vec![]),
+            ("tensor-status", vec![("tensor", "0")]),
+            ("binding", vec![("tensor", "0"), ("slice", "")]),
+            ("inspect", vec![("tensor", "0"), ("row", "0"), ("col", "1")]),
+            ("calibration", vec![("tensor", "0")]),
+            (
+                "view",
+                vec![
+                    ("tensor", "0"),
+                    ("slice", ""),
+                    ("left", "tensor_linear"),
+                    ("right", "tensor_asinh"),
+                ],
+            ),
+        ] {
+            let result = fixture.request(route, &query);
+            assert!(
+                result.is_ok(),
+                "hosted declaration route: {route}: {result:?}"
+            );
+            let (mime, bytes) = result.unwrap();
+            assert_eq!(mime, "application/json", "hosted declaration mime: {route}");
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["api_version"], 1, "hosted declaration JSON: {route}");
+            if route == "model" {
+                assert_eq!(
+                    body["name"], "hosted declaration",
+                    "hosted model declaration"
+                );
+            }
+            if route == "binding" {
+                assert_eq!(
+                    body.as_object().unwrap().len(),
+                    2,
+                    "hosted binding declaration"
+                );
+            }
+            if route == "inspect" {
+                assert_eq!(body["raw_exact"], "-1", "hosted inspect declaration");
+            }
+        }
+        let (mime, png) = fixture
+            .request(
+                "tile",
+                &[
+                    ("tensor", "0"),
+                    ("rule", "tensor_linear"),
+                    ("level", "1"),
+                    ("x", "0"),
+                    ("y", "0"),
+                ],
+            )
+            .unwrap();
+        assert_eq!(mime, "image/png", "hosted tile declaration");
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert!(png.len() < 64 * 1024);
+    }
+    #[test]
+    fn private_admission_keeps_exact_unknown_missing_and_parse_order() {
+        let _isolation = crate::resources::test_workspace_guard();
+        let fixture = Fixture::new();
+        for (route, query, message) in [
+            ("Model", vec![], "Unknown hosted route"),
+            ("model", vec![("unexpected", "1")], "Unknown hosted field"),
+            (
+                "binding",
+                vec![("tensor", "bad"), ("unexpected", "1")],
+                "Unknown hosted field",
+            ),
+            ("calibration", vec![], "One explicit tensor required"),
+            (
+                "binding",
+                vec![("tensor", "bad")],
+                "invalid digit found in string",
+            ),
+        ] {
+            assert_eq!(
+                fixture.request(route, &query).unwrap_err().to_string(),
+                message,
+                "hosted declaration refusal: {route}"
+            );
+        }
+    }
+}

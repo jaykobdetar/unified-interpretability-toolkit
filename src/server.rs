@@ -1301,6 +1301,126 @@ mod dispatch_vectors {
             "viewer missing asset body"
         );
     }
+
+    impl Fixture {
+        // One owned socket pair, no listener loop or numeric worker. The closed
+        // receiver holds queue refusals without leaving an enqueued socket open.
+        fn declaration_request(&self, method: &str, path: &str, header: &str) -> (String, Value) {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let address = listener.local_addr().unwrap();
+            let mut client = TcpStream::connect_timeout(&address, Duration::from_secs(3)).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let (socket, _) = listener.accept().unwrap();
+            let (sender, receiver) = sync_channel(1);
+            drop(receiver);
+            let raw = format!("{method} {path} HTTP/1.1\r\nHost: {address}\r\n{header}\r\n");
+            dispatch(
+                &self.state,
+                &sender,
+                Connection {
+                    socket,
+                    lease: None,
+                    eligible: false,
+                },
+                raw.as_bytes(),
+                address.port(),
+            );
+            let mut bytes = Vec::new();
+            client.read_to_end(&mut bytes).unwrap();
+            assert!(bytes.len() < 64 * 1024, "bounded declaration response");
+            let response = String::from_utf8(bytes).unwrap();
+            let (head, body) = response.split_once("\r\n\r\n").unwrap();
+            (
+                head.lines().next().unwrap().into(),
+                serde_json::from_str(body).unwrap(),
+            )
+        }
+    }
+
+    #[test]
+    fn declaration_routes_keep_status_method_and_local_action_refusals() {
+        let _isolation = crate::resources::test_workspace_guard();
+        let fixture = Fixture::new();
+        for (method, path, header, status, message) in [
+            (
+                "GET",
+                "/api/tensor-status",
+                "",
+                "HTTP/1.1 400 Bad Request",
+                "Selected tensor required",
+            ),
+            (
+                "GET",
+                "/api/progress?tensor=bad",
+                "",
+                "HTTP/1.1 400 Bad Request",
+                "invalid digit found in string",
+            ),
+            (
+                "POST",
+                "/api/model",
+                "",
+                "HTTP/1.1 400 Bad Request",
+                "Only GET and local calibration POST are supported",
+            ),
+            (
+                "POST",
+                "/api/calibrate?tensor=0",
+                "",
+                "HTTP/1.1 400 Bad Request",
+                "Local action header required",
+            ),
+            (
+                "POST",
+                "/api/calibrate?tensor=0",
+                "X-Atlas-Local: 1\r\n",
+                "HTTP/1.1 503 Service Unavailable",
+                "Numeric queue full; retry shortly",
+            ),
+            (
+                "GET",
+                "/tile?tensor=0",
+                "",
+                "HTTP/1.1 503 Service Unavailable",
+                "Numeric queue full; retry shortly",
+            ),
+            (
+                "GET",
+                "/api/view?tensor=bad",
+                "",
+                "HTTP/1.1 400 Bad Request",
+                "invalid digit found in string",
+            ),
+        ] {
+            let (observed, body) = fixture.declaration_request(method, path, header);
+            assert_eq!(observed, status, "viewer declaration status: {path}");
+            assert_eq!(
+                body,
+                json!({"api_version":1,"error":message}),
+                "viewer declaration refusal: {path}"
+            );
+        }
+        for path in [
+            "/api/progress",
+            "/api/progress?tensor=0",
+            "/api/tensor-status?tensor=0",
+        ] {
+            let (status, body) = fixture.request(path);
+            assert_eq!(
+                status, "HTTP/1.1 200 OK",
+                "viewer declaration status success: {path}"
+            );
+            assert_eq!(body["api_version"], 1);
+        }
+        let (status, body) = fixture.request("/api/model?retained-extra=value");
+        assert_eq!(
+            status, "HTTP/1.1 200 OK",
+            "viewer existing extra query behavior"
+        );
+        assert_eq!(body["name"], "dispatch fixture");
+    }
 }
 
 #[cfg(test)]

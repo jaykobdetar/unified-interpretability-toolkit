@@ -331,3 +331,15 @@ fn dispatch_catalog_keeps_eager_tensor_parse_for_comparison_metadata_and_serve()
         "invalid digit found in string",
     );
 }
+
+#[test]
+fn root_catalog_keeps_metadata_before_cache_and_private_worker_admission() {
+    let fixture = Fixture::new();
+    let model = fixture.a.to_str().unwrap();
+    let metadata = fixture.success("metadata", &["--cache", model]);
+    assert_eq!(metadata["tensor_count"], 2, "root metadata early route");
+    assert_eq!(metadata["parameter_count"], 16);
+    let mut worker = Command::new(env!("CARGO_BIN_EXE_weight-atlas-rust"));
+    worker.current_dir(&fixture.output).arg("profile-worker");
+    assert_refusal(bounded_output(worker), "Unknown or missing worker option");
+}

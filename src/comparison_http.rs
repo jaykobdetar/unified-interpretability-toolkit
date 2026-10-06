@@ -329,4 +329,105 @@ mod dispatch_vectors {
             "comparison missing asset body"
         );
     }
+
+    impl Fixture {
+        // One owned socket pair, no listener loop or numeric worker. The closed
+        // receiver holds queue refusals without leaving an enqueued socket open.
+        fn declaration_request(&self, method: &str, path: &str, header: &str) -> (String, Value) {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let address = listener.local_addr().unwrap();
+            let mut client = TcpStream::connect_timeout(&address, Duration::from_secs(3)).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let (socket, _) = listener.accept().unwrap();
+            let (sender, receiver) = sync_channel(1);
+            drop(receiver);
+            let raw = format!("{method} {path} HTTP/1.1\r\nHost: {address}\r\n{header}\r\n");
+            dispatch(&self.state, &sender, socket, raw.as_bytes(), address.port());
+            let mut bytes = Vec::new();
+            client.read_to_end(&mut bytes).unwrap();
+            assert!(bytes.len() < 64 * 1024, "bounded declaration response");
+            let response = String::from_utf8(bytes).unwrap();
+            let (head, body) = response.split_once("\r\n\r\n").unwrap();
+            (
+                head.lines().next().unwrap().into(),
+                serde_json::from_str(body).unwrap(),
+            )
+        }
+    }
+
+    #[test]
+    fn declaration_routes_keep_identity_method_and_queue_priority() {
+        let _isolation = crate::resources::test_workspace_guard();
+        let fixture = Fixture::new();
+        for (method, path, header, status, message) in [
+            (
+                "POST",
+                "/api/comparison/model",
+                "",
+                "HTTP/1.1 400 Bad Request",
+                "Only GET and local comparison calibration POST are supported",
+            ),
+            (
+                "POST",
+                "/api/comparison/calibrate?comparison_identity=stale",
+                "",
+                "HTTP/1.1 400 Bad Request",
+                "Comparison identity changed; refresh required",
+            ),
+            (
+                "POST",
+                "/api/comparison/calibrate?tensor=0",
+                "",
+                "HTTP/1.1 400 Bad Request",
+                "Local action header required",
+            ),
+            (
+                "POST",
+                "/api/comparison/calibrate?all=1",
+                "X-Atlas-Local: 1\r\n",
+                "HTTP/1.1 400 Bad Request",
+                "Comparison calibration is explicitly tensor-scoped",
+            ),
+            (
+                "POST",
+                "/api/comparison/calibrate?tensor=0",
+                "X-Atlas-Local: 1\r\n",
+                "HTTP/1.1 503 Service Unavailable",
+                "Numeric queue full; retry shortly",
+            ),
+            (
+                "GET",
+                "/api/comparison/tile?tensor=0",
+                "",
+                "HTTP/1.1 503 Service Unavailable",
+                "Numeric queue full; retry shortly",
+            ),
+            (
+                "GET",
+                "/api/comparison/view?tensor=bad",
+                "",
+                "HTTP/1.1 400 Bad Request",
+                "invalid digit found in string",
+            ),
+        ] {
+            let (observed, body) = fixture.declaration_request(method, path, header);
+            assert_eq!(observed, status, "comparison declaration status: {path}");
+            assert_eq!(
+                body,
+                json!({"api_version":1,"error":message}),
+                "comparison declaration refusal: {path}"
+            );
+        }
+        let (status, body) = fixture.request(&format!(
+            "/api/comparison/model?comparison_identity={}&retained-extra=value",
+            fixture.state.identity
+        ));
+        assert_eq!(
+            status, "HTTP/1.1 200 OK",
+            "comparison existing extra query behavior"
+        );
+        assert_eq!(body["comparison_identity"], fixture.state.identity);
+    }
 }
