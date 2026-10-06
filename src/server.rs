@@ -1133,3 +1133,128 @@ mod query_tests {
         assert_eq!(parse_request(&raw, 8797).unwrap().1, "/api/model");
     }
 }
+
+#[cfg(test)]
+mod dispatch_vectors {
+    //! Tiny direct-dispatch vectors: no listener loop, numeric worker or inference.
+    use super::*;
+    use std::{
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    struct Fixture {
+        state: Arc<State>,
+        root: PathBuf,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let root = std::env::temp_dir().join(format!(
+                "atlas-dispatch-vectors-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let model = root.join("model");
+            std::fs::create_dir_all(&model).unwrap();
+            let header = br#"{"weights":{"dtype":"BF16","shape":[1,2],"data_offsets":[0,4]}}"#;
+            let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+            bytes.extend_from_slice(header);
+            bytes.extend_from_slice(&[0x80, 0x3f, 0x80, 0xbf]);
+            std::fs::write(model.join("tiny.safetensors"), bytes).unwrap();
+            let state = Arc::new(
+                State::open(
+                    &model,
+                    &root.join("cache"),
+                    Some("dispatch fixture".into()),
+                    Some("fixture-v1".into()),
+                )
+                .unwrap(),
+            );
+            Self { state, root }
+        }
+
+        fn request(&self, path: &str) -> (String, Value) {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let address = listener.local_addr().unwrap();
+            let mut client = TcpStream::connect_timeout(&address, Duration::from_secs(3)).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let (socket, _) = listener.accept().unwrap();
+            let (sender, _receiver) = sync_channel(8);
+            let raw = format!("GET {path} HTTP/1.1\r\nHost: {address}\r\n\r\n");
+            dispatch(
+                &self.state,
+                &sender,
+                Connection {
+                    socket,
+                    lease: None,
+                    eligible: false,
+                },
+                raw.as_bytes(),
+                address.port(),
+            );
+            let mut bytes = Vec::new();
+            client.read_to_end(&mut bytes).unwrap();
+            assert!(bytes.len() < 64 * 1024, "tiny dispatch response bound");
+            let response = String::from_utf8(bytes).unwrap();
+            let (head, body) = response.split_once("\r\n\r\n").unwrap();
+            let status = head.lines().next().unwrap().to_owned();
+            (status, serde_json::from_str(body).unwrap())
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.root).unwrap();
+        }
+    }
+
+    #[test]
+    fn model_route_keeps_catalog_status_and_fields() {
+        let _isolation = crate::resources::test_workspace_guard();
+        let fixture = Fixture::new();
+        let (status, body) = fixture.request("/api/model");
+        assert_eq!(status, "HTTP/1.1 200 OK", "viewer model route status");
+        assert_eq!(body["api_version"], 1);
+        assert_eq!(body["name"], "dispatch fixture");
+        assert_eq!(body["revision"], "fixture-v1");
+        assert_eq!(body["parameter_count"], 2);
+        assert_eq!(body["catalog"][0]["name"], "weights");
+        assert_eq!(body["catalog"][0]["dtype"], "BF16");
+        assert_eq!(body["calibration_complete"], false);
+    }
+
+    #[test]
+    fn inspect_route_keeps_selected_native_cell_and_raw_bytes() {
+        let _isolation = crate::resources::test_workspace_guard();
+        let fixture = Fixture::new();
+        let (status, body) = fixture.request("/api/inspect?tensor=0&row=0&col=1");
+        assert_eq!(status, "HTTP/1.1 200 OK", "viewer inspect route status");
+        assert_eq!(body["row"], 0);
+        assert_eq!(body["col"], 1);
+        assert_eq!(body["native_indices"], json!([0, 1]));
+        assert_eq!(body["raw_exact"], "-1");
+        assert_eq!(body["raw_hex_le"], "80bf");
+        assert_eq!(body["classification"], "finite");
+        assert_eq!(body["transforms_ready"], false);
+    }
+
+    #[test]
+    fn unknown_asset_keeps_exact_not_found_response() {
+        let _isolation = crate::resources::test_workspace_guard();
+        let fixture = Fixture::new();
+        let (status, body) = fixture.request("/missing-fixture-asset");
+        assert_eq!(
+            status, "HTTP/1.1 404 Not Found",
+            "viewer missing asset status"
+        );
+        assert_eq!(
+            body,
+            json!({"api_version":1,"error":"Not found"}),
+            "viewer missing asset body"
+        );
+    }
+}
