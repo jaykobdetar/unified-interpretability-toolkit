@@ -57,11 +57,11 @@ fn run_args(
     }
     let state = Arc::new(State::open(
         &model,
-        Path::new(&get("cache", "cache")),
+        Path::new(&get("cache", defaults::INTAKE_CACHE)),
         opts.get("name").cloned(),
         opts.get("revision").cloned(),
     )?);
-    if command == "serve" && get("verify-sha", "false") == "true" {
+    if command == "serve" && get("verify-sha", defaults::INTAKE_VERIFY_SHA) == "true" {
         verify_source(&state, cpu, Instant::now())?;
     }
     dispatch_command(command, &opts, state, cpu, start)
@@ -76,7 +76,7 @@ fn dispatch_command(
 ) -> Result<()> {
     let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
     match command {
-        "serve" => server::serve(state, get("port", "8775").parse()?)?,
+        "serve" => server::serve(state, get("port", defaults::SERVE_PORT).parse()?)?,
         "hosted-renderer" => weight_atlas_rust::hosted_renderer::run(
             state,
             opts.get("channel-fd")
@@ -367,9 +367,9 @@ fn run_comparison(
     let pair = Arc::new(Comparison::open(
         model,
         &b,
-        Path::new(&get("cache", "cache-comparison")),
+        Path::new(&get("cache", defaults::COMPARISON_CACHE)),
     )?);
-    let id = get("tensor", "0").parse()?;
+    let id = get("tensor", defaults::COMPARISON_TENSOR).parse()?;
     let output = match command {
         "compare-metadata" => pair.model()?,
         "compare-calibrate" => {
@@ -380,15 +380,17 @@ fn run_comparison(
             pair.calibrate_one(id)?;
             pair.model()?
         }
-        "compare-inspect" => {
-            pair.inspect(id, get("row", "0").parse()?, get("col", "0").parse()?)?
-        }
+        "compare-inspect" => pair.inspect(
+            id,
+            get("row", defaults::COMPARISON_ROW).parse()?,
+            get("col", defaults::COMPARISON_COL).parse()?,
+        )?,
         "compare-tile" => {
-            let quantity = get("quantity", "delta");
-            let mapping = get("mapping", "linear");
+            let quantity = get("quantity", defaults::COMPARISON_QUANTITY);
+            let mapping = get("mapping", defaults::COMPARISON_MAPPING);
             let level = get("level", &pair.pair(id)?.max_level.to_string()).parse()?;
-            let x = get("x", "0").parse()?;
-            let y = get("y", "0").parse()?;
+            let x = get("x", defaults::COMPARISON_X).parse()?;
+            let y = get("y", defaults::COMPARISON_Y).parse()?;
             let prefix =
                 pair.output_prefix(Path::new(opts.get("out").ok_or("--out PREFIX required")?))?;
             let (field, metrics) = pair.fields(id, &quantity, &mapping, level, x, y)?;
@@ -422,7 +424,7 @@ fn run_comparison(
             result
         }
         "compare-serve" => {
-            comparison_http::serve(pair, get("port", "8776").parse()?)?;
+            comparison_http::serve(pair, get("port", defaults::COMPARISON_PORT).parse()?)?;
             return Ok(());
         }
         _ => return Err("Unknown comparison command".into()),

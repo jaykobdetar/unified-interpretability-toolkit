@@ -9,12 +9,15 @@ macro_rules! native_commands {
         public: [$first:ident => $first_id:literal $(, $rest:ident => $rest_id:literal)* $(,)?],
         comparison: [$compare_first:ident => $compare_first_id:literal $(, $compare_rest:ident => $compare_rest_id:literal)* $(,)?],
         private: [$($private:ident => $private_id:literal),+ $(,)?],
+        intake: { cache: $intake_cache:literal, verify_sha: $intake_verify_sha:literal },
+        serve: { port: $serve_port:literal },
+        comparison_defaults: { cache: $comparison_cache:literal, tensor: $comparison_tensor:literal, row: $comparison_row:literal, col: $comparison_col:literal, quantity: $comparison_quantity:literal, mapping: $comparison_mapping:literal, x: $comparison_x:literal, y: $comparison_y:literal, port: $comparison_port:literal },
         rendering: {
             overview: { slice: $overview_slice:literal, rules: $overview_rules:literal, max_values: $overview_max:literal },
             tile: { tensor: $tile_tensor:literal, slice: $tile_slice:literal, rules: $tile_rules:literal, x: $tile_x:literal, y: $tile_y:literal, out: $tile_out:literal },
             bench: { tensor: $bench_tensor:literal, repeats: $bench_repeats:literal }
         },
-        help_parts: [$help0:literal, $help1:literal, $help2:literal, $help3:literal, $help4:literal] $(,)?
+        help_parts: [$help0:literal, $help1:literal, $help2:literal, $help3:literal, $help4:literal, $help5:literal, $help6:literal, $help7:literal] $(,)?
     ) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub enum Command {
@@ -46,6 +49,18 @@ macro_rules! native_commands {
 
         /// Command-specific fallback facts; they do not insert or validate options.
         pub mod defaults {
+            pub const INTAKE_CACHE: &str = $intake_cache;
+            pub const INTAKE_VERIFY_SHA: &str = $intake_verify_sha;
+            pub const SERVE_PORT: &str = $serve_port;
+            pub const COMPARISON_CACHE: &str = $comparison_cache;
+            pub const COMPARISON_TENSOR: &str = $comparison_tensor;
+            pub const COMPARISON_ROW: &str = $comparison_row;
+            pub const COMPARISON_COL: &str = $comparison_col;
+            pub const COMPARISON_QUANTITY: &str = $comparison_quantity;
+            pub const COMPARISON_MAPPING: &str = $comparison_mapping;
+            pub const COMPARISON_X: &str = $comparison_x;
+            pub const COMPARISON_Y: &str = $comparison_y;
+            pub const COMPARISON_PORT: &str = $comparison_port;
             pub const OVERVIEW_SLICE: &str = $overview_slice;
             pub const OVERVIEW_RULES: &str = $overview_rules;
             pub const OVERVIEW_MAX_VALUES: &str = $overview_max;
@@ -64,8 +79,9 @@ macro_rules! native_commands {
             $first_id, $(" | ", $rest_id,)*
             "\nComparison: ",
             $compare_first_id, $(" | ", $compare_rest_id,)*
-            $help0, $overview_rules, $help1, $overview_max,
-            $help2, $tile_rules, $help3, $bench_repeats, $help4
+            $help0, $intake_cache, $help1, $serve_port, $help2,
+            $intake_verify_sha, $help3, $overview_rules, $help4,
+            $overview_max, $help5, $tile_rules, $help6, $bench_repeats, $help7
         );
     };
 }
@@ -92,13 +108,19 @@ native_commands! {
         HostedRenderer => "hosted-renderer",
         ProfileWorker => "profile-worker",
     ],
+    intake: { cache: "cache", verify_sha: "false" },
+    serve: { port: "8775" },
+    comparison_defaults: { cache: "cache-comparison", tensor: "0", row: "0", col: "0", quantity: "delta", mapping: "linear", x: "0", y: "0", port: "8776" },
     rendering: {
         overview: { slice: "", rules: "tensor_linear,tensor_asinh", max_values: "16777216" },
         tile: { tensor: "0", slice: "", rules: "global_linear,global_asinh", x: "0", y: "0", out: "tile" },
         bench: { tensor: "0", repeats: "3" }
     },
     help_parts: [
-        "; explicit --model A --compare-model B; --cache outside both\nComparison tile: --tensor ID --quantity a|b|delta|abs_delta --mapping linear|asinh|magnitude --out PREFIX; compare-calibrate requires --tensor ID\nRequired: --model DIRECTORY\nCommon: --cache DIRECTORY (default ./cache) --name NAME --revision REVISION\nserve: --port 8775 --verify-sha false; true hashes all bytes before listening; no remote binding\ncalibrate: --tensor ID (omit for all); resumes valid calibration\nverify: full SHA-256 reads, compares local model-api.json if present\noverview: --tensor ID --slice INDICES --rules ",
+        "; explicit --model A --compare-model B; --cache outside both\nComparison tile: --tensor ID --quantity a|b|delta|abs_delta --mapping linear|asinh|magnitude --out PREFIX; compare-calibrate requires --tensor ID\nRequired: --model DIRECTORY\nCommon: --cache DIRECTORY (default ./",
+        ") --name NAME --revision REVISION\nserve: --port ",
+        " --verify-sha ",
+        "; true hashes all bytes before listening; no remote binding\ncalibrate: --tensor ID (omit for all); resumes valid calibration\nverify: full SHA-256 reads, compares local model-api.json if present\noverview: --tensor ID --slice INDICES --rules ",
         " --max-values ",
         "; explicit bounded coarse preparation\ntile: --tensor ID --rules ",
         " --level L --x X --y Y --out PREFIX\ninspect: --tensor ID --row R --col C\nbench: --tensor ID --repeats ",
