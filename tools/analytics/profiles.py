@@ -1,9 +1,12 @@
 """Locally reviewed, exact-digest layout profiles. No model execution/imports."""
 
 import importlib.util
+from collections.abc import Callable, Mapping
+from os import PathLike
 from pathlib import Path
+from typing import Any, Protocol, TypeAlias, TypedDict, cast
 
-from .source import read_layout_evidence
+from .source import LayoutEvidence, read_layout_evidence
 
 LAYOUT = "separate-contiguous-linear-out-in-v1"
 LINEAR_SHA = "fa22acbb48e41bff3be26779c2f242b15663b8157e54f0d55987721add97d16f"
@@ -23,7 +26,27 @@ PROFILES = {
 }
 
 
-def resolve_local(model_root):
+_OriginPath: TypeAlias = Callable[[str | None], Path]
+
+
+class ProfileOptions(TypedDict, total=False):
+    config: Mapping[str, Any]
+    evidence: LayoutEvidence
+    reviewed_profiles: dict[tuple[str, str], str]
+
+
+class _EvidenceUpdate(Protocol):
+    def update(
+        self,
+        *,
+        model: str,
+        revision: str,
+        linear_implementation_sha256: str,
+        implementation_package: str,
+    ) -> None: ...
+
+
+def resolve_local(model_root: str | PathLike[str]) -> tuple[ProfileOptions, str | None]:
     """Return analyze() options only if exact reviewed local evidence still matches."""
     try:
         # read_layout_evidence checks file types, bounds and before/after identity.
@@ -39,7 +62,7 @@ def resolve_local(model_root):
         if not transformers or not torch:
             return {}, "Reviewed installed implementation source unavailable"
         implementation = (
-            Path(transformers.origin).parent
+            cast(_OriginPath, Path)(transformers.origin).parent
             / "models"
             / profile["model_type"]
             / f"modeling_{profile['model_type']}.py"
@@ -50,14 +73,14 @@ def resolve_local(model_root):
             or evidence["implementation_sha256"] != profile["implementation"]
         ):
             return {}, "Configuration or official implementation digest changed"
-        linear = Path(torch.origin).parent / "nn/modules/linear.py"
+        linear = cast(_OriginPath, Path)(torch.origin).parent / "nn/modules/linear.py"
         _, linear_evidence = read_layout_evidence(config_path, linear)
         if (
             linear_evidence["implementation_sha256"] != LINEAR_SHA
             or linear_evidence["config_sha256"] != probe["config_sha256"]
         ):
             return {}, "PyTorch Linear layout evidence changed"
-        evidence.update(
+        cast(_EvidenceUpdate, evidence).update(
             model=profile["model"],
             revision=profile["revision"],
             linear_implementation_sha256=LINEAR_SHA,
