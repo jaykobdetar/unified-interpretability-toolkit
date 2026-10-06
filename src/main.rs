@@ -554,3 +554,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/native_command_definition.rs"]
+mod native_command_definition_tests;
