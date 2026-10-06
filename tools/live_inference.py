@@ -53,7 +53,7 @@ from inference_architecture import architecture
 from atlas_host.inference_geometry import (
     head_layout_descriptor as bound_head_layout_descriptor,
 )
-from inference_services import InferenceContracts
+from atlas_host.inference_services import InferenceContracts
 
 MANIFEST = json.loads((ROOT / "docs/models/smollm2-135m.json").read_text())
 GIB = 1024**3

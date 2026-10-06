@@ -52,7 +52,7 @@ from atlas_host.inference_comparison import (
 )
 from atlas_host.inference_experiments import Context, Record, Request, execute
 from inference_architecture import architecture
-from inference_services import InferenceContracts
+from atlas_host.inference_services import InferenceContracts
 
 
 def emit(record):
