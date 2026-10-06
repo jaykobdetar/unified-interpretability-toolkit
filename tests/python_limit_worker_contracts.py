@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 import inference_worker as worker
 import inference_sweep as sweep
+import inference_edits as edits
 import live_inference as live
 import prompt_pair_contracts
 import review_limit_contracts
@@ -358,6 +359,143 @@ class WorkerLimits(unittest.TestCase):
             stream.readline.assert_called_once_with(8193)
             self.assertEqual(events[0]["type"], "preview_done")
             self.assertFalse(events[0]["preview"]["model_loaded"])
+
+    def test_worker_loaded_dispatch_preserves_execution_arguments(self) -> None:
+        plain = {
+            "prompt": "fixture",
+            "max_new_tokens": 2,
+            "layer": 7,
+            "activation_site": "attention",
+            "observation": {"kind": "attention", "head": 2},
+        }
+        sweep_request, sweep_plan = sweep_contracts.admitted()
+        pair_request = prompt_pair_contracts.request()
+        cases = [
+            (plain, "generation"),
+            ({**plain, "mode": "future-mode"}, "generation"),
+            ({**plain, "mode": []}, "generation"),
+            ({**plain, "mode": {}}, "generation"),
+            ({**plain, "mode": "future-mode", "edits": []}, "comparison"),
+            (pair_request, "prompt_pair"),
+            (sweep_request, "sweep"),
+        ]
+        torch = SimpleNamespace(__version__="fixture-torch")
+        tokenizer = object()
+        model = SimpleNamespace(
+            _atlas_verified_layout={"sentinel": "layout"},
+            config=SimpleNamespace(_attn_implementation="eager"),
+        )
+        for data, kind in cases:
+            calls = {
+                name: Mock()
+                for name in ("generation", "comparison", "prompt_pair", "sweep")
+            }
+            events: list[dict[str, object]] = []
+            record = Mock(side_effect=events.append)
+            preview_tokenizer = (
+                prompt_pair_contracts.Tokenizer()
+                if kind == "prompt_pair"
+                else SimpleNamespace(encode=lambda *_a, **_k: SimpleNamespace(ids=[1]))
+            )
+            arguments = ["worker", "/unused"] + (
+                ["120", "90"] if kind == "sweep" else []
+            )
+            with (
+                self.subTest(kind=kind, mode=data.get("mode")),
+                patch.object(worker.sys, "argv", arguments),
+                patch.object(
+                    worker.sys,
+                    "stdin",
+                    SimpleNamespace(buffer=io.BytesIO(json.dumps(data).encode())),
+                ),
+                patch.object(worker.os, "sched_getaffinity", return_value={0}),
+                patch.object(worker.os, "sched_setaffinity"),
+                patch.object(worker.os, "nice"),
+                patch.object(worker, "configure_worker_limits"),
+                patch.object(worker.time, "monotonic", return_value=0),
+                patch.object(
+                    live.SweepAdmissionBudget,
+                    "verification",
+                    return_value=nullcontext(),
+                ),
+                patch.object(live, "verify_model"),
+                patch.object(
+                    worker, "load_engine", return_value=(torch, tokenizer, model)
+                ) as load,
+                patch.object(worker, "emit", record),
+                patch.object(worker, "generate", calls["generation"]),
+                patch.object(worker, "compare", calls["comparison"]),
+                patch.object(prompt_pair_contracts.pair, "run", calls["prompt_pair"]),
+                patch.object(sweep, "run", calls["sweep"]),
+                patch.object(edits, "verified_parameters") as verify_parameters,
+                patch.dict(
+                    sys.modules,
+                    {
+                        "transformers": SimpleNamespace(
+                            __version__="fixture-transformers"
+                        ),
+                        "tokenizers": SimpleNamespace(
+                            __version__="fixture-tokenizers",
+                            Tokenizer=SimpleNamespace(
+                                from_file=lambda _path: preview_tokenizer
+                            ),
+                        ),
+                        "safetensors": SimpleNamespace(
+                            __version__="fixture-safetensors"
+                        ),
+                    },
+                ),
+            ):
+                worker.main()
+            load.assert_called_once_with(Path("/unused"))
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["type"], "loaded")
+            self.assertEqual(
+                events[0]["runtime"]["sampling"],
+                "none" if kind in ("prompt_pair", "sweep") else "greedy",
+            )
+            self.assertEqual(sum(call.call_count for call in calls.values()), 1)
+            if kind == "generation":
+                calls[kind].assert_called_once_with(
+                    torch,
+                    tokenizer,
+                    model,
+                    "fixture",
+                    2,
+                    7,
+                    activation_site="attention",
+                    observation={"kind": "attention", "head": 2},
+                )
+            elif kind == "comparison":
+                calls[kind].assert_called_once_with(torch, tokenizer, model, data)
+            elif kind == "prompt_pair":
+                verify_parameters.assert_called_once_with(model)
+                preview = prompt_pair_contracts.pair.token_preview(
+                    prompt_pair_contracts.Tokenizer(), data["prompts"]
+                )
+                calls[kind].assert_called_once_with(
+                    torch,
+                    tokenizer,
+                    model,
+                    data,
+                    preview,
+                    worker.CAPTURE_SITES,
+                    record,
+                )
+            else:
+                calls[kind].assert_called_once_with(
+                    torch,
+                    tokenizer,
+                    model,
+                    data,
+                    sweep_plan,
+                    120.0,
+                    calls["generation"],
+                    record,
+                    cpu_deadline=90,
+                )
+            if kind != "prompt_pair":
+                verify_parameters.assert_not_called()
 
     def test_coordinator_trace_cap_and_bounded_drain(self):
         fixture = review_limit_contracts.ReviewLimits(methodName="runTest")
