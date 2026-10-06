@@ -1302,3 +1302,7 @@ mod dispatch_vectors {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/native_error_boundary.rs"]
+mod error_boundary_vectors;
