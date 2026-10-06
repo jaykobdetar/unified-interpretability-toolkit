@@ -36,6 +36,8 @@ Slice bindings and descriptors are constructed from typed borrowed records in `s
 
 Native scalar inspection builds a typed record in `src/server/response.rs` at that same JSON boundary. It retains every field, including the nullable BF16 byte spelling, exact original decimal, native indices, source binding and separate transform values/errors/readiness. The conversion introduces no fallible serialization step. Request/source validation, original-byte reads, rule admission, calibration checks and classification remain in `server::inspect` before response construction; fixed response witnesses cover finite and nonfinite values, selected planes and ready/unready transforms.
 
+Small viewer readiness responses use typed selected-tensor, coverage and status records in `src/state/response.rs`. They convert directly to the existing JSON value shape, including null statistics, exact rule-status text and the redacted calibration error. `State::status` retains source validation, calibration/progress/tile-cache acquisition order and the 16 KiB response check. Selected-tensor conversion still occurs before tile-cache acquisition; identity derivation and all readiness/count calculations remain at their existing caller.
+
 The native entrypoint in `src/main.rs` keeps help and argument validation ahead of resource configuration and model access. `run_args` selects the startup scope and opens the required source or state; private helpers parse option pairs, initialize custom resources and print metadata. Command dispatch delegates calibration, overview, tile output and benchmarking to separate functions. These stages retain the existing option defaults, validation order, command IDs and output fields.
 
 ## Resource and ownership boundary

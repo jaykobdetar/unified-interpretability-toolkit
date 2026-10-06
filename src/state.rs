@@ -1,3 +1,4 @@
+mod response;
 use crate::{
     atomic_write, disk_guard,
     render::{self, Stats, RULES},
@@ -562,21 +563,28 @@ impl State {
         let tensor = if let Some(id) = selected {
             let t = self.source.tensor(id)?;
             let s = c.tensors.get(&id);
-            json!({"id":id,"calibration_complete":s.is_some(),
-            "max_abs":s.map(|s|s.max_abs),"median_nonzero_abs":s.map(|s|s.median_nonzero_abs),
-            "q99":s.map(|s|s.q99),"robust_clipped_count":s.map(|s|s.robust_clipped_count),
-            "exact_zero_count":s.map(|s|s.exact_zero_count),
-            "unique_bit_patterns":s.and_then(|s|s.unique_bit_patterns),
-            "calibration_method":s.map(|s|s.calibration_method.as_str()),
-            "rule_status":{"tensor_signed_percentile":if !t.available {
-                "unavailable: numeric tensor viewing unsupported"
-            } else if t.dtype=="F32" {
-                "unsupported: exact F32 absolute-value rank index pending"
-            } else if s.is_none() {"calibration pending"} else {
-                "supported dtype; requires a valid exact histogram"
-            }}})
+            Some(Value::from(response::TensorStatus {
+                id,
+                calibration_complete: s.is_some(),
+                max_abs: s.map(|s| s.max_abs),
+                median_nonzero_abs: s.map(|s| s.median_nonzero_abs),
+                q99: s.map(|s| s.q99),
+                robust_clipped_count: s.map(|s| s.robust_clipped_count),
+                exact_zero_count: s.map(|s| s.exact_zero_count),
+                unique_bit_patterns: s.and_then(|s| s.unique_bit_patterns),
+                calibration_method: s.map(|s| s.calibration_method.as_str()),
+                signed_percentile_status: if !t.available {
+                    "unavailable: numeric tensor viewing unsupported"
+                } else if t.dtype == "F32" {
+                    "unsupported: exact F32 absolute-value rank index pending"
+                } else if s.is_none() {
+                    "calibration pending"
+                } else {
+                    "supported dtype; requires a valid exact histogram"
+                },
+            }))
         } else {
-            Value::Null
+            None
         };
         let supported = self.source.tensors.iter().filter(|t| t.available).count();
         let unsupported = self.source.tensors.len() - supported;
@@ -588,20 +596,27 @@ impl State {
                 .filter(|t| t.available)
                 .all(|t| c.tensors.contains_key(&t.id));
         let tiles = self.cache.lock().unwrap();
-        let mut result = json!({"api_version":1,"model_status_version":1,
-            "source_identity":self.source.identity,"model_identity":self.model_identity(),
-            "global_max":global,"calibration_complete":global.is_some(),
-            "coverage":{"statistics_complete":global.is_some(),
-                "values_streamed":c.tensors.values().map(|s|s.count).sum::<usize>(),
-                "calibrated_tensors":c.tensors.len(),"active_tensor":p.active,
-                "all_requested":p.all_requested,
-                "calibration_error":p.error.as_ref().map(|_|"calibration_failed"),
-                "materialized_tiles":tiles.entries.len(),"materialized_bytes":tiles.bytes},
-            "tensor_status":tensor});
-        result["global_calibration_supported"] = json!(unsupported == 0);
-        result["supported_calibration_complete"] = json!(supported_complete);
-        result["coverage"]["supported_tensors"] = json!(supported);
-        result["coverage"]["unavailable_tensors"] = json!(unsupported);
+        let result = Value::from(response::Status {
+            source_identity: &self.source.identity,
+            model_identity: self.model_identity(),
+            global_max: global,
+            calibration_complete: global.is_some(),
+            coverage: response::Coverage {
+                statistics_complete: global.is_some(),
+                values_streamed: c.tensors.values().map(|s| s.count).sum::<usize>(),
+                calibrated_tensors: c.tensors.len(),
+                active_tensor: p.active,
+                all_requested: p.all_requested,
+                calibration_error: p.error.as_ref().map(|_| "calibration_failed"),
+                materialized_tiles: tiles.entries.len(),
+                materialized_bytes: tiles.bytes,
+                supported_tensors: supported,
+                unavailable_tensors: unsupported,
+            },
+            tensor_status: tensor,
+            global_calibration_supported: unsupported == 0,
+            supported_calibration_complete: supported_complete,
+        });
         require(
             serde_json::to_vec(&result)?.len() <= 16384,
             "Status exceeds 16 KiB",
