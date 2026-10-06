@@ -15,7 +15,7 @@ import struct
 
 from .common import canonical, digest, fields, identity, integer, require
 from .registry import fingerprint
-from inference_model_descriptor import MAX_CONFIG_BYTES, pinned_descriptor
+from .inference_model_descriptor import MAX_CONFIG_BYTES, pinned_descriptor
 
 MAX_HEADER_BYTES = 2 * 1024**2
 MAX_ACTIVATION_METADATA = 8 * 1024**2
