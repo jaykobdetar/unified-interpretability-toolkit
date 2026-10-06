@@ -3,6 +3,9 @@
 from dataclasses import replace
 from typing import Any
 from inference_architecture import architecture
+from inference_geometry import Architecture
+import inference_edits as edit_facade
+import inference_edit_contract as edit_contract
 from inference_pair_contract import PairBindings
 import inference_pair_contract as contract
 
@@ -25,32 +28,48 @@ MODES = ("prompt_pair_preview", "prompt_pair")
 SHA256_HEX_LENGTH = 64
 
 
-def _bindings() -> PairBindings:
+def _bindings(value: Architecture | None = None) -> PairBindings:
     """Retain legacy values and late helper lookup at compatibility entrypoints."""
+    explicit = value is not None
 
     def validate(values: Any, source: Any) -> list[dict[str, Any]]:
-        return validate_edits(values, source)
+        if not explicit:
+            return validate_edits(values, source)
+        return edit_contract.validate_edits(
+            values, source, edit_facade._bindings(binding.architecture)
+        )
 
     def digest(prompts: Any, ids: Any) -> str:
-        return digest_for(prompts, ids)
+        if not explicit:
+            return digest_for(prompts, ids)
+        return contract.digest_for(prompts, ids, bindings=binding)
 
     def preview(value: Any) -> None:
-        validate_preview(value)
+        if not explicit:
+            validate_preview(value)
+            return
+        contract.validate_preview(value, bindings=binding)
 
     def delta(a: Any, b: Any) -> tuple[list[Any], dict[str, Any]]:
-        return difference(a, b)
+        if not explicit:
+            return difference(a, b)
+        return contract.difference(a, b, bindings=binding)
 
-    return PairBindings(
-        architecture=replace(
-            architecture(),
-            description=ARCH,
-            width=WIDTH,
-            layers=LAYERS,
-            query_heads=HEADS,
-            kv_heads=KV_HEADS,
-            head_dim=HEAD_DIM,
-            vocab_size=VOCAB,
-            capture_sites=CAPTURE_SITES,
+    binding = PairBindings(
+        architecture=(
+            replace(
+                architecture(),
+                description=ARCH,
+                width=WIDTH,
+                layers=LAYERS,
+                query_heads=HEADS,
+                kv_heads=KV_HEADS,
+                head_dim=HEAD_DIM,
+                vocab_size=VOCAB,
+                capture_sites=CAPTURE_SITES,
+            )
+            if value is None
+            else value
         ),
         source_model=SOURCE_MODEL,
         sha256_hex_length=SHA256_HEX_LENGTH,
@@ -59,6 +78,7 @@ def _bindings() -> PairBindings:
         validate_preview=preview,
         difference=delta,
     )
+    return binding
 
 
 def validate_request(data: dict[str, Any]) -> dict[str, Any]:

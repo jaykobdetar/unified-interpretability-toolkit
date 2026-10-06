@@ -3,6 +3,9 @@
 from dataclasses import replace
 from typing import Any
 from inference_architecture import architecture
+from inference_geometry import Architecture
+import inference_edits as edit_facade
+import inference_edit_contract as edit_contract
 from inference_sweep_contract import SweepBindings
 import inference_sweep_contract as contract
 
@@ -39,8 +42,9 @@ CONTROL_VERSION = "weight-atlas-sweep-control-v2"
 MAX_TRACE = 32
 
 
-def _bindings() -> SweepBindings:
+def _bindings(value: Architecture | None = None) -> SweepBindings:
     """Retain legacy data/limits and helper lookup without changing runtime work."""
+    explicit = value is not None
 
     def integer(value: Any, low: int, high: int) -> bool:
         return _int(value, low, high)
@@ -49,10 +53,14 @@ def _bindings() -> SweepBindings:
         return _canonical(value)
 
     def target(value: Any) -> dict[str, Any]:
-        return _target(value)
+        if not explicit:
+            return _target(value)
+        return contract._target(value, bindings=binding)
 
     def rows(value: dict[str, Any]) -> set[int]:
-        return _rows(value)
+        if not explicit:
+            return _rows(value)
+        return contract._rows(value, bindings=binding)
 
     def space(value: dict[str, Any]) -> tuple[Any, str]:
         return _space(value)
@@ -60,7 +68,9 @@ def _bindings() -> SweepBindings:
     def edits(
         value: dict[str, Any], operation: Any, scale: Any
     ) -> list[dict[str, Any]]:
-        return _edits(value, operation, scale)
+        if not explicit:
+            return _edits(value, operation, scale)
+        return contract._edits(value, operation, scale, bindings=binding)
 
     def choice(
         pool: list[dict[str, Any]], seed: Any, value: dict[str, Any], index: int
@@ -68,24 +78,34 @@ def _bindings() -> SweepBindings:
         return _choice(pool, seed, value, index)
 
     def limits() -> dict[str, Any]:
-        return schema()
+        if not explicit:
+            return schema()
+        return contract.schema(bindings=binding)
 
     def validate(values: Any, source: Any) -> list[dict[str, Any]]:
-        return validate_edits(values, source)
+        if not explicit:
+            return validate_edits(values, source)
+        return edit_contract.validate_edits(
+            values, source, edit_facade._bindings(binding.architecture)
+        )
 
     def ids(plan: dict[str, Any]) -> list[str]:
         return record_ids(plan)
 
-    return SweepBindings(
-        architecture=replace(
-            architecture(),
-            description=ARCH,
-            width=WIDTH,
-            layers=LAYERS,
-            query_heads=HEADS,
-            head_dim=HEAD_DIM,
-            vocab_size=VOCAB,
-            capture_sites=CAPTURE_SITES,
+    binding = SweepBindings(
+        architecture=(
+            replace(
+                architecture(),
+                description=ARCH,
+                width=WIDTH,
+                layers=LAYERS,
+                query_heads=HEADS,
+                head_dim=HEAD_DIM,
+                vocab_size=VOCAB,
+                capture_sites=CAPTURE_SITES,
+            )
+            if value is None
+            else value
         ),
         source_model=SOURCE_MODEL,
         shapes=SHAPES,
@@ -109,6 +129,7 @@ def _bindings() -> SweepBindings:
         validate_edits=validate,
         record_ids=ids,
     )
+    return binding
 
 
 def schema() -> dict[str, Any]:

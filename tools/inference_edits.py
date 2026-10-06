@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from inference_architecture import architecture
+from inference_geometry import Architecture
 from inference_edit_contract import EditBindings
 import inference_edit_contract as contract
 
@@ -25,22 +26,31 @@ SHAPES = shapes()
 ALIASES = {"model.embed_tokens.weight": ["lm_head.weight"]}
 
 
-def _bindings() -> EditBindings:
+def _bindings(value: Architecture | None = None) -> EditBindings:
     """Capture compatibility data; preserve late callback lookup at invocation."""
+    explicit = value is not None
 
     def validate(values: Any, source: Any) -> list[dict[str, Any]]:
-        return validate_edits(values, source)
+        if not explicit:
+            return validate_edits(values, source)
+        return contract.validate_edits(values, source, binding)
 
     def parameters(model: Any) -> dict[str, Any]:
-        return verified_parameters(model)
+        if not explicit:
+            return verified_parameters(model)
+        return contract.verified_parameters(model, binding)
 
-    return EditBindings(
-        architecture=replace(
-            architecture(),
-            description=ARCH,
-            config=CONFIG,
-            manifest=MANIFEST,
-            vocab_size=VOCAB,
+    binding = EditBindings(
+        architecture=(
+            replace(
+                architecture(),
+                description=ARCH,
+                config=CONFIG,
+                manifest=MANIFEST,
+                vocab_size=VOCAB,
+            )
+            if value is None
+            else value
         ),
         source_model=SOURCE_MODEL,
         shapes=SHAPES,
@@ -49,6 +59,7 @@ def _bindings() -> EditBindings:
         validate_edits=validate,
         verified_parameters=parameters,
     )
+    return binding
 
 
 def schema() -> dict[str, Any]:

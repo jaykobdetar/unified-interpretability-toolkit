@@ -5,6 +5,7 @@ import math
 from typing import Any
 
 from inference_architecture import architecture
+from inference_geometry import Architecture
 from inference_observation_contract import ObservationBindings
 import inference_observation_contract as contract
 from inference_architecture import (
@@ -22,7 +23,7 @@ ATTENTION_SEMANTICS = "selected query head, last consumed query; post-causal-mas
 LENS_SEMANTICS = "selected post-block residual through final RMSNorm and tied head; diagnostic readout, not early-exit inference or causal effect"
 
 
-def _bindings() -> ObservationBindings:
+def _bindings(value: Architecture | None = None) -> ObservationBindings:
     """Bind compatibility dimensions/semantics and keep helper lookup late."""
 
     def integer(value: object, low: int, high: int) -> bool:
@@ -31,23 +32,28 @@ def _bindings() -> ObservationBindings:
     def finite(value: object) -> bool:
         return _finite(value)
 
-    return ObservationBindings(
-        architecture=replace(
-            architecture(),
-            description=ARCH,
-            width=WIDTH,
-            layers=LAYERS,
-            query_heads=HEADS,
-            kv_heads=KV_HEADS,
-            head_dim=HEAD_DIM,
-            vocab_size=VOCAB,
-            capture_sites=CAPTURE_SITES,
+    binding = ObservationBindings(
+        architecture=(
+            replace(
+                architecture(),
+                description=ARCH,
+                width=WIDTH,
+                layers=LAYERS,
+                query_heads=HEADS,
+                kv_heads=KV_HEADS,
+                head_dim=HEAD_DIM,
+                vocab_size=VOCAB,
+                capture_sites=CAPTURE_SITES,
+            )
+            if value is None
+            else value
         ),
         attention_semantics=ATTENTION_SEMANTICS,
         lens_semantics=LENS_SEMANTICS,
         integer=integer,
         finite=finite,
     )
+    return binding
 
 
 def schema() -> dict[str, Any]:

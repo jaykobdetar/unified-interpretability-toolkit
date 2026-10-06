@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """One bounded offline inference session; JSON lines on stdin/stdout, no HTTP."""
 
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -50,6 +51,8 @@ from inference_comparison import (
     run as run_comparison,
 )
 from inference_experiments import Context, Record, Request, execute
+from inference_architecture import architecture
+from inference_services import InferenceContracts
 
 
 def emit(record):
@@ -80,18 +83,47 @@ def load_engine(directory: Path) -> tuple[Any, Any, Any]:
     )
 
 
+def _contracts() -> InferenceContracts:
+    """Capture the current compatibility defaults once, without model work."""
+    import inference_edits as edits
+    import inference_observations as observations
+    import inference_prompt_pair as pair
+    import inference_sweep as sweep
+
+    value = replace(
+        architecture(),
+        description=ARCH,
+        width=WIDTH,
+        layers=LAYERS,
+        query_heads=HEADS,
+        kv_heads=KV_HEADS,
+        head_dim=HEAD_DIM,
+        vocab_size=VOCAB,
+        capture_sites=CAPTURE_SITES,
+    )
+    return InferenceContracts(
+        value,
+        edits._bindings(value),
+        observations._bindings(value),
+        pair._bindings(value),
+        sweep._bindings(value),
+    )
+
+
 def generate(
-    torch,
-    tokenizer,
-    model,
-    prompt,
-    limit,
-    layer,
-    record=emit,
-    capture_scores=None,
-    activation_site="block",
-    observation=None,
-):
+    torch: Any,
+    tokenizer: Any,
+    model: Any,
+    prompt: Any,
+    limit: Any,
+    layer: Any,
+    record: Record = emit,
+    capture_scores: Any = None,
+    activation_site: str = "block",
+    observation: Any = None,
+) -> None:
+    contracts = _contracts()
+    value = contracts.architecture
     return run_generation(
         torch,
         tokenizer,
@@ -103,17 +135,17 @@ def generate(
         GenerationBindings(
             max_prompt=MAX_PROMPT,
             max_new=MAX_NEW,
-            width=WIDTH,
-            layers=LAYERS,
-            heads=HEADS,
-            kv_heads=KV_HEADS,
-            head_dim=HEAD_DIM,
-            vocab=VOCAB,
-            capture_sites=CAPTURE_SITES,
+            width=value.width,
+            layers=value.layers,
+            heads=value.query_heads,
+            kv_heads=value.kv_heads,
+            head_dim=value.head_dim,
+            vocab=value.vocab_size,
+            capture_sites=value.capture_sites,
             attention_semantics=ATTENTION_SEMANTICS,
-            validate_observation=validate_observation,
-            validate_record=validate_record,
-            lens_record=lens_record,
+            validate_observation=contracts.validate_observation,
+            validate_record=contracts.validate_record,
+            lens_record=contracts.lens_record,
         ),
         capture_scores=capture_scores,
         activation_site=activation_site,
@@ -182,9 +214,11 @@ def main() -> None:
     import inference_prompt_pair as prompt_pair
     import inference_sweep as sweep
 
+    contracts = _contracts()
+    value = contracts.architecture
     sweep_plan, sweep_deadline = None, None
     if request.get("mode") == "sweep":
-        sweep_plan = sweep.build_plan(request)
+        sweep_plan = contracts.build_plan(request)
         import math
 
         if len(sys.argv) != 4:
@@ -215,11 +249,11 @@ def main() -> None:
         verify_model(directory)
     pair_preview = None
     if request.get("mode") in prompt_pair.MODES:
-        request = prompt_pair.validate_request(request)
+        request = contracts.validate_request(request)
         from tokenizers import Tokenizer
 
         preview_tokenizer = Tokenizer.from_file(str(directory / "tokenizer.json"))
-        pair_preview = prompt_pair.token_preview(preview_tokenizer, request["prompts"])
+        pair_preview = contracts.token_preview(preview_tokenizer, request["prompts"])
         del preview_tokenizer
         if request["mode"] == "prompt_pair_preview":
             execute(
@@ -233,7 +267,7 @@ def main() -> None:
                     prompt_pair=prompt_pair.run,
                     sweep=sweep.run,
                     record=emit,
-                    capture_sites=CAPTURE_SITES,
+                    capture_sites=value.capture_sites,
                     verified_parameters=None,
                     pair_preview=pair_preview,
                     sweep_plan=sweep_plan,
@@ -242,7 +276,7 @@ def main() -> None:
                 ),
             )
             return
-        prompt_pair.validate_positions(request, pair_preview)
+        contracts.validate_positions(request, pair_preview)
     started = time.perf_counter()
     torch, tokenizer, model = load_engine(directory)
     import platform
@@ -291,7 +325,7 @@ def main() -> None:
             prompt_pair=prompt_pair.run,
             sweep=sweep.run,
             record=emit,
-            capture_sites=CAPTURE_SITES,
+            capture_sites=value.capture_sites,
             verified_parameters=verify_pair_parameters,
             pair_preview=pair_preview,
             sweep_plan=sweep_plan,

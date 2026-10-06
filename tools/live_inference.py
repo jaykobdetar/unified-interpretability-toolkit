@@ -6,6 +6,7 @@ HTTP coordinator and one inference subprocess; numerical work uses one CPU.
 """
 
 import argparse
+from dataclasses import replace
 from collections import deque
 from contextlib import contextmanager
 import hashlib
@@ -48,6 +49,9 @@ from inference_observations import (
 import inference_prompt_pair as prompt_pair
 import inference_sweep as sweep
 from inference_experiments import Kind, REGISTRY, for_coordinator
+from inference_architecture import architecture
+from inference_geometry import head_layout_descriptor as bound_head_layout_descriptor
+from inference_services import InferenceContracts
 
 MANIFEST = json.loads((ROOT / "docs/models/smollm2-135m.json").read_text())
 GIB = 1024**3
@@ -371,6 +375,33 @@ def current_layout_binding(model_info, session):
     }
 
 
+def _contracts() -> InferenceContracts:
+    """Capture the current compatibility defaults once, without model work."""
+    import inference_edits as edits
+    import inference_observations as observations
+    import inference_prompt_pair as pair
+    import inference_sweep as sweep
+
+    value = replace(
+        architecture(),
+        description=ARCH,
+        width=WIDTH,
+        layers=LAYERS,
+        query_heads=HEADS,
+        kv_heads=KV_HEADS,
+        head_dim=HEAD_DIM,
+        vocab_size=VOCAB,
+        capture_sites=CAPTURE_SITES,
+    )
+    return InferenceContracts(
+        value,
+        edits._bindings(value),
+        observations._bindings(value),
+        pair._bindings(value),
+        sweep._bindings(value),
+    )
+
+
 class Session:
     def __init__(self, python, model):
         self.python, self.model = python, model
@@ -407,7 +438,9 @@ class Session:
             "worker_alive": self.process is not None and process_alive(self.process),
         }
 
-    def metadata(self):
+    def metadata(self) -> dict[str, Any]:
+        contracts = _contracts()
+        value = contracts.architecture
         # Shared across tabs: never include the capability or any session data.
         inference_busy = self.process is not None or self.status in (
             "loading",
@@ -424,9 +457,9 @@ class Session:
                 "new_tokens": 32,
                 "worker_rss_mib": 1536,
                 "sessions": 1,
-                "capture_layers": list(range(LAYERS)),
-                "activation_sites": list(CAPTURE_SITES),
-                "vector_width": WIDTH,
+                "capture_layers": list(range(value.layers)),
+                "activation_sites": list(value.capture_sites),
+                "vector_width": value.width,
             },
             "busy": inference_busy or analytics_busy,
             "busy_owner": (
@@ -435,19 +468,19 @@ class Session:
                 else "analytics job" if analytics_busy else None
             ),
             "queue_capacity": 0,
-            "architecture": ARCH,
-            "head_layout": head_layout_descriptor(),
-            "comparison": schema(),
-            "observations": observation_schema(),
+            "architecture": value.description,
+            "head_layout": bound_head_layout_descriptor(value),
+            "comparison": contracts.comparison_schema(),
+            "observations": contracts.observations_schema(),
             "prompt_pair": {
                 "modes": list(prompt_pair.MODES),
                 "prompts": 2,
                 "max_prompt_bytes_each": 2048,
                 "max_positions": 8,
-                "vector_width": WIDTH,
+                "vector_width": value.width,
                 "max_vector_equivalents": 24,
             },
-            "sweep": sweep.schema(),
+            "sweep": contracts.sweep_schema(),
         }
 
     def owns(self, capability):
@@ -506,15 +539,17 @@ class Session:
             )
         if self.process is not None or self.status in ("loading", "running"):
             raise ValueError("A session is active; cancel or reset it first")
+        contracts = _contracts()
+        value = contracts.architecture
         mode = data.get("mode", "generation")
         experiment = for_coordinator(data, mode)
         sweep_plan = None
         if experiment is REGISTRY[Kind.SWEEP]:
-            sweep_plan = sweep.build_plan(data)
+            sweep_plan = contracts.build_plan(data)
             request = dict(data)
             observation, layer = None, data["capture_layer"]
         elif experiment in (REGISTRY[Kind.PREVIEW], REGISTRY[Kind.PROMPT_PAIR]):
-            request = prompt_pair.validate_request(data)
+            request = contracts.validate_request(data)
             observation, layer = None, request.get("layer")
         elif experiment in (REGISTRY[Kind.GENERATION], REGISTRY[Kind.COMPARISON]):
             prompt = data.get("prompt")
@@ -527,21 +562,26 @@ class Session:
                 raise ValueError("Enter a nonempty prompt of at most 4096 UTF-8 bytes")
             if type(limit) is not int or not 1 <= limit <= MAX_TRACE:
                 raise ValueError("Generate 1–32 tokens")
-            if type(layer) is not int or not 0 <= layer < LAYERS:
-                raise ValueError(f"Choose activation layer 0–{LAYERS-1}")
+            if type(layer) is not int or not 0 <= layer < value.layers:
+                raise ValueError(f"Choose activation layer 0–{value.layers-1}")
             activation_site = data.get("activation_site", "block")
-            if type(activation_site) is not str or activation_site not in CAPTURE_SITES:
+            if (
+                type(activation_site) is not str
+                or activation_site not in value.capture_sites
+            ):
                 raise ValueError("Choose activation site block, attention, or mlp")
             observation = (
-                validate_observation(data["observation"], activation_site)
+                contracts.validate_observation(data["observation"], activation_site)
                 if "observation" in data
                 else None
             )
             comparison = {}
             if "edits" in data:
                 comparison = {
-                    "edits": validate_edits(data["edits"], data.get("source_model")),
-                    "source_model": SOURCE_MODEL,
+                    "edits": contracts.validate_edits(
+                        data["edits"], data.get("source_model")
+                    ),
+                    "source_model": contracts.edits.source_model,
                 }
             elif "source_model" in data:
                 raise ValueError("source_model requires an explicit edits list")
@@ -621,7 +661,7 @@ class Session:
             ) from None
         return self.snapshot()
 
-    def tick(self):
+    def tick(self) -> None:
         if self.analytics is not None:
             self.analytics.tick()
         if self.process is None:
@@ -663,6 +703,8 @@ class Session:
             self.details["error"] = reason
             self.stop(reason)
             return
+        contracts = _contracts()
+        value = contracts.architecture
         # Bounded drain. A full pipe blocks the worker; no unbounded queue/thread.
         eof = False
         for _ in range(8):
@@ -693,20 +735,22 @@ class Session:
                             self.steps
                         ):
                             raise ValueError("Invalid step sequence")
-                        if len(event["activation"]) != WIDTH:
+                        if len(event["activation"]) != value.width:
                             raise ValueError("Invalid activation width")
                         if "baseline" in event or "edited" in event:
-                            validate_pair(event)
+                            contracts.validate_pair(event)
                         if self.mode == "sweep":
-                            sweep.validate_step(event, self.sweep_plan)
+                            contracts.validate_sweep_step(event, self.sweep_plan)
                         elif self.mode == "prompt_pair":
-                            prompt_pair.validate_step(event, self.pair_request)
+                            contracts.validate_pair_step(event, self.pair_request)
                         elif self.mode == "prompt_pair_preview":
                             raise ValueError(
                                 "Preview cannot produce activation records"
                             )
                         else:
-                            validate_record(event, self.observation, self.capture_layer)
+                            contracts.validate_record(
+                                event, self.observation, self.capture_layer
+                            )
                         self.steps.append(event)
                         if self.mode == "sweep":
                             self.details["sweep_coverage"] = sweep.coverage(
@@ -743,7 +787,7 @@ class Session:
                             or event["reason"] != "token_preview"
                         ):
                             raise ValueError("Unexpected tokenizer completion")
-                        prompt_pair.validate_preview(event["preview"])
+                        contracts.validate_preview(event["preview"])
                         self.details.update(event)
                         self.status = "complete"
                         self.stop()
