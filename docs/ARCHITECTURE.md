@@ -48,6 +48,8 @@ The optional SVD parent also reads memory through `atlas_host.memory`, after its
 
 The services bind only to loopback. There is no hosted authentication/deployment architecture or general remote model browser. See [API semantics](API-PROGRESSIVE.md), [data/slice binding](DATA-VIEWER-CONTRACT.md), and [profile worker interface](profile-worker/PROFILE-WORKER-INTERFACE.md).
 
+The [native invariant audit](NATIVE-INVARIANTS.md) records explicit unwrap/expect sites, existing mutex poison policies and the limits of repository-only unused-code evidence. It preserves the current caller contracts and lock behavior; deletion proof remains unfinished.
+
 Viewer dispatch in `src/server.rs` retains connection expiry, bounded reuse framing, request parsing and eligibility checks before routing. Private functions handle calibration admission, tile queue admission, status/view replies and fixed assets. Tile admission transfers the same socket, lease and eligibility flag to the existing numeric queue; the other routes preserve their original response and lease lifetime. Header intake, dispatch and numeric work keep their existing queues and deadlines.
 
 Comparison dispatch in `src/comparison_http.rs` validates the request and comparison identity before routing. Private functions handle tensor calibration admission, tile queue admission, model/view/inspect reads and fixed assets. Dispatch retains method checks and the existing status and error mapping; each stage keeps the same query defaults, queued socket ownership and response fields.
