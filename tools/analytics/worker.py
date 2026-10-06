@@ -10,6 +10,7 @@ import sys
 
 from .core import geometry, integer
 from .source import Catalog, Tensor, fingerprint
+from .runtime import configure
 
 MAX_INPUT = 512 * 1024
 MAX_OUTPUT = 2 * 1024 * 1024 - 2048  # Reserve space for HTTP job envelope.
@@ -213,34 +214,6 @@ def analyze_request(payload):
             }
     catalog.verify()
     return result
-
-
-def configure():
-    import signal
-
-    signal.signal(signal.SIGALRM, signal.SIG_DFL)
-    signal.alarm(5)  # Kernel-enforced wall timer even while native LAPACK runs.
-    os.sched_setaffinity(0, {min(os.sched_getaffinity(0))})
-    os.nice(10)
-    for kind, ceiling in (
-        (resource.RLIMIT_AS, 768 * 1024**2),
-        (resource.RLIMIT_CPU, 4),
-    ):
-        soft, hard = resource.getrlimit(kind)
-        cap = min(n for n in (ceiling, soft, hard) if n != resource.RLIM_INFINITY)
-        resource.setrlimit(kind, (cap, cap))
-    mem = (
-        int(
-            next(
-                x
-                for x in Path("/proc/meminfo").read_text().splitlines()
-                if x.startswith("MemAvailable:")
-            ).split()[1]
-        )
-        * 1024
-    )
-    if mem < 3.25 * 1024**3:
-        raise ValueError("Memory reserve reached")
 
 
 def main():
