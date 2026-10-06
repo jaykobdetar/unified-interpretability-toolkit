@@ -243,20 +243,263 @@ pub fn read_small(path: &Path, maximum: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn source_index(root: &Path) -> Result<(Option<Value>, Option<Fingerprint>)> {
+    let ip = root.join("model.safetensors.index.json");
+    let result = if ip.exists() {
+        (
+            Some(json_unique(&read_small(&ip, 8 * 1024 * 1024)?)?),
+            Some(Fingerprint::from(regular(&ip)?)),
+        )
+    } else {
+        (None, None)
+    };
+    Ok(result)
+}
+
+fn source_shard_names(
+    root: &Path,
+    expected: Option<&serde_json::Map<String, Value>>,
+) -> Result<Vec<String>> {
+    let mut names = if let Some(m) = expected {
+        m.values()
+            .map(|v| v.as_str().ok_or("Invalid shard name").map(str::to_owned))
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    } else {
+        std::fs::read_dir(root)?
+            .map(|e| e.map(|e| e.file_name().to_string_lossy().into_owned()))
+            .collect::<std::io::Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|s| s.ends_with(".safetensors"))
+            .collect()
+    };
+    names.sort();
+    names.dedup();
+    require(
+        !names.is_empty() && names.len() <= 64,
+        "Expected 1–64 safetensors shards",
+    )?;
+    Ok(names)
+}
+
+fn source_shard(
+    root: &Path,
+    name: String,
+    sid: usize,
+    tensors: &mut Vec<Tensor>,
+    header_bytes: &mut u64,
+) -> Result<(Shard, File)> {
+    require(
+        safe_name(&name),
+        "Shard name must be a local safetensors filename",
+    )?;
+    let path = root.join(&name);
+    let fingerprint = Fingerprint::from(regular(&path)?);
+    let f = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
+    require(
+        Fingerprint::from(f.metadata()?) == fingerprint,
+        "Source changed while opening",
+    )?;
+    let mut length = [0u8; 8];
+    f.read_exact_at(&mut length, 0)?;
+    let n = u64::from_le_bytes(length);
+    require(
+        (2..=8 * 1024 * 1024).contains(&n) && n + 8 <= fingerprint.size,
+        "Invalid safetensors header size",
+    )?;
+    *header_bytes += n + 8;
+    require(
+        *header_bytes <= 32 * 1024 * 1024,
+        "Combined headers exceed 32 MiB limit",
+    )?;
+    let mut raw = vec![0; n as usize];
+    f.read_exact_at(&mut raw, 8)?;
+    let header = json_unique(&raw)?;
+    let map = header.as_object().ok_or("Header must be an object")?;
+    let mut intervals = Vec::new();
+    for (key, v) in map {
+        if key == "__metadata__" {
+            require(
+                v.as_object()
+                    .is_some_and(|m| m.values().all(Value::is_string)),
+                "Safetensors metadata must contain strings",
+            )?;
+            continue;
+        }
+        let (tensor, interval) = tensor_header(key, v, &name, sid, n, fingerprint.size)?;
+        tensors.push(tensor);
+        intervals.push(interval);
+    }
+    intervals.sort();
+    let mut cursor = 0;
+    for (a, b) in intervals {
+        require(a == cursor, "Gaps or overlaps in safetensors data")?;
+        cursor = b
+    }
+    require(
+        n.checked_add(8).and_then(|v| v.checked_add(cursor)) == Some(fingerprint.size),
+        "Trailing or missing tensor bytes",
+    )?;
+    Ok((
+        Shard {
+            name,
+            fingerprint,
+            header_sha256: sha(&raw),
+            data_start: 8 + n,
+        },
+        f,
+    ))
+}
+
+fn tensor_header(
+    key: &str,
+    v: &Value,
+    name: &str,
+    sid: usize,
+    n: u64,
+    source_bytes: u64,
+) -> Result<(Tensor, (u64, u64))> {
+    require(
+        !key.is_empty() && key.len() < 512,
+        "Tensor names must contain 1–511 bytes",
+    )?;
+    let dtype_name = v["dtype"].as_str().ok_or("Missing dtype")?;
+    require(
+        !dtype_name.is_empty() && dtype_name.len() <= 64,
+        "Invalid dtype name",
+    )?;
+    let storage_bits = storage_bits(dtype_name);
+    let shape = v["shape"]
+        .as_array()
+        .ok_or("Missing shape")?
+        .iter()
+        .map(|d| {
+            d.as_u64()
+                .ok_or("Shape must be positive integers")
+                .and_then(|n| {
+                    if usize::try_from(n).is_ok() {
+                        Ok(n as usize)
+                    } else {
+                        Err("Dimension exceeds address space")
+                    }
+                })
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    require(
+        shape.len() <= 32,
+        "Tensor rank exceeds metadata limit of 32",
+    )?;
+    let count = shape
+        .iter()
+        .try_fold(1usize, |a, &b| a.checked_mul(b))
+        .ok_or("Shape overflow")?;
+    let offsets = v["data_offsets"].as_array().ok_or("Missing offsets")?;
+    require(offsets.len() == 2, "Two offsets required")?;
+    let a = offsets[0].as_u64().ok_or("Invalid offset")?;
+    let b = offsets[1].as_u64().ok_or("Invalid offset")?;
+    let bytes = storage_bits
+        .map(|bits| {
+            u64::try_from(count)
+                .ok()
+                .and_then(|n| n.checked_mul(bits))
+                .filter(|n| n % 8 == 0)
+                .map(|n| n / 8)
+                .ok_or("Tensor byte length overflow or sub-byte misalignment")
+        })
+        .transpose()?;
+    let byte_offset = n
+        .checked_add(8)
+        .and_then(|v| v.checked_add(a))
+        .ok_or("Tensor offset overflow")?;
+    require(
+        a <= b && bytes.is_none_or(|bytes| b - a == bytes) && b <= source_bytes - n - 8,
+        "Tensor offsets/shape exceed source bounds",
+    )?;
+    let (rows, cols) = match shape.len() {
+        0 => (0, 0),
+        1 => (1, shape[0]),
+        rank => (shape[rank - 2], shape[rank - 1]),
+    };
+    let unavailable_reason = if Dtype::parse(dtype_name).is_err() {
+        Some(if storage_bits.is_some() {
+            "Storage extent validated; numeric encoding/quantization scale semantics unsupported"
+                .to_string()
+        } else {
+            "Unknown storage encoding; declared extent checked only, no numeric interpretation"
+                .to_string()
+        })
+    } else if shape.is_empty() || count == 0 {
+        Some("Scalar/empty tensor display unsupported".to_string())
+    } else if rows > 200000 || cols > 200000 {
+        Some("Dimension exceeds the unchanged 200000 display-axis limit".to_string())
+    } else {
+        None
+    };
+    let max = rows.max(cols);
+    let max_level = if max == 0 {
+        0
+    } else {
+        usize::BITS - (max - 1).leading_zeros()
+    };
+    let tensor = Tensor {
+        id: 0,
+        name: key.to_owned(),
+        shape,
+        rows,
+        cols,
+        count,
+        dtype: dtype_name.into(),
+        element_bytes: storage_bits
+            .filter(|bits| bits % 8 == 0)
+            .map_or(0, |bits| (bits / 8) as usize),
+        available: unavailable_reason.is_none(),
+        unavailable_reason,
+        shard: name.to_owned(),
+        shard_id: sid,
+        byte_offset,
+        max_level,
+        min_level: 0,
+    };
+    Ok((tensor, (a, b)))
+}
+
+fn validate_catalog(
+    tensors: &mut [Tensor],
+    expected: Option<&serde_json::Map<String, Value>>,
+) -> Result<()> {
+    tensors.sort_by(|a, b| a.name.cmp(&b.name));
+    for i in 0..tensors.len() {
+        require(
+            i == 0 || tensors[i - 1].name != tensors[i].name,
+            "Duplicate tensor across shards",
+        )?;
+        tensors[i].id = i;
+    }
+    require(!tensors.is_empty(), "No tensors")?;
+    tensors
+        .iter()
+        .try_fold(0usize, |n, t| n.checked_add(t.count))
+        .ok_or("Catalog element count overflow")?;
+    if let Some(m) = expected {
+        require(
+            m.len() == tensors.len()
+                && tensors
+                    .iter()
+                    .all(|t| m.get(&t.name).and_then(Value::as_str) == Some(&t.shard)),
+            "Index/header tensor coverage mismatch",
+        )?
+    }
+    Ok(())
+}
+
 impl Source {
     pub fn open(root: &Path) -> Result<Self> {
         headroom()?;
         let root = root.canonicalize()?;
         require(root.is_dir(), "--model must be a directory")?;
-        let ip = root.join("model.safetensors.index.json");
-        let (index, ifp) = if ip.exists() {
-            (
-                Some(json_unique(&read_small(&ip, 8 * 1024 * 1024)?)?),
-                Some(Fingerprint::from(regular(&ip)?)),
-            )
-        } else {
-            (None, None)
-        };
+        let (index, ifp) = source_index(&root)?;
         let expected = if let Some(v) = &index {
             Some(
                 v["weight_map"]
@@ -266,212 +509,16 @@ impl Source {
         } else {
             None
         };
-        let mut names = if let Some(m) = expected {
-            m.values()
-                .map(|v| v.as_str().ok_or("Invalid shard name").map(str::to_owned))
-                .collect::<std::result::Result<Vec<_>, _>>()?
-        } else {
-            std::fs::read_dir(&root)?
-                .map(|e| e.map(|e| e.file_name().to_string_lossy().into_owned()))
-                .collect::<std::io::Result<Vec<_>>>()?
-                .into_iter()
-                .filter(|s| s.ends_with(".safetensors"))
-                .collect()
-        };
-        names.sort();
-        names.dedup();
-        require(
-            !names.is_empty() && names.len() <= 64,
-            "Expected 1–64 safetensors shards",
-        )?;
+        let names = source_shard_names(&root, expected)?;
         let (mut tensors, mut shards, mut files) = (Vec::new(), Vec::new(), Vec::new());
         let mut hb = 0;
         for name in names {
-            require(
-                safe_name(&name),
-                "Shard name must be a local safetensors filename",
-            )?;
-            let path = root.join(&name);
-            let fingerprint = Fingerprint::from(regular(&path)?);
-            let f = OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(path)?;
-            require(
-                Fingerprint::from(f.metadata()?) == fingerprint,
-                "Source changed while opening",
-            )?;
-            let mut length = [0u8; 8];
-            f.read_exact_at(&mut length, 0)?;
-            let n = u64::from_le_bytes(length);
-            require(
-                (2..=8 * 1024 * 1024).contains(&n) && n + 8 <= fingerprint.size,
-                "Invalid safetensors header size",
-            )?;
-            hb += n + 8;
-            require(
-                hb <= 32 * 1024 * 1024,
-                "Combined headers exceed 32 MiB limit",
-            )?;
-            let mut raw = vec![0; n as usize];
-            f.read_exact_at(&mut raw, 8)?;
-            let header = json_unique(&raw)?;
-            let map = header.as_object().ok_or("Header must be an object")?;
-            let mut intervals = Vec::new();
-            let sid = files.len();
-            for (key, v) in map {
-                if key == "__metadata__" {
-                    require(
-                        v.as_object()
-                            .is_some_and(|m| m.values().all(Value::is_string)),
-                        "Safetensors metadata must contain strings",
-                    )?;
-                    continue;
-                }
-                require(
-                    !key.is_empty() && key.len() < 512,
-                    "Tensor names must contain 1–511 bytes",
-                )?;
-                let dtype_name = v["dtype"].as_str().ok_or("Missing dtype")?;
-                require(
-                    !dtype_name.is_empty() && dtype_name.len() <= 64,
-                    "Invalid dtype name",
-                )?;
-                let storage_bits = storage_bits(dtype_name);
-                let shape = v["shape"]
-                    .as_array()
-                    .ok_or("Missing shape")?
-                    .iter()
-                    .map(|d| {
-                        d.as_u64()
-                            .ok_or("Shape must be positive integers")
-                            .and_then(|n| {
-                                if usize::try_from(n).is_ok() {
-                                    Ok(n as usize)
-                                } else {
-                                    Err("Dimension exceeds address space")
-                                }
-                            })
-                    })
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                require(
-                    shape.len() <= 32,
-                    "Tensor rank exceeds metadata limit of 32",
-                )?;
-                let count = shape
-                    .iter()
-                    .try_fold(1usize, |a, &b| a.checked_mul(b))
-                    .ok_or("Shape overflow")?;
-                let offsets = v["data_offsets"].as_array().ok_or("Missing offsets")?;
-                require(offsets.len() == 2, "Two offsets required")?;
-                let a = offsets[0].as_u64().ok_or("Invalid offset")?;
-                let b = offsets[1].as_u64().ok_or("Invalid offset")?;
-                let bytes = storage_bits
-                    .map(|bits| {
-                        u64::try_from(count)
-                            .ok()
-                            .and_then(|n| n.checked_mul(bits))
-                            .filter(|n| n % 8 == 0)
-                            .map(|n| n / 8)
-                            .ok_or("Tensor byte length overflow or sub-byte misalignment")
-                    })
-                    .transpose()?;
-                let byte_offset = n
-                    .checked_add(8)
-                    .and_then(|v| v.checked_add(a))
-                    .ok_or("Tensor offset overflow")?;
-                require(
-                    a <= b
-                        && bytes.is_none_or(|bytes| b - a == bytes)
-                        && b <= fingerprint.size - n - 8,
-                    "Tensor offsets/shape exceed source bounds",
-                )?;
-                let (rows, cols) = match shape.len() {
-                    0 => (0, 0),
-                    1 => (1, shape[0]),
-                    rank => (shape[rank - 2], shape[rank - 1]),
-                };
-                let unavailable_reason = if Dtype::parse(dtype_name).is_err() {
-                    Some(if storage_bits.is_some() {
-                        "Storage extent validated; numeric encoding/quantization scale semantics unsupported".to_string()
-                    } else {
-                        "Unknown storage encoding; declared extent checked only, no numeric interpretation".to_string()
-                    })
-                } else if shape.is_empty() || count == 0 {
-                    Some("Scalar/empty tensor display unsupported".to_string())
-                } else if rows > 200000 || cols > 200000 {
-                    Some("Dimension exceeds the unchanged 200000 display-axis limit".to_string())
-                } else {
-                    None
-                };
-                let max = rows.max(cols);
-                let max_level = if max == 0 {
-                    0
-                } else {
-                    usize::BITS - (max - 1).leading_zeros()
-                };
-                tensors.push(Tensor {
-                    id: 0,
-                    name: key.clone(),
-                    shape,
-                    rows,
-                    cols,
-                    count,
-                    dtype: dtype_name.into(),
-                    element_bytes: storage_bits
-                        .filter(|bits| bits % 8 == 0)
-                        .map_or(0, |bits| (bits / 8) as usize),
-                    available: unavailable_reason.is_none(),
-                    unavailable_reason,
-                    shard: name.clone(),
-                    shard_id: sid,
-                    byte_offset,
-                    max_level,
-                    min_level: 0,
-                });
-                intervals.push((a, b));
-            }
-            intervals.sort();
-            let mut cursor = 0;
-            for (a, b) in intervals {
-                require(a == cursor, "Gaps or overlaps in safetensors data")?;
-                cursor = b
-            }
-            require(
-                n.checked_add(8).and_then(|v| v.checked_add(cursor)) == Some(fingerprint.size),
-                "Trailing or missing tensor bytes",
-            )?;
-            shards.push(Shard {
-                name,
-                fingerprint,
-                header_sha256: sha(&raw),
-                data_start: 8 + n,
-            });
-            files.push(f);
+            let (shard, file) = source_shard(&root, name, files.len(), &mut tensors, &mut hb)?;
+            shards.push(shard);
+            files.push(file);
             require(tensors.len() <= 10000, "Tensor catalog exceeds 10000 limit")?;
         }
-        tensors.sort_by(|a, b| a.name.cmp(&b.name));
-        for i in 0..tensors.len() {
-            require(
-                i == 0 || tensors[i - 1].name != tensors[i].name,
-                "Duplicate tensor across shards",
-            )?;
-            tensors[i].id = i;
-        }
-        require(!tensors.is_empty(), "No tensors")?;
-        tensors
-            .iter()
-            .try_fold(0usize, |n, t| n.checked_add(t.count))
-            .ok_or("Catalog element count overflow")?;
-        if let Some(m) = expected {
-            require(
-                m.len() == tensors.len()
-                    && tensors
-                        .iter()
-                        .all(|t| m.get(&t.name).and_then(Value::as_str) == Some(&t.shard)),
-                "Index/header tensor coverage mismatch",
-            )?
-        }
+        validate_catalog(&mut tensors, expected)?;
         let identity = sha(&serde_json::to_vec(
             &json!({"schema":1,"root":root,"shards":shards,"index":index,"index_stat":ifp}),
         )?);
