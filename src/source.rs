@@ -11,6 +11,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod format;
+pub use format::{Format, FormatInput};
+
 // Reject duplicate keys at every JSON depth, including tensor metadata and index.
 struct Unique(Value);
 impl<'de> Deserialize<'de> for Unique {
@@ -101,13 +104,8 @@ pub enum Dtype {
     F32,
 }
 impl Dtype {
-    pub fn parse(name: &str) -> Result<Self> {
-        match name {
-            "BF16" => Ok(Self::Bf16),
-            "F16" => Ok(Self::F16),
-            "F32" => Ok(Self::F32),
-            _ => Err("Only BF16, F16 and F32 tensors are supported".into()),
-        }
+    pub fn parse<T: FormatInput + ?Sized>(name: &T) -> Result<Self> {
+        name.parsed_dtype()
     }
     pub fn name(self) -> &'static str {
         match self {
@@ -183,7 +181,7 @@ pub struct Tensor {
     pub rows: usize,
     pub cols: usize,
     pub count: usize,
-    pub dtype: String,
+    pub dtype: Format,
     pub element_bytes: usize,
     pub available: bool,
     pub unavailable_reason: Option<String>,
@@ -422,7 +420,8 @@ fn tensor_header(
         1 => (1, shape[0]),
         rank => (shape[rank - 2], shape[rank - 1]),
     };
-    let unavailable_reason = if Dtype::parse(dtype_name).is_err() {
+    let dtype = Format::from(dtype_name);
+    let unavailable_reason = if Dtype::parse(&dtype).is_err() {
         Some(if storage_bits.is_some() {
             "Storage extent validated; numeric encoding/quantization scale semantics unsupported"
                 .to_string()
@@ -450,7 +449,7 @@ fn tensor_header(
         rows,
         cols,
         count,
-        dtype: dtype_name.into(),
+        dtype,
         element_bytes: storage_bits
             .filter(|bits| bits % 8 == 0)
             .map_or(0, |bits| (bits / 8) as usize),

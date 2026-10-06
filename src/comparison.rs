@@ -1,7 +1,7 @@
 //! Read-only, explicitly paired checkpoints. Comparison coordinates are never edit targets.
 use crate::{
     atomic_write, disk_guard, headroom, render, require, sha,
-    source::{element_offset, exact_decimal_for, Dtype, Source, Tensor},
+    source::{element_offset, exact_decimal_for, Dtype, Format, Source, Tensor},
     state::{intended_cache_path, TileCache},
     Result,
 };
@@ -27,8 +27,8 @@ pub struct Pair {
     pub cols: usize,
     pub count: usize,
     pub max_level: u32,
-    pub dtype_a: String,
-    pub dtype_b: String,
+    pub dtype_a: Format,
+    pub dtype_b: Format,
     a: usize,
     b: usize,
 }

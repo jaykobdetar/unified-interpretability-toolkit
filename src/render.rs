@@ -2,7 +2,7 @@ pub use crate::rules::IDS as RULES;
 use crate::{
     headroom, require,
     rules::{self, Definition, Scope, Transform},
-    source::{element_offset, Dtype, Source, Tensor},
+    source::{element_offset, Dtype, Format, Source, Tensor},
     Result,
 };
 use flate2::{write::ZlibEncoder, Compression};
@@ -19,7 +19,7 @@ pub struct Stats {
     pub histogram_sha256: Option<String>,
     pub exact_zero_count: u64,
     pub unique_bit_patterns: Option<usize>,
-    pub dtype: String,
+    pub dtype: Format,
     pub calibration_method: String,
     pub seconds: f64,
 }
