@@ -95,36 +95,7 @@ fn dispatch(
         return;
     }
     if method == "POST" && path == "/api/comparison/calibrate" {
-        let result = (|| -> Result<usize> {
-            require(
-                headers.get("x-atlas-local").map(String::as_str) == Some("1"),
-                "Local action header required",
-            )?;
-            require(
-                q.get("all", "0") != "1",
-                "Comparison calibration is explicitly tensor-scoped",
-            )?;
-            state.check()?;
-            let id = q.int("tensor", "")?;
-            state.pair(id)?;
-            Ok(id)
-        })();
-        match result {
-            Ok(id) => {
-                if state.scales(id).is_some() {
-                    let mut v = state.identity_metadata();
-                    v["complete"] = json!(true);
-                    server::json_reply(socket, 200, v);
-                } else if queue_calibration(state, sender, id) {
-                    let mut v = state.identity_metadata();
-                    v["queued"] = json!(id);
-                    server::json_reply(socket, 202, v);
-                } else {
-                    server::error(socket, 503, "Numeric queue full; retry shortly");
-                }
-            }
-            Err(e) => server::error(socket, 400, e),
-        }
+        reply_calibration(state, sender, socket, &q, &headers);
         return;
     }
     if method != "GET" {
@@ -136,16 +107,71 @@ fn dispatch(
         return;
     }
     if path == "/api/comparison/tile" {
-        if let Err(e) = sender.try_send(Job::Tile(socket, q)) {
-            let (std::sync::mpsc::TrySendError::Full(job)
-            | std::sync::mpsc::TrySendError::Disconnected(job)) = e;
-            if let Job::Tile(s, _) = job {
-                server::error(s, 503, "Numeric queue full; retry shortly")
-            }
+        enqueue_tile(sender, socket, q);
+        return;
+    }
+    let result = read_api(state, &path, &q);
+    if let Some(result) = result {
+        match result {
+            Ok(v) => server::json_reply(socket, 200, v),
+            Err(e) => server::error(socket, code(&e), e),
         }
         return;
     }
-    let result: Option<Result<Value>> = match path.as_str() {
+    reply_asset(socket, &path)
+}
+
+fn reply_calibration(
+    state: &Comparison,
+    sender: &SyncSender<Job>,
+    socket: TcpStream,
+    q: &Query,
+    headers: &std::collections::BTreeMap<String, String>,
+) {
+    let result = (|| -> Result<usize> {
+        require(
+            headers.get("x-atlas-local").map(String::as_str) == Some("1"),
+            "Local action header required",
+        )?;
+        require(
+            q.get("all", "0") != "1",
+            "Comparison calibration is explicitly tensor-scoped",
+        )?;
+        state.check()?;
+        let id = q.int("tensor", "")?;
+        state.pair(id)?;
+        Ok(id)
+    })();
+    match result {
+        Ok(id) => {
+            if state.scales(id).is_some() {
+                let mut v = state.identity_metadata();
+                v["complete"] = json!(true);
+                server::json_reply(socket, 200, v);
+            } else if queue_calibration(state, sender, id) {
+                let mut v = state.identity_metadata();
+                v["queued"] = json!(id);
+                server::json_reply(socket, 202, v);
+            } else {
+                server::error(socket, 503, "Numeric queue full; retry shortly");
+            }
+        }
+        Err(e) => server::error(socket, 400, e),
+    }
+}
+
+fn enqueue_tile(sender: &SyncSender<Job>, socket: TcpStream, q: Query) {
+    if let Err(e) = sender.try_send(Job::Tile(socket, q)) {
+        let (std::sync::mpsc::TrySendError::Full(job)
+        | std::sync::mpsc::TrySendError::Disconnected(job)) = e;
+        if let Job::Tile(s, _) = job {
+            server::error(s, 503, "Numeric queue full; retry shortly")
+        }
+    }
+}
+
+fn read_api(state: &Comparison, path: &str, q: &Query) -> Option<Result<Value>> {
+    match path {
         "/api/comparison/model" => Some(state.model()),
         "/api/comparison/view" => Some((|| {
             state.view(
@@ -163,15 +189,11 @@ fn dispatch(
             )
         })()),
         _ => None,
-    };
-    if let Some(result) = result {
-        match result {
-            Ok(v) => server::json_reply(socket, 200, v),
-            Err(e) => server::error(socket, code(&e), e),
-        }
-        return;
     }
-    let asset: Option<(&str, &[u8])> = match path.as_str() {
+}
+
+fn reply_asset(socket: TcpStream, path: &str) {
+    let asset: Option<(&str, &[u8])> = match path {
         "/" | "/comparison.html" => Some((
             "text/html; charset=utf-8",
             include_bytes!("../web/comparison.html"),
