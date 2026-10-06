@@ -87,8 +87,8 @@ def _contracts() -> InferenceContracts:
     """Capture the current compatibility defaults once, without model work."""
     from atlas_host import inference_edits as edits
     from atlas_host import inference_observations as observations
-    import inference_prompt_pair as pair
-    import inference_sweep as sweep
+    from atlas_host import inference_prompt_pair as pair
+    from atlas_host import inference_sweep as sweep
 
     value = replace(
         architecture(),
@@ -215,8 +215,8 @@ def main() -> None:
     from live_inference import verify_model, SweepAdmissionBudget
 
     directory = Path(sys.argv[1])
-    import inference_prompt_pair as prompt_pair
-    import inference_sweep as sweep
+    from atlas_host import inference_prompt_pair as prompt_pair
+    from atlas_host import inference_sweep as sweep
 
     contracts = _contracts()
     value = contracts.architecture

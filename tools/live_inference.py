@@ -51,8 +51,8 @@ from atlas_host.inference_observations import (
     validate_observation,
     validate_record,
 )
-import inference_prompt_pair as prompt_pair
-import inference_sweep as sweep
+from atlas_host import inference_prompt_pair as prompt_pair
+from atlas_host import inference_sweep as sweep
 from atlas_host.inference_experiments import Kind, REGISTRY, for_coordinator
 from atlas_host.inference_architecture import architecture
 from atlas_host.inference_geometry import (
@@ -386,8 +386,8 @@ def _contracts() -> InferenceContracts:
     """Capture the current compatibility defaults once, without model work."""
     from atlas_host import inference_edits as edits
     from atlas_host import inference_observations as observations
-    import inference_prompt_pair as pair
-    import inference_sweep as sweep
+    from atlas_host import inference_prompt_pair as pair
+    from atlas_host import inference_sweep as sweep
 
     value = replace(
         architecture(),
