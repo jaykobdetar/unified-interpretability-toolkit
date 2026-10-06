@@ -34,6 +34,8 @@ The private native profile worker in `src/profile_worker.rs` admits its options 
 
 The services bind only to loopback. There is no hosted authentication/deployment architecture or general remote model browser. See [API semantics](API-PROGRESSIVE.md), [data/slice binding](DATA-VIEWER-CONTRACT.md), and [profile worker interface](profile-worker/PROFILE-WORKER-INTERFACE.md).
 
+Viewer dispatch in `src/server.rs` retains connection expiry, bounded reuse framing, request parsing and eligibility checks before routing. Private functions handle calibration admission, tile queue admission, status/view replies and fixed assets. Tile admission transfers the same socket, lease and eligibility flag to the existing numeric queue; the other routes preserve their original response and lease lifetime. Header intake, dispatch and numeric work keep their existing queues and deadlines.
+
 ## Experimental owner fixture workflow
 
 The owner registry uses `config/atlas-host.example.json`; its paths resolve relative to that config. `tools/atlas-model.py` supports local validation, registration, enabling/disabling, and owner receipts. It does not download models. Owner receipts include source paths and should stay local. The HTTP visitor catalog exposes opaque model identities instead.

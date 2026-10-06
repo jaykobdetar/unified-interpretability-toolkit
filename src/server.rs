@@ -656,52 +656,7 @@ fn dispatch(
         eligible,
     } = connection;
     if method == "POST" && path == "/api/calibrate" {
-        if headers.get("x-atlas-local").map(String::as_str) != Some("1") {
-            error(socket, 400, "Local action header required");
-            return;
-        }
-        if q.get("all", "0") == "1" {
-            let mut p = state.progress.lock().unwrap();
-            // Wake a sleeping worker without recurring polling. A full queue
-            // already wakes it; disconnected transport cannot accept work.
-            if matches!(
-                sender.try_send(Job::Wake),
-                Err(std::sync::mpsc::TrySendError::Disconnected(_))
-            ) {
-                error(socket, 503, "Numeric worker unavailable");
-                return;
-            }
-            p.all_requested = true;
-            p.error = None;
-            json_reply(
-                socket,
-                202,
-                json!({"api_version":1,"queued":if state.source.tensors.iter().all(|t|t.available){"complete checkpoint"}else{"supported tensors; global calibration unavailable"}}),
-            );
-            return;
-        }
-        match q.int("tensor", "0").and_then(|id| {
-            let t = state.source.tensor(id)?;
-            require(
-                t.available,
-                t.unavailable_reason
-                    .as_deref()
-                    .unwrap_or("Tensor unavailable"),
-            )?;
-            Ok(id)
-        }) {
-            Ok(id) => {
-                if state.stats(id).is_some() {
-                    json_reply(socket, 200, json!({"api_version":1,"complete":true}));
-                } else if sender.try_send(Job::Calibrate(id)).is_ok() {
-                    state.progress.lock().unwrap().error = None;
-                    json_reply(socket, 202, json!({"api_version":1,"queued":id}));
-                } else {
-                    error(socket, 503, "Numeric queue full; retry shortly")
-                }
-            }
-            Err(e) => error(socket, 400, e),
-        }
+        reply_calibration(state, sender, socket, &q, &headers);
         return;
     }
     if method != "GET" {
@@ -713,39 +668,19 @@ fn dispatch(
         return;
     }
     if path == "/tile" {
-        match sender.try_send(Job::Tile(
+        enqueue_tile(
+            sender,
             Connection {
                 socket,
                 lease,
                 eligible,
             },
             q,
-        )) {
-            Ok(()) => {}
-            Err(e) => {
-                let (std::sync::mpsc::TrySendError::Full(job)
-                | std::sync::mpsc::TrySendError::Disconnected(job)) = e;
-                if let Job::Tile(s, _) = job {
-                    s.close_error(503, "Numeric queue full; retry shortly")
-                }
-            }
-        }
+        );
         return;
     }
     if path == "/api/progress" || path == "/api/tensor-status" {
-        let result = (|| -> Result<Value> {
-            let selected = if path == "/api/tensor-status" || !q.get("tensor", "").is_empty() {
-                require(!q.get("tensor", "").is_empty(), "Selected tensor required")?;
-                Some(q.int("tensor", "0")?)
-            } else {
-                None
-            };
-            state.status(selected)
-        })();
-        match result {
-            Ok(value) => json_reply(socket, 200, value),
-            Err(e) => error(socket, 400, e),
-        }
+        reply_status(state, socket, &path, &q);
         return;
     }
     if path == "/api/model" {
@@ -763,42 +698,134 @@ fn dispatch(
         return;
     }
     if path == "/api/view" {
-        let result = (|| -> Result<Value> {
-            state.source.check()?;
-            let id = q.int("tensor", "0")?;
-            let slice = TensorSlice::new(&state.source, id, &parse_indices(q.get("slice", ""))?)?;
-            let t = state.source.tensor(id)?;
-            let mut selected = serde_json::to_value(t)?;
-            selected["slice"] = json!(slice.leading);
-            selected["slice_identity"] = json!(slice.identity);
-            selected["slice_count"] = json!(slice.tensor.count);
-            let l = state.legends(
-                t,
-                q.get("left", "global_linear"),
-                q.get("right", "global_asinh"),
-            )?;
-            Ok(
-                json!({"api_version":1,"tensor":selected,"source_binding":state.slice_binding(&slice),"legends":l,"tile_bindings":{"left":state.tile_binding_for(&slice,q.get("left","global_linear"),&l["left"]),"right":state.tile_binding_for(&slice,q.get("right","global_asinh"),&l["right"])},"tile_size":256,"overlap":0,"source_values_unchanged":true}),
-            )
-        })();
-        match result {
-            Ok(v) => json_reply(socket, 200, v),
-            Err(e) => {
-                let code = if e.to_string().contains("not ready") {
-                    503
-                } else {
-                    400
-                };
-                error(socket, code, e)
-            }
-        }
+        reply_view(state, socket, &q);
         return;
     }
     if path == "/viewer.js" {
         reply_viewer_bundle(socket);
         return;
     }
-    let static_file: Option<(&str, &[u8])> = match path.as_str() {
+    reply_static(socket, &path)
+}
+
+fn reply_calibration(
+    state: &State,
+    sender: &SyncSender<Job>,
+    socket: TcpStream,
+    q: &Query,
+    headers: &BTreeMap<String, String>,
+) {
+    if headers.get("x-atlas-local").map(String::as_str) != Some("1") {
+        error(socket, 400, "Local action header required");
+        return;
+    }
+    if q.get("all", "0") == "1" {
+        let mut p = state.progress.lock().unwrap();
+        // Wake a sleeping worker without recurring polling. A full queue
+        // already wakes it; disconnected transport cannot accept work.
+        if matches!(
+            sender.try_send(Job::Wake),
+            Err(std::sync::mpsc::TrySendError::Disconnected(_))
+        ) {
+            error(socket, 503, "Numeric worker unavailable");
+            return;
+        }
+        p.all_requested = true;
+        p.error = None;
+        json_reply(
+            socket,
+            202,
+            json!({"api_version":1,"queued":if state.source.tensors.iter().all(|t|t.available){"complete checkpoint"}else{"supported tensors; global calibration unavailable"}}),
+        );
+        return;
+    }
+    match q.int("tensor", "0").and_then(|id| {
+        let t = state.source.tensor(id)?;
+        require(
+            t.available,
+            t.unavailable_reason
+                .as_deref()
+                .unwrap_or("Tensor unavailable"),
+        )?;
+        Ok(id)
+    }) {
+        Ok(id) => {
+            if state.stats(id).is_some() {
+                json_reply(socket, 200, json!({"api_version":1,"complete":true}));
+            } else if sender.try_send(Job::Calibrate(id)).is_ok() {
+                state.progress.lock().unwrap().error = None;
+                json_reply(socket, 202, json!({"api_version":1,"queued":id}));
+            } else {
+                error(socket, 503, "Numeric queue full; retry shortly")
+            }
+        }
+        Err(e) => error(socket, 400, e),
+    }
+}
+
+fn enqueue_tile(sender: &SyncSender<Job>, connection: Connection, q: Query) {
+    match sender.try_send(Job::Tile(connection, q)) {
+        Ok(()) => {}
+        Err(e) => {
+            let (std::sync::mpsc::TrySendError::Full(job)
+            | std::sync::mpsc::TrySendError::Disconnected(job)) = e;
+            if let Job::Tile(s, _) = job {
+                s.close_error(503, "Numeric queue full; retry shortly")
+            }
+        }
+    }
+}
+
+fn reply_status(state: &State, socket: TcpStream, path: &str, q: &Query) {
+    let result = (|| -> Result<Value> {
+        let selected = if path == "/api/tensor-status" || !q.get("tensor", "").is_empty() {
+            require(!q.get("tensor", "").is_empty(), "Selected tensor required")?;
+            Some(q.int("tensor", "0")?)
+        } else {
+            None
+        };
+        state.status(selected)
+    })();
+    match result {
+        Ok(value) => json_reply(socket, 200, value),
+        Err(e) => error(socket, 400, e),
+    }
+}
+
+fn reply_view(state: &State, socket: TcpStream, q: &Query) {
+    let result = (|| -> Result<Value> {
+        state.source.check()?;
+        let id = q.int("tensor", "0")?;
+        let slice = TensorSlice::new(&state.source, id, &parse_indices(q.get("slice", ""))?)?;
+        let t = state.source.tensor(id)?;
+        let mut selected = serde_json::to_value(t)?;
+        selected["slice"] = json!(slice.leading);
+        selected["slice_identity"] = json!(slice.identity);
+        selected["slice_count"] = json!(slice.tensor.count);
+        let l = state.legends(
+            t,
+            q.get("left", "global_linear"),
+            q.get("right", "global_asinh"),
+        )?;
+        Ok(
+            json!({"api_version":1,"tensor":selected,"source_binding":state.slice_binding(&slice),"legends":l,"tile_bindings":{"left":state.tile_binding_for(&slice,q.get("left","global_linear"),&l["left"]),"right":state.tile_binding_for(&slice,q.get("right","global_asinh"),&l["right"])},"tile_size":256,"overlap":0,"source_values_unchanged":true}),
+        )
+    })();
+    match result {
+        Ok(v) => json_reply(socket, 200, v),
+        Err(e) => {
+            let code = if e.to_string().contains("not ready") {
+                503
+            } else {
+                400
+            };
+            error(socket, code, e)
+        }
+    }
+}
+
+fn reply_static(socket: TcpStream, path: &str) {
+    let static_file: Option<(&str, &[u8])> = match path {
         "/" | "/index.html" => Some((
             "text/html; charset=utf-8",
             include_bytes!("../web/index.html"),
