@@ -35,7 +35,7 @@ from atlas_host.inference_architecture import (
     CAPTURE_SITES,
     verify_attention_layout,
 )
-from inference_observations import (
+from atlas_host.inference_observations import (
     ATTENTION_SEMANTICS,
     lens_record,
     validate_observation,
@@ -64,7 +64,7 @@ def load_engine(directory: Path) -> tuple[Any, Any, Any]:
     from transformers import LlamaForCausalLM, PreTrainedTokenizerFast
 
     def verify_parameters(model: Any) -> object:
-        from inference_edits import verified_parameters
+        from atlas_host.inference_edits import verified_parameters
 
         return verified_parameters(model)
 
@@ -85,8 +85,8 @@ def load_engine(directory: Path) -> tuple[Any, Any, Any]:
 
 def _contracts() -> InferenceContracts:
     """Capture the current compatibility defaults once, without model work."""
-    import inference_edits as edits
-    import inference_observations as observations
+    from atlas_host import inference_edits as edits
+    from atlas_host import inference_observations as observations
     import inference_prompt_pair as pair
     import inference_sweep as sweep
 
@@ -169,7 +169,11 @@ def paired_step(
 def compare(
     torch: Any, tokenizer: Any, model: Any, request: Request, record: Record = emit
 ) -> None:
-    from inference_edits import apply_edits, validate_edits, verified_parameters
+    from atlas_host.inference_edits import (
+        apply_edits,
+        validate_edits,
+        verified_parameters,
+    )
 
     return run_comparison(
         torch,
@@ -311,7 +315,7 @@ def main() -> None:
     )
     verify_pair_parameters = None
     if request.get("mode") == "prompt_pair":
-        from inference_edits import verified_parameters
+        from atlas_host.inference_edits import verified_parameters
 
         verify_pair_parameters = verified_parameters
     execute(

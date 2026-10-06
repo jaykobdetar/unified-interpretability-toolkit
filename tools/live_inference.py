@@ -40,8 +40,13 @@ from atlas_host.inference_architecture import (
     bind_viewer_head_layout,
 )
 from atlas_host.memory import available_bytes as available
-from inference_edits import SOURCE_MODEL, schema, validate_edits, validate_pair
-from inference_observations import (
+from atlas_host.inference_edits import (
+    SOURCE_MODEL,
+    schema,
+    validate_edits,
+    validate_pair,
+)
+from atlas_host.inference_observations import (
     schema as observation_schema,
     validate_observation,
     validate_record,
@@ -379,8 +384,8 @@ def current_layout_binding(model_info, session):
 
 def _contracts() -> InferenceContracts:
     """Capture the current compatibility defaults once, without model work."""
-    import inference_edits as edits
-    import inference_observations as observations
+    from atlas_host import inference_edits as edits
+    from atlas_host import inference_observations as observations
     import inference_prompt_pair as pair
     import inference_sweep as sweep
 

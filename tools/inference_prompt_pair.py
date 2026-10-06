@@ -4,7 +4,7 @@ from dataclasses import replace
 from typing import Any
 from atlas_host.inference_architecture import architecture
 from atlas_host.inference_geometry import Architecture
-import inference_edits as edit_facade
+from atlas_host import inference_edits as edit_facade
 from atlas_host import inference_edit_contract as edit_contract
 from atlas_host.inference_pair_contract import PairBindings
 from atlas_host import inference_pair_contract as contract
@@ -22,7 +22,7 @@ from atlas_host.inference_architecture import (
     VOCAB,
     CAPTURE_SITES,
 )
-from inference_edits import SOURCE_MODEL, validate_edits
+from atlas_host.inference_edits import SOURCE_MODEL, validate_edits
 
 MODES = ("prompt_pair_preview", "prompt_pair")
 SHA256_HEX_LENGTH = 64

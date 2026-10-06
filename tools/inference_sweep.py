@@ -4,7 +4,7 @@ from dataclasses import replace
 from typing import Any
 from atlas_host.inference_architecture import architecture
 from atlas_host.inference_geometry import Architecture
-import inference_edits as edit_facade
+from atlas_host import inference_edits as edit_facade
 from atlas_host import inference_edit_contract as edit_contract
 from atlas_host.inference_sweep_contract import SweepBindings
 from atlas_host import inference_sweep_contract as contract
@@ -14,7 +14,7 @@ import hashlib
 import json
 import math
 import time
-from inference_edits import (
+from atlas_host.inference_edits import (
     SOURCE_MODEL,
     SHAPES,
     apply_edits,
