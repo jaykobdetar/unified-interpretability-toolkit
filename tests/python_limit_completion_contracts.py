@@ -557,7 +557,7 @@ class CompletionLimits(unittest.TestCase):
             node
             for path in (
                 ROOT / "tools/inference_worker.py",
-                ROOT / "tools/inference_generation.py",
+                Path(worker.run_generation.__code__.co_filename),
             )
             if path.is_file()
             for node in ast.walk(ast.parse(path.read_text()))

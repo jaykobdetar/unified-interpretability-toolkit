@@ -93,3 +93,5 @@ Pair and sweep pure contracts use ordinary atlas_host imports as well. Legacy co
 The comparison implementation uses ordinary atlas_host imports; its legacy name aliases the same module. The worker retains the same imported function and binding class objects and still supplies its current callbacks for each call. The paired-step and nested record algorithms keep their exact implementation.
 
 Portable experiment execution contracts preserve exact registry arguments, callback order, closed coordinator selection and existing tokenizer/callback annotations. A separate typed client fixture exercises the public protocols under strict mypy; qualification checks type-only faults with both portable interface assertions and the pinned compiler. The portable project contracts require no numerical libraries or development tool installation.
+
+The capture boundary test follows the imported production generation function to its source file, allowing ordinary package moves. It still executes the original capture hook in isolation and keeps the same uniqueness assertion, tensor double, boundary cases and probability-length checks.
