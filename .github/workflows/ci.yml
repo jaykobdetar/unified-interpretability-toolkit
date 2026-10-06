@@ -32,6 +32,7 @@ jobs:
         run: |
           python3 -m venv qualification/dev/black-26.1.0
           qualification/dev/black-26.1.0/bin/python -m pip install --require-hashes -r dev/requirements-format.txt
+          qualification/dev/black-26.1.0/bin/python -m pip install --only-binary=:all: --no-deps -r dev/requirements-lint.txt
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm --prefix dev ci --ignore-scripts
       - name: Reserve build disk on the disposable hosted runner
         if: runner.environment == 'github-hosted'

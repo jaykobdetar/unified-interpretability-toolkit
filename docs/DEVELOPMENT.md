@@ -10,7 +10,7 @@ After installing the pinned optional development tools below, run the same comma
 python3 tools/check.py all
 ```
 
-`all` requires the exact qualified versions in `dev/versions.json`, checks formatter output, and runs every original syntax/contract/Rust/smoke/launcher check plus the dense regression suite. It also runs ordinary debug `cargo test` and release tests with four libtest threads, while the existing build guard retains one CPU and one Cargo build job. Required tools, wrong versions and failed checks are fatal; nothing is skipped. Existing `python3 tools/check.py lint` and `python3 tools/check.py contracts` remain available without installing formatter or browser packages. `format` checks only formatter output; `--dev-python` selects the isolated pinned Black interpreter.
+`all` requires Python 3.12+, Node 22+ and Rust/Cargo 1.92+, with exact Black, Prettier and rustfmt versions from `dev/versions.json`. It checks formatter output and runs every original syntax/contract/Rust/smoke/launcher check plus the dense regression suite. It also runs ordinary debug `cargo test` and release tests with four libtest threads, while the existing build guard retains one CPU and one Cargo build job. Required tools, unsupported versions and failed checks are fatal; nothing is skipped. Existing `python3 tools/check.py lint` and `python3 tools/check.py contracts` remain available without installing formatter or browser packages. `format` checks only formatter output; `--dev-python` selects the isolated pinned Black interpreter. Git checkouts select tracked formatter files; source archives without `.git` select the same first-party trees and exclusions directly, without requiring Git.
 
 `lint` AST-parses first-party Python, syntax-checks first-party JavaScript with Node, and checks the launcher shell syntax. It is not a Python style or type checker. Clippy treats Rust warnings as errors. `contracts` lists its selected Python/Node files and runs every declared scenario for the asynchronous UI tests. Tests use mocks and tiny synthetic fixtures; they do not launch browsers or load trained models. The smoke test independently checks 26 exact source values and native/pooled PNG outputs across seven rules; other rules and dtype/slice behavior have dedicated Rust/contract coverage.
 
@@ -31,6 +31,27 @@ The GitHub workflow uses pinned official action revisions, read-only repository 
 Numerical references such as `tests/parity.py`, `tests/data_view_reference.py`, and `tests/comparison_reference.py` need separately installed reference packages and an explicitly selected interpreter. Browser harnesses require a separately installed Playwright and sandbox-enabled Chromium; set `NODE_PATH` and `ATLAS_CHROMIUM` to your local installation. Real inference additionally needs the complete pinned model and compatible CPU packages. These are outside default CI.
 
 The core browser harness uses the viewer's A/B selector at mobile widths. It checks that each selected panel is visible and paints, that the inactive panel is hidden, and captures both panels sequentially without changing the production layout.
+
+Assigned browser qualification requires the in-repository launchers below. Set a fresh external `EVIDENCE_DIR`, an existing sandbox-compatible `ATLAS_CHROMIUM`, and `NODE_PATH` to the pinned `dev/node_modules`. Build the release binary first. Missing prerequisites or failed cases stop qualification; portable `all` does not start browsers or model workers.
+
+| Suite | In-repository command under the existing guard | Prerequisites |
+| --- | --- | --- |
+| Core and comparison | `python3 tools/guarded-core-ui.py python3 tests/core_ui_driver.py` | Prepare `results/dtype-reference` and `results/comparison-reference` with `tests/dtype_reference.py` and `tests/comparison_reference.py`, using an existing NumPy interpreter; these generate synthetic sources. |
+| Workspace | `python3 tools/guarded-core-ui.py node tests/workspace-browser.cjs` | Built binary, pinned browser packages and shipped tiny fixture. |
+| Held link | `python3 tools/guarded-core-ui.py node tests/held-link-browser.cjs` | Original LOCAL fixture through `ATLAS_HELD_FIXTURE`, unchanged held JSON and matching identities. |
+| Multi-tile | `python3 tools/guarded-core-ui.py python3 tests/multitile_browser_driver.py` | Built binary and pinned browser packages; generates its own synthetic source. |
+| Polish Smol desktop/mobile | `python3 tools/guarded-core-ui.py python3 tests/ui_polish_browser_driver.py --model MODEL --python CPU_PYTHON --phase PHASE` | Exact pinned source matching the held observations, existing qualified CPU interpreter, complete calibration capacity and browser packages; `--section` selects a desktop section. Uses the existing coordinator with inference disabled. |
+| Polish Qwen | `python3 tools/guarded-core-ui.py python3 tests/ui_polish_browser_driver.py --model MODEL --phase qwen` | Exact held Qwen source and browser prerequisites. The preserved query-head assertion additionally needs a reviewed trusted Qwen descriptor producer and consumer; the current Llama-only head consumer refuses it. This case is not qualified by Smol success. |
+
+Export `ATLAS_EVIDENCE_DIR="$EVIDENCE_DIR"` before each command. The polish launcher owns its fresh ports, external cache and native server, checks the observed source identity before the browser, and retains raw logs and cleanup receipts. Its `--check` checks prerequisite files/packages without reading weight bytes or starting servers, workers or browsers; runtime/source-pin and resource gates still apply at launch. Qwen needs the exact source/revision in its held observation file, so an arbitrary Qwen download is insufficient.
+
+The desktop pointer case selects its held `model.layers.0.self_attn.q_proj.weight` through the actual tensor picker before asserting query-head/native scalar correspondence. A fresh calibrated catalog otherwise starts on embeddings, where head labels do not apply. Its head/scalar assertions remain unchanged. Smol viewer-only cases use fresh external coordinator copies with `--analytics-only`, full pinned receipt verification and no inference worker or registration. The CPU interpreter path keeps its virtual environment launcher; resolving that symlink would discard its packages.
+
+The separately assigned real CPU polish case uses `python3 tests/ui_polish_browser_driver.py --model MODEL --python CPU_PYTHON --phase inference`. Supply the complete pinned Smol files from `docs/models/smollm2-135m.json` and an already qualified CPU PyTorch/Transformers environment. The launcher copies unchanged coordinator files/binary into a fresh external owner, preserving its relative cache isolation and original model/source identities. Native calibration and Chromium use the existing core guard; the separate coordinator/worker retains its existing admission, RSS, address-space, CPU and wall limits. Do not wrap the combined model/browser tree in the 1 GiB core aggregate policy. Registration and temporary activation policy are unused. This command starts real inference only when that case is explicitly assigned; installing tools, enabling a registered model or downloading weights is outside the launcher.
+
+The analytics mount contract removes only its known static import declaration across single-line and multiline formatter layouts. All original behavior assertions remain; disposable coordinate faults verify that both layouts still fail the guarded assertion.
+
+The full desktop pointer and Qwen polish cases additionally require legitimate `head_layout` and `head_layout_binding` metadata. The current static server supplies neither binding; the coordinator initializes its binding to `None`, and the trusted metadata producer has no production caller. A source/revision match alone cannot qualify these cases. The retained static desktop run reaches the exact raw scalar but fails the unchanged `Query head 1` assertion with `Head unavailable · no bound configuration layout descriptor`. This remains a production-wiring prerequisite for separate review. Do not inject metadata, change that assertion, enable a registered model, or create a temporary activation policy to make it pass.
 
 Combined API acceptance checks the exact eight renderer rule IDs in their public order, including `tensor_magnitude_asinh`. Its pure contract cases reject missing, extra, duplicated, renamed or reordered IDs; historical seven-rule acceptance does not describe the current renderer contract.
 
@@ -63,14 +84,14 @@ The evidence directory must be new and outside the model directory. `--case` sel
 
 The profile bundle export, host-client function boundaries and comparison mobile-media guard use whitespace-tolerant syntax matching. The original assertions remain, including disabled profile scope, exact native status, absent comparison inference routes and the 720px breakpoint. Ten benign disposable correctness mutations were caught by both the original and rewritten tests; all three rewritten tests also pass on pinned Prettier output.
 
-Optional browser gap checks use the existing resource guard. `tests/held-link-browser.cjs` cold-loads the held pre-format v2 fixture and checks native geometry, both rules, region, exact re-save spelling and reload. The fixture preserves the historical zero and observed starting re-save signed zero separately. `tests/archive_browser_driver.py --model MODEL --python CPU_PYTHON` runs `tests/archive-browser.cjs` through the actual coordinator: file import, lazy codec bytes, default redaction, save/reload/explicit restore, unchanged inputs and zero model starts. Model registration is unchanged; head-layout binding and native file-dialog permissions are separate qualifications.
+Browser gap checks use the existing resource guard. `tests/held-link-browser.cjs` cold-loads the held pre-format v2 fixture and checks native geometry, both rules, region, exact re-save spelling and reload. This is explicitly a LOCAL qualification: the current source identity includes canonical paths, inodes and timestamps. Moving, copying or regenerating the same bytes can orphan the held link. Set `ATLAS_HELD_FIXTURE` to the original local tiny fixture directory; its byte hash and exact held source/model identities still must match. The test does not adapt or rewrite the held JSON. The fixture preserves the historical zero and observed starting re-save signed zero separately. `tests/archive_browser_driver.py --model MODEL --python CPU_PYTHON` runs `tests/archive-browser.cjs` through the actual coordinator: file import, lazy codec bytes, default redaction, save/reload/explicit restore, unchanged inputs and zero model starts. Model registration is unchanged; head-layout binding and native file-dialog permissions are separate qualifications.
 
 ## Pinned optional development tools
 
 The formatter and browser development dependencies are isolated from runtime dependencies. `dev/versions.json` records the qualified tool versions. Install the hash-pinned Black wheels in a local CPython 3.12 virtual environment, and install the npm lockfile without lifecycle scripts or browser downloads:
 
 ```bash
-python3 -m venv qualification/dev/black-26.1.0
+python3.12 -m venv qualification/dev/black-26.1.0
 qualification/dev/black-26.1.0/bin/python -m pip install --require-hashes -r dev/requirements-format.txt
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm --prefix dev ci --ignore-scripts
 ```
@@ -79,10 +100,35 @@ The supplied Black wheel hashes target Linux x86_64 with CPython 3.12. The npm p
 
 Mechanical formatting covers first-party Python under `tools/` and `tests/`, Rust selected by `cargo fmt --all`, and first-party JavaScript/CSS under `web/` and `tests/`. The immutable supplied behaviour lock, vendored code, JSON snapshots and HTML are outside that formatter scope. These exclusions preserve supplied and held bytes; they do not disable any existing project check.
 
+## Version 2 behaviour lock
+
+`tools/behaviour_lock.py` is the supplied version 2 referee, preserved exactly with SHA-256 `d4419dfd13482ba626bf910018708e70fa5332a99165491b8ec8627ed26c8fef`. Wording, numeric results, images, data, statuses and headers are strict. Served page-file hashes are reported separately. The script uses synthetic checkpoints and the Python standard library; it needs no model, browser or GPU.
+
+For this quality pass, record a separately named v2 baseline from the already preserved original starting binary, SHA-256 `c26a328641736bd5805aa214255080c7e3dd63d1053a3f06be5103bb4ec7078a`. Keep the v1 script and baseline unchanged. Do not overwrite that binary with a rebuilt one or re-record a baseline to excuse differences.
+
+```bash
+python3 tools/behaviour_lock.py --binary ../atlas-before --record ../before-v2.json
+python3 tools/behaviour_lock.py --binary target/release/weight-atlas-rust \
+  --compare ../before-v2.json --old-binary ../atlas-before --full
+```
+
+Use the existing resource guards for qualification. Every commit touching `src/` must compare against that v2 baseline with `--old-binary`, including all eleven upgrade checks. Do not add allow flags without an explicitly agreed change. The lock does not cover Python services, browser interactions, non-default resource settings, simultaneous requests, speed or memory use; those require their separate existing checks.
+
 Existing syntax checks, contracts and Clippy warning enforcement remain required. Additional Python lint rules, unused-import removal, type-checking rules and structural cleanup are deferred to the separately reviewed Part 2; no new lint/type rule has been run and then suppressed in this pass.
 
 Prettier 3.9.6 reaches stable output after two passes for three chain-heavy test files. The initial safety trial also reported an AST serialization-order difference for `inference.js`; parsed structure, values and array order remained identical. Qualification retained that first failure, checked semantic AST equality in disposable copies, and required stable formatter output. The normal `format` check reports any later formatting drift.
 
 The 28 portable CJS frontend/profile/host/workspace async drivers require their original main promise to complete. A tiny test-only helper checks Node's existing `beforeExit` event: an unfinished main fails even when a pending Promise has no active event-loop handle. It tracks only that main, preserves every original expression/assertion, and adds no timer or production behavior. Ten benign dropped-settlement cases demonstrate the prior premature successful exit and the new failure; resolved, deferred and rejected controls retain their outcomes. ESM analytics tests keep top-level await, whose unfinished module evaluation already fails. Existing per-test timeout and resource guards remain.
+
+The review boundary tests in `tests/review_gap_contracts.py` use synthetic records and existing process doubles. They check generation limits and RAM admission before model access, the exact unsupported-family refusal, the final observation position, acquisition byte budgets, expired profile leases, and the worker RSS cap at its boundary and one KiB above it. Their model checks are explicit mocks; they do not need model files or start a worker. `tests/ui-review-gaps.cjs` checks unequal tile coordinates, stale right-rule viewer opens, unequal inspector row/column values, and inclusive region focus including a single cell, using the existing DOM/OSD doubles.
+
+The actual browser counterpart owns a synthetic 513-by-769 BF16 source, so both dimensions span multiple 256-pixel tiles. Set `EVIDENCE_DIR` to a fresh directory outside the checkout and `CHROMIUM` to an already installed compatible Chromium. Use the pinned browser packages documented above, a built release binary, and the existing guard:
+
+```sh
+ATLAS_EVIDENCE_DIR="$EVIDENCE_DIR" ATLAS_CHROMIUM="$CHROMIUM" \
+python3 -B tools/guarded-core-ui.py python3 -B tests/multitile_browser_driver.py
+```
+
+The harness uses the native server, sandboxed Chromium and real viewer actions. It verifies the independently generated native value and inspector address, the inclusive region center in both viewers, a loaded native tile with unequal x/y coordinates, and refusal of stale right-hand settings during viewer opening. Explicit calls to the served helpers check revision refusal, bookmark precision, F16 decoding, region and hover bounds, dtype rule availability, CSV text escaping and native indices. The dtype control temporarily supplies synthetic descriptors and restores the real tensor immediately. The retry control uses a labelled response/wait double; it does not measure backend admission or memory pressure. The harness retains fixture hashes, requests, logs, a screenshot and cleanup receipts. It makes no model-worker request and downloads no weights. The original resource limits and separate behavior-lock requirements still apply.
 
 Pure guard simulations also check admission at the exact 25 GiB disk boundary and a bounded delayed cleanup after the kill fallback. Every process, signal, clock, memory/disk query and receipt I/O is mocked. Ten disposable policy/reporting faults were probed; these two cases close the prior misses while preserving all original test methods and every live guard limit. They perform no real process signaling or resource pressure.

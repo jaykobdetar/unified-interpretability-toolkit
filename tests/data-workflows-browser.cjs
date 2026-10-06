@@ -127,10 +127,9 @@ const fixture = JSON.parse(
     );
     assert.equal(sha(bundle), sha(expected));
     assert(bundle.length < 600 * 1024);
+    const startupHeaders = startup.headers();
     assert(
-      startup
-        .headers()
-        ["content-security-policy"].includes("script-src 'self'"),
+      startupHeaders["content-security-policy"].includes("script-src 'self'"),
     );
     save("served-source-binding.json", {
       source_identity: model.source_identity,

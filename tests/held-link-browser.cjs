@@ -11,7 +11,8 @@ const root = path.resolve(__dirname, ".."),
 assert(out && process.env.ATLAS_CHROMIUM);
 const held = require("./fixtures/held-bookmark-v2.json"),
   binary = path.join(root, "target/release/weight-atlas-rust"),
-  fixture = path.join(root, "fixtures/tiny-bf16");
+  fixture =
+    process.env.ATLAS_HELD_FIXTURE || path.join(root, "fixtures/tiny-bf16");
 const sha = (value) => crypto.createHash("sha256").update(value).digest("hex");
 assert.equal(
   sha(fs.readFileSync(path.join(fixture, "tiny.safetensors"))),

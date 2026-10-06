@@ -1,0 +1,6 @@
+# Exact development-only tools; application/no-install runtime stays unchanged.
+ruff==0.16.8
+mypy==1.18.2
+mypy_extensions==1.1.0
+typing_extensions==4.15.0
+pathspec==1.1.1

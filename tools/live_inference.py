@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import secrets
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -289,15 +290,107 @@ def verify_model(directory, check=None):
             raise ValueError(f"Pinned file hash mismatch: {name}")
 
 
+def layout_fingerprints(directory):
+    """Private correspondence to freshly verified regular pinned files."""
+    try:
+        directory = directory.resolve(strict=True)
+        files = {}
+        for name in MANIFEST["files"]:
+            value = (directory / name).lstat()
+            if not stat.S_ISREG(value.st_mode):
+                return None
+            files[name] = (
+                value.st_dev,
+                value.st_ino,
+                value.st_size,
+                value.st_mtime_ns,
+                value.st_ctime_ns,
+            )
+        return {"directory": str(directory), "files": files}
+    except OSError:
+        return None
+
+
+def verified_layout_receipt(directory, *, required):
+    """Reuse pinned verification; optional analytics evidence fails closed."""
+    before = layout_fingerprints(directory)
+    check = None
+    if not required:
+        # Ordinary analytics sources remain unbound. Only the exact bounded
+        # pinned configuration can trigger this small-model startup verifier.
+        if (
+            before is None
+            or before["files"]["config.json"][2] > 65536
+            or sum(value[2] for value in before["files"].values()) > 384 * 1024**2
+        ):
+            return None
+        try:
+            with (directory / "config.json").open("rb") as source:
+                config = source.read(65537)
+        except OSError:
+            return None
+        if hashlib.sha256(config).hexdigest() != MANIFEST["files"]["config.json"]:
+            return None
+        deadline = time.monotonic() + UPSTREAM_DEADLINE
+
+        def check():
+            if time.monotonic() >= deadline or available() < 3.25 * GIB:
+                raise ValueError("Configuration receipt verification budget reached")
+
+    try:
+        verify_model(directory, check=check)
+    except (OSError, ValueError):
+        if required:
+            raise
+        return None
+    return (
+        before
+        if before is not None and before == layout_fingerprints(directory)
+        else None
+    )
+
+
+def current_layout_binding(model_info, session):
+    receipt = session.head_layout_receipt
+    if receipt is None:
+        return session.head_layout_binding
+    if (
+        receipt != layout_fingerprints(session.model)
+        or model_info.get("source_directory") != receipt["directory"]
+        or model_info.get("revision") != MANIFEST["revision"]
+        or not isinstance(model_info.get("source_identity"), str)
+    ):
+        return None
+    expected_model = hashlib.sha256(
+        json.dumps(
+            [
+                "weight-atlas-model-v1",
+                model_info["source_identity"],
+                MANIFEST["revision"],
+            ],
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    if model_info.get("model_identity") != expected_model:
+        return None
+    return {
+        "source_identity": model_info["source_identity"],
+        "model_identity": expected_model,
+        "weights_sha256": MANIFEST["files"]["model.safetensors"],
+        "config_sha256": MANIFEST["files"]["config.json"],
+    }
+
+
 class Session:
     def __init__(self, python, model):
         self.python, self.model = python, model
         self.process = None
         self.analytics = None
         self.inference_enabled = True
-        # Internal host-validated receipt correspondence only. Legacy startup has
-        # no registry receipt adapter and leaves this unset; never take from HTTP.
+        # Internal validated correspondence only; never take from HTTP. Direct
+        # Session construction does no file I/O and remains unbound by default.
         self.head_layout_binding = None
+        self.head_layout_receipt = None
         self.stop_reason = None
         self.id = None
         self.status = "idle"
@@ -911,7 +1004,9 @@ def bind_inference_source(model_info, session):
         and model_info.get("revision") == MANIFEST["revision"]
     ):
         model_info["inference_source_model"] = SOURCE_MODEL
-    return bind_viewer_head_layout(model_info, session.head_layout_binding)
+    return bind_viewer_head_layout(
+        model_info, current_layout_binding(model_info, session)
+    )
 
 
 def cleanup_owned(session, atlas, server):
@@ -971,10 +1066,10 @@ def main():
     os.sched_setaffinity(0, {min(os.sched_getaffinity(0))})
     if available() < 4.75 * GIB:
         raise SystemExit("Need 4.75 GiB available RAM")
-    if not args.analytics_only:
-        verify_model(args.model)
+    receipt = verified_layout_receipt(args.model, required=not args.analytics_only)
     session = Session(args.python, args.model.resolve())
     session.inference_enabled = not args.analytics_only
+    session.head_layout_receipt = receipt
     server = HTTPServer(("127.0.0.1", args.port), Handler)
     server.timeout = 0.1
     server.session, server.atlas_port = session, args.atlas_port
