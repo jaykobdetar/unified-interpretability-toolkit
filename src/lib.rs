@@ -341,3 +341,5 @@ mod atomic_tests {
 
 pub mod error;
 pub use error::Error;
+
+pub mod command;

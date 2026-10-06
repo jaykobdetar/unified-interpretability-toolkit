@@ -17,17 +17,9 @@ pub enum StartupScope {
 }
 impl StartupScope {
     pub fn for_command(command: &str) -> Self {
-        if matches!(
-            command,
-            "metadata"
-                | "serve"
-                | "calibrate"
-                | "verify"
-                | "tile"
-                | "overview"
-                | "inspect"
-                | "bench"
-        ) {
+        if crate::command::Command::lookup(command)
+            .is_some_and(crate::command::Command::is_standalone)
+        {
             Self::Standalone
         } else {
             Self::Legacy

@@ -8,7 +8,9 @@ use std::{
     time::Instant,
 };
 use weight_atlas_rust::{
-    atomic_write, configure, configure_standalone, headroom, peak_rss_mib, render, require, server,
+    atomic_write,
+    command::{parse_options, HELP},
+    configure, configure_standalone, headroom, peak_rss_mib, render, require, server,
     slice::{parse_indices, TensorSlice},
     source::{Dtype, Source},
     state::State,
@@ -32,7 +34,7 @@ fn run_args(
     configure: impl FnOnce(weight_atlas_rust::resources::StartupScope) -> Result<usize>,
 ) -> Result<()> {
     if args.is_empty() || args[0] == "--help" {
-        println!("Weight Atlas Rust\nCommands: metadata | serve | calibrate | verify | tile | overview | inspect | bench\nComparison: compare-metadata | compare-calibrate | compare-tile | compare-inspect | compare-serve; explicit --model A --compare-model B; --cache outside both\nComparison tile: --tensor ID --quantity a|b|delta|abs_delta --mapping linear|asinh|magnitude --out PREFIX; compare-calibrate requires --tensor ID\nRequired: --model DIRECTORY\nCommon: --cache DIRECTORY (default ./cache) --name NAME --revision REVISION\nserve: --port 8775 --verify-sha false; true hashes all bytes before listening; no remote binding\ncalibrate: --tensor ID (omit for all); resumes valid calibration\nverify: full SHA-256 reads, compares local model-api.json if present\noverview: --tensor ID --slice INDICES --rules tensor_linear,tensor_asinh --max-values 16777216; explicit bounded coarse preparation\ntile: --tensor ID --rules global_linear,global_asinh --level L --x X --y Y --out PREFIX\ninspect: --tensor ID --row R --col C\nbench: --tensor ID --repeats 3; factors 1,4,16, both global rules\nDefaults: one CPU, 768 MiB address-space budget, >=3 GiB effective RAM reserve plus process budget, >=25 GiB disk reserve.\n--resources JSON selects validated standalone budgets; see docs/RESOURCES.md.\nCache identity checks do not claim a fresh full-content hash.");
+        println!("{HELP}");
         return Ok(());
     }
     let command = &args[0];
@@ -235,19 +237,6 @@ fn run_benchmark(
         json!({"records":records,"wall_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"cpu":cpu})
     );
     Ok(())
-}
-
-fn parse_options(args: &[String]) -> Result<BTreeMap<String, String>> {
-    let mut opts = BTreeMap::new();
-    require((args.len() - 1).is_multiple_of(2), "Options require values")?;
-    for p in args[1..].chunks_exact(2) {
-        require(p[0].starts_with("--"), "Expected --option value")?;
-        require(
-            opts.insert(p[0][2..].to_owned(), p[1].clone()).is_none(),
-            "Duplicate CLI option",
-        )?
-    }
-    Ok(opts)
 }
 
 fn initialize_resources(command: &str, opts: &BTreeMap<String, String>) -> Result<()> {
