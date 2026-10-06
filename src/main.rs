@@ -9,7 +9,7 @@ use std::{
 };
 use weight_atlas_rust::{
     atomic_write,
-    command::{defaults, parse_options, HELP},
+    command::{defaults, parse_options, Command, HELP},
     configure, configure_standalone, headroom, peak_rss_mib, render, require, server,
     slice::{parse_indices, TensorSlice},
     source::{Dtype, Source},
@@ -75,17 +75,17 @@ fn dispatch_command(
     start: Instant,
 ) -> Result<()> {
     let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
-    match command {
-        "serve" => server::serve(state, get("port", defaults::SERVE_PORT).parse()?)?,
-        "hosted-renderer" => weight_atlas_rust::hosted_renderer::run(
+    match Command::lookup(command) {
+        Some(Command::Serve) => server::serve(state, get("port", defaults::SERVE_PORT).parse()?)?,
+        Some(Command::HostedRenderer) => weight_atlas_rust::hosted_renderer::run(
             state,
             opts.get("channel-fd")
                 .ok_or("Private channel required")?
                 .parse()?,
         )?,
-        "calibrate" => run_calibration(&state, opts, cpu, start)?,
-        "verify" => println!("{}", verify_source(&state, cpu, Instant::now())?),
-        "inspect" => println!(
+        Some(Command::Calibrate) => run_calibration(&state, opts, cpu, start)?,
+        Some(Command::Verify) => println!("{}", verify_source(&state, cpu, Instant::now())?),
+        Some(Command::Inspect) => println!(
             "{}",
             server::inspect(
                 &state,
@@ -97,9 +97,9 @@ fn dispatch_command(
                 )
             )?
         ),
-        "overview" => run_overview(&state, opts)?,
-        "tile" => run_tile(&state, opts, start)?,
-        "bench" => run_benchmark(&state, opts, cpu, start)?,
+        Some(Command::Overview) => run_overview(&state, opts)?,
+        Some(Command::Tile) => run_tile(&state, opts, start)?,
+        Some(Command::Bench) => run_benchmark(&state, opts, cpu, start)?,
         _ => return Err("Unknown command; use --help".into()),
     };
     Ok(())
@@ -370,9 +370,9 @@ fn run_comparison(
         Path::new(&get("cache", defaults::COMPARISON_CACHE)),
     )?);
     let id = get("tensor", defaults::COMPARISON_TENSOR).parse()?;
-    let output = match command {
-        "compare-metadata" => pair.model()?,
-        "compare-calibrate" => {
+    let output = match Command::lookup(command) {
+        Some(Command::CompareMetadata) => pair.model()?,
+        Some(Command::CompareCalibrate) => {
             require(
                 opts.contains_key("tensor"),
                 "Comparison calibration requires an explicit --tensor ID",
@@ -380,12 +380,12 @@ fn run_comparison(
             pair.calibrate_one(id)?;
             pair.model()?
         }
-        "compare-inspect" => pair.inspect(
+        Some(Command::CompareInspect) => pair.inspect(
             id,
             get("row", defaults::COMPARISON_ROW).parse()?,
             get("col", defaults::COMPARISON_COL).parse()?,
         )?,
-        "compare-tile" => {
+        Some(Command::CompareTile) => {
             let quantity = get("quantity", defaults::COMPARISON_QUANTITY);
             let mapping = get("mapping", defaults::COMPARISON_MAPPING);
             let level = get("level", &pair.pair(id)?.max_level.to_string()).parse()?;
@@ -423,7 +423,7 @@ fn run_comparison(
             result["cpu"] = json!(cpu);
             result
         }
-        "compare-serve" => {
+        Some(Command::CompareServe) => {
             comparison_http::serve(pair, get("port", defaults::COMPARISON_PORT).parse()?)?;
             return Ok(());
         }
