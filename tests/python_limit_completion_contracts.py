@@ -1,5 +1,6 @@
 """Remaining caller limits with inert bytes, clocks and validated source doubles."""
 
+import __future__
 import ast
 import contextlib
 from copy import deepcopy
@@ -552,10 +553,14 @@ class CompletionLimits(unittest.TestCase):
             self.check(lambda: sweep.validate_step(step, plan), accepted)
 
     def test_worker_capture_key_count_uses_existing_validated_record_bounds(self):
-        tree = ast.parse((ROOT / "tools/inference_worker.py").read_text())
         functions = [
             node
-            for node in ast.walk(tree)
+            for path in (
+                ROOT / "tools/inference_worker.py",
+                ROOT / "tools/inference_generation.py",
+            )
+            if path.is_file()
+            for node in ast.walk(ast.parse(path.read_text()))
             if isinstance(node, ast.FunctionDef) and node.name == "capture"
         ]
         self.assertEqual(len(functions), 1)
@@ -591,6 +596,7 @@ class CompletionLimits(unittest.TestCase):
                 ast.Module(body=functions, type_ignores=[]),
                 "original-capture-hook",
                 "exec",
+                flags=__future__.annotations.compiler_flag,
             ),
             namespace,
         )

@@ -54,6 +54,43 @@ class WorkerLimits(unittest.TestCase):
                 ):
                     self.generate(**{field: value})
 
+    def test_generation_prefill_record_precedes_engine_access(self) -> None:
+        ids = [11, 22, 33]
+        tokenizer = SimpleNamespace(encode=lambda *_a, **_k: ids)
+        for site in ("block", "attention", "mlp"):
+            events: list[dict[str, object]] = []
+
+            def stop(event: dict[str, object]) -> None:
+                events.append(event)
+                raise ReachedValidation()
+
+            with self.assertRaises(ReachedValidation):
+                worker.generate(
+                    None,
+                    tokenizer,
+                    None,
+                    "fixture",
+                    2,
+                    7,
+                    record=stop,
+                    activation_site=site,
+                )
+            self.assertEqual(
+                events,
+                [
+                    {
+                        "type": "prefill",
+                        "prompt_tokens": 3,
+                        "prompt_ids": [11, 22, 33],
+                        "layer": 7,
+                        "activation_site": site,
+                        "seed": 0,
+                        "sampling": "greedy",
+                        "dtype": "float32",
+                    }
+                ],
+            )
+
     def test_worker_cpu_argument_and_inherited_os_limit_caps(self):
         for cpu, accepted in ((0, False), (1, True), (90, True), (91, False)):
             for inherited in ((resource.RLIM_INFINITY, resource.RLIM_INFINITY), (1, 2)):
