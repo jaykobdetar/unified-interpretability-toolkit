@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable, Mapping
+from typing import Any, IO, Protocol, TypedDict, TypeVar, cast
 
 from .source import Catalog, Tensor
 from . import svd_summary
@@ -17,41 +19,109 @@ GIB = 1024**3
 WORKER_ROOT = Path(__file__).resolve().parent.parent
 
 
+class SummaryLimits(TypedDict):
+    schema: str
+    axis: int
+    values: int
+    preview_axis: int
+    body_bytes: int
+
+
+class Limits(TypedDict):
+    jobs: int
+    queue: int
+    values: int
+    axis: int
+    svd_axis: int
+    svd_values: int
+    wall_seconds: int
+    svd_summary: SummaryLimits
+    output_bytes: int
+    worker_address_space_mib: int
+
+
+class Metadata(TypedDict):
+    available: bool
+    busy: bool
+    limits: Limits
+    coverage: str
+
+
+class Snapshot(TypedDict):
+    job: str | None
+    status: str
+    result: dict[str, Any] | None
+    error: str | None
+    cleanup_pending: bool
+    worker_alive: bool
+    peak_worker_rss_mib: float
+
+
+class ModelIdentity(TypedDict, total=False):
+    model_identity: str
+    revision: str
+
+
+class ModelMetadata(ModelIdentity):
+    source_identity: str
+    catalog: list[dict[str, Any]]
+
+
+class SummaryContract(TypedDict):
+    model: ModelMetadata
+    tensor: Mapping[str, Any]
+    region: Mapping[str, int]
+    seed: int
+
+
+_Reply = TypeVar("_Reply", covariant=True)
+
+
+class Handler(Protocol[_Reply]):
+    @property
+    def command(self) -> str: ...
+
+    @property
+    def rfile(self) -> IO[bytes]: ...
+
+    def send(self, status: int, body: object) -> _Reply: ...
+
+
 class AnalyticsJobs:
     def __init__(
         self,
-        python,
-        model,
+        python: str | os.PathLike[str],
+        model: str | os.PathLike[str],
         *,
-        inference_busy,
-        fetch_model,
-        available,
-        reap,
-        clock=time.monotonic,
-    ):
+        inference_busy: Callable[[], bool],
+        fetch_model: Callable[[], Mapping[str, Any]],
+        available: Callable[[], int],
+        reap: Callable[[subprocess.Popen[bytes]], bool],
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self.python, self.model = python, Path(model).resolve()
         self.inference_busy, self.fetch_model = inference_busy, fetch_model
         self.available, self.reap, self.clock = available, reap, clock
-        self.process = None
-        self.id = None
+        self.process: subprocess.Popen[bytes] | None = None
+        self.id: str | None = None
         self.status = "idle"
-        self.result = None
-        self.error = None
+        self.result: dict[str, Any] | None = None
+        self.error: str | None = None
         self.buffer = bytearray()
-        self.stop_reason = None
+        self.stop_reason: str | None = None
         self.started = self.last_seen = clock()
         self.peak_rss = 0
-        self.summary_contract = None
+        self.summary_contract: SummaryContract | None = None
 
     @property
-    def busy(self):
+    def busy(self) -> bool:
         return self.process is not None or self.status in (
             "starting",
             "running",
             "stopping",
         )
 
-    def metadata(self):
+    def metadata(self) -> Metadata:
         return {
             "available": True,
             "busy": self.busy or self.inference_busy(),
@@ -76,14 +146,14 @@ class AnalyticsJobs:
             "coverage": "Explicit selected window or bounded catalog prefix; no full-model claim by default",
         }
 
-    def owns(self, job):
+    def owns(self, job: object) -> bool:
         return (
             isinstance(job, str)
             and self.id is not None
             and secrets.compare_digest(job.encode(), self.id.encode())
         )
 
-    def snapshot(self):
+    def snapshot(self) -> Snapshot:
         # Caller must authorize with owns() before returning this owner-private data.
         return {
             "job": self.id,
@@ -95,7 +165,7 @@ class AnalyticsJobs:
             "peak_worker_rss_mib": self.peak_rss / 1024**2,
         }
 
-    def _model(self):
+    def _model(self) -> ModelMetadata:
         metadata = self.fetch_model()
         if (
             "comparison_identity" in metadata
@@ -113,11 +183,14 @@ class AnalyticsJobs:
                 "Validated renderer model differs from configured analytics source"
             )
         return {
-            **{
-                key: metadata[key]
-                for key in ("model_identity", "revision")
-                if key in metadata
-            },
+            **cast(
+                ModelIdentity,
+                {
+                    key: metadata[key]
+                    for key in ("model_identity", "revision")
+                    if key in metadata
+                },
+            ),
             "source_identity": metadata["source_identity"],
             "catalog": [
                 {
@@ -128,7 +201,7 @@ class AnalyticsJobs:
             ],
         }
 
-    def start(self, data):
+    def start(self, data: Any) -> Snapshot:
         self.tick()
         if self.busy or self.inference_busy():
             raise ValueError("Local compute busy; wait for inference/analysis cleanup")
@@ -146,10 +219,12 @@ class AnalyticsJobs:
             model = self._model()
             chosen = validate_request(data, model["catalog"])
             if data.get("scope") == "svd_summary":
-                svd_summary.binding(model, chosen, data["region"], data["seed"])
+                svd_summary.binding(
+                    model, cast(Mapping[str, Any], chosen), data["region"], data["seed"]
+                )
                 self.summary_contract = {
                     "model": model,
-                    "tensor": chosen,
+                    "tensor": cast(Mapping[str, Any], chosen),
                     "region": data["region"],
                     "seed": data["seed"],
                 }
@@ -201,7 +276,7 @@ class AnalyticsJobs:
                     },
                     bufsize=0,
                 )
-            os.set_blocking(self.process.stdout.fileno(), False)
+            os.set_blocking(cast(IO[bytes], self.process.stdout).fileno(), False)
             self.status = "running"
         except Exception:
             self.status = "error"
@@ -209,7 +284,7 @@ class AnalyticsJobs:
             raise
         return self.snapshot()
 
-    def stop(self, reason="cancelled"):
+    def stop(self, reason: str = "cancelled") -> bool:
         if self.process is not None:
             if self.stop_reason is None:
                 self.stop_reason = (
@@ -230,7 +305,7 @@ class AnalyticsJobs:
         self.buffer.clear()
         return True
 
-    def tick(self):
+    def tick(self) -> None:
         if self.process is None:
             if self.result is not None and self.clock() - self.last_seen > 15:
                 self.result = None
@@ -241,13 +316,13 @@ class AnalyticsJobs:
             self.stop()
             return
         try:
-            raw = Path(f"/proc/{self.process.pid}/status").read_text()
+            raw: str | bytes = Path(f"/proc/{self.process.pid}/status").read_text()
             rss = (
                 int(
                     next(
                         (
                             line.split()[1]
-                            for line in raw.splitlines()
+                            for line in cast(str, raw).splitlines()
                             if line.startswith("VmRSS:")
                         ),
                         "0",
@@ -274,7 +349,7 @@ class AnalyticsJobs:
         eof = False
         for _ in range(4):  # 256 KiB maximum drain per tick; no output reader thread.
             try:
-                chunk = os.read(self.process.stdout.fileno(), 65536)
+                chunk = os.read(cast(IO[bytes], self.process.stdout).fileno(), 65536)
             except BlockingIOError:
                 break
             except OSError:
@@ -329,7 +404,9 @@ class AnalyticsJobs:
             self.stop()
 
 
-def route(handler, path, length, jobs):
+def route(
+    handler: Handler[_Reply], path: str, length: int, jobs: AnalyticsJobs
+) -> _Reply:
     """Called only AFTER the coordinator's existing framing/origin/header checks."""
     jobs.tick()
     if handler.command == "GET" and path == "/api/analytics":
