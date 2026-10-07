@@ -167,3 +167,5 @@ The analytics service declares callback and byte-process boundaries, concrete me
 Coordinator transport controls use inert streams, clocks and connection doubles to retain error fields, deadline/tick outcomes, reader/socket identity, partial-send and read behavior, descriptor ownership, closure and proxy response presentation. No socket, listener or child process is opened by these controls.
 
 Coordinator resource/source controls retain process polling and bounded reap choices, sweep budget diagnostics and timer ownership, hash callback/read order, file fingerprints, optional verification callbacks and source-binding fields. Clocks, signal operations and children are inert doubles; hash fixtures contain only tiny local bytes and execute no model.
+
+Coordinator session/handler/startup controls retain default contract values, state snapshots, admission request bytes, handler presentation, bounded cleanup calls and the actual nested startup callbacks. Base handler methods, pipes, server/process construction, signal registration and model verification use inert doubles; no listener, child or model starts.
