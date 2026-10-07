@@ -178,3 +178,45 @@ fn tensor_mapping_cache_preserves_each_original_distribution() {
     assert_eq!(mappings[1].value(0x3f80), 0.625, "second distribution");
     assert!(!Arc::ptr_eq(&mappings[0], &mappings[1]));
 }
+
+#[test]
+fn tensor_mapping_refuses_missing_histogram_before_binding_or_cache() {
+    let _isolation = workspace::guard();
+    let fixture = Fixture::new("missing-histogram");
+    fixture.state.calibrate_one(0).unwrap();
+    fixture
+        .state
+        .calibration
+        .lock()
+        .unwrap()
+        .tensors
+        .get_mut(&0)
+        .unwrap()
+        .histogram_sha256 = None;
+    let tensor = fixture.state.source.tensor(0).unwrap();
+    let result = fixture.state.tensor_mapping(
+        tensor,
+        "tensor_signed_percentile",
+        &json!({"max":1.,"histogram_sha256":"different-histogram"}),
+    );
+    let error = result.err().expect("missing histogram must refuse");
+    assert!(
+        matches!(&error, weight_atlas_rust::Error::Refusal(_)),
+        "missing histogram native refusal family"
+    );
+    assert_eq!(
+        error.to_string(),
+        "Exact percentile histogram is not ready",
+        "missing histogram readiness before legend binding"
+    );
+    assert_eq!(
+        format!("{error:?}"),
+        "\"Exact percentile histogram is not ready\"",
+        "missing histogram debug spelling"
+    );
+    assert!(error.source().is_none(), "missing histogram source chain");
+    assert!(
+        fixture.state.lookups.lock().unwrap().is_empty(),
+        "missing histogram does not populate mapping cache"
+    );
+}
