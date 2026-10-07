@@ -18,6 +18,155 @@ import threading
 
 from .common import require
 
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
+from typing import (
+    Concatenate,
+    Literal,
+    NotRequired,
+    ParamSpec,
+    Protocol,
+    TypeVar,
+    TypedDict,
+    Unpack,
+    cast,
+)
+
+
+class SafeError(TypedDict):
+    type: str
+    errno: int | None
+
+
+class TraceFrame(TypedDict):
+    file: str
+    function: str
+    line: int
+
+
+class ErrorNode(SafeError):
+    message: str
+    frames: list[TraceFrame]
+    frames_truncated: bool
+    cause: int | None
+    context: int | None
+    suppress_context: bool
+
+
+class ErrorChain(TypedDict):
+    exceptions: list[ErrorNode]
+    chain_truncated: bool
+    exception_limit: int
+    total_frame_limit: int
+
+
+class DiagnosticError(SafeError):
+    error_chain: ErrorChain
+
+
+class CaptureError(DiagnosticError):
+    phase: str
+
+
+class PassedFd(TypedDict):
+    fd: int
+    role: str
+    parent_fd_flags: int
+    parent_cloexec: bool
+    parent_inheritable: bool
+    parent_is_socket: bool
+
+
+class ChildFdExpectations(TypedDict, total=False):
+    passed_channel_survives_exec: bool
+    passed_channel_cloexec_after_exec: bool
+    rust_duplicate_uses: str
+    rust_duplicate_cloexec: bool
+    passed_output_survives_exec: bool
+    passed_output_cloexec_after_exec: bool
+    observed_in_child: bool
+
+
+class RecordData(TypedDict):
+    argv: list[str]
+    argv_sanitized: bool
+    passed_fds: list[PassedFd]
+    close_fds: bool
+    start_new_session: bool
+    stdout: str
+    stderr: str
+    child_fd_expectations: ChildFdExpectations
+    pid: int | None
+    reaped: bool
+    wait_status: int | None
+    exit_code: int | None
+    stderr_bytes_seen: int
+    stderr_eof: bool
+    capture_errors: list[CaptureError]
+    launch_error: CaptureError | None
+    initialize_error: NotRequired[DiagnosticError]
+
+
+class RecordUpdates(TypedDict, total=False):
+    passed_fds: list[PassedFd]
+    pid: int | None
+    reaped: bool
+    wait_status: int | None
+    exit_code: int | None
+    stderr_eof: bool
+    launch_error: CaptureError | None
+    initialize_error: DiagnosticError
+
+
+class RecordSnapshot(RecordData):
+    stderr_prefix_bytes: int
+    stderr_truncated: bool
+    stderr_sha256_seen: str
+    stderr_sha256_complete: bool
+    stderr_redaction_policy: str
+
+
+class StoredEvent(TypedDict):
+    json: str
+    count: int
+    first_sequence: int
+    last_sequence: int
+
+
+class EventPayload(TypedDict):
+    site: str
+    thread: str
+    facts: dict[str, object]
+    error_chain: NotRequired[ErrorChain]
+
+
+class EventSnapshot(EventPayload):
+    count: int
+    first_sequence: int
+    last_sequence: int
+
+
+class DiagnosticsSnapshot(TypedDict):
+    version: int
+    attempt_limit: int
+    stderr_prefix_limit: int
+    attempts: list[RecordSnapshot]
+    events: list[EventSnapshot]
+    event_limit: int
+    event_byte_limit: int
+    event_bytes: int
+    events_dropped: int
+
+
+class DiagnosticCollector(Protocol):
+    def event(
+        self, site: str, error: BaseException | None = None, **facts: object
+    ) -> None: ...
+
+
+_Owner = TypeVar("_Owner")
+_Result = TypeVar("_Result")
+_Arguments = ParamSpec("_Arguments")
+
 STDERR_LIMIT = 16 * 1024
 ATTEMPT_LIMIT = 4
 STATIC_ERRORS = frozenset(
@@ -96,28 +245,39 @@ STATIC_ERRORS = STATIC_ERRORS | frozenset(
 )
 
 
-def diagnose(owner, site, error=None, **facts):
-    collector = getattr(owner, "diagnostics", None)
+def diagnose(
+    owner: object, site: str, error: BaseException | None = None, **facts: object
+) -> None:
+    collector: DiagnosticCollector | None = getattr(owner, "diagnostics", None)
     if collector is not None:
         collector.event(site, error, **facts)
 
 
-def diagnosed(site):
-    def decorate(function):
+def diagnosed(
+    site: str,
+) -> Callable[
+    [Callable[Concatenate[_Owner, _Arguments], _Result]],
+    Callable[Concatenate[_Owner, _Arguments], _Result],
+]:
+    def decorate(
+        function: Callable[Concatenate[_Owner, _Arguments], _Result],
+    ) -> Callable[Concatenate[_Owner, _Arguments], _Result]:
         @wraps(function)
-        def call(self, *args, **kwargs):
+        def call(
+            self: _Owner, *args: _Arguments.args, **kwargs: _Arguments.kwargs
+        ) -> _Result:
             try:
                 return function(self, *args, **kwargs)
             except BaseException as error:
                 diagnose(self, site, error)
                 raise
 
-        return call
+        return cast(Callable[Concatenate[_Owner, _Arguments], _Result], call)
 
     return decorate
 
 
-def safe_error(error):
+def safe_error(error: BaseException) -> SafeError:
     # Exception text/filenames can contain private paths or capabilities.
     name = type(error).__name__
     known = {
@@ -142,7 +302,7 @@ def safe_error(error):
     }
 
 
-def sanitized_stderr(raw):
+def sanitized_stderr(raw: bytes | bytearray) -> str:
     lines = []
     for line in raw.decode("utf-8", errors="replace").splitlines():
         message = line.removeprefix("ERROR: ")
@@ -214,7 +374,9 @@ ERROR_CHAIN_LIMIT = 8
 TRACE_FRAME_LIMIT = 64
 
 
-def error_chain(error, *, locations=None):
+def error_chain(
+    error: BaseException, *, locations: Mapping[str | Path, str] | None = None
+) -> ErrorChain:
     """Bounded cause/context graph, safe messages and frame locations; no locals.
 
     Explicit owner mappings identify external harness code without exporting its
@@ -231,6 +393,9 @@ def error_chain(error, *, locations=None):
         / "lib"
         / ("python" + str(sys.version_info.major) + "." + str(sys.version_info.minor))
     )
+    nodes: list[ErrorNode]
+    pending: list[BaseException]
+    indexes: dict[int, int]
     nodes, pending, indexes = [], [error], {id(error): 0}
     frames_left = TRACE_FRAME_LIMIT
     chain_truncated = False
@@ -242,7 +407,7 @@ def error_chain(error, *, locations=None):
             else ""
         )
         message = sanitized_stderr(("ERROR: " + raw_message[:4096]).encode())[:1024]
-        node = {
+        node: ErrorNode = {
             **meta,
             "message": message,
             "frames": [],
@@ -280,8 +445,9 @@ def error_chain(error, *, locations=None):
             frames_left -= 1
             tb = tb.tb_next
         node["frames_truncated"] = tb is not None
+        relation: Literal["cause", "context"]
         for relation in ("cause", "context"):
-            linked = getattr(current, "__" + relation + "__")
+            linked: BaseException | None = getattr(current, "__" + relation + "__")
             if linked is None:
                 continue
             if id(linked) not in indexes:
@@ -301,11 +467,11 @@ def error_chain(error, *, locations=None):
 
 
 class StartupRecord:
-    def __init__(self, fd, *, worker=False):
+    def __init__(self, fd: int, *, worker: bool = False) -> None:
         self.lock = threading.RLock()
         self.raw = bytearray()
         self.digest = hashlib.sha256()
-        self.data = {
+        self.data: RecordData = {
             "argv": [
                 "<qualified-renderer>",
                 "hosted-renderer",
@@ -343,7 +509,7 @@ class StartupRecord:
             "launch_error": None,
         }
         if worker:
-            self.data.update(
+            cast(MutableMapping[str, object], self.data).update(
                 argv=[
                     "<qualified-worker>",
                     "profile-worker",
@@ -376,23 +542,23 @@ class StartupRecord:
                 },
             )
 
-    def update(self, **values):
+    def update(self, **values: Unpack[RecordUpdates]) -> None:
         with self.lock:
-            self.data.update(values)
+            cast(MutableMapping[str, object], self.data).update(values)
 
-    def capture_error(self, phase, error):
+    def capture_error(self, phase: str, error: BaseException) -> None:
         with self.lock:
             self.data["capture_errors"].append(
                 {"phase": phase, **safe_error(error), "error_chain": error_chain(error)}
             )
 
-    def feed(self, raw):
+    def feed(self, raw: bytes | bytearray) -> None:
         with self.lock:
             self.data["stderr_bytes_seen"] += len(raw)
             self.digest.update(raw)
             self.raw.extend(raw[: max(0, STDERR_LIMIT - len(self.raw))])
 
-    def snapshot(self):
+    def snapshot(self) -> RecordSnapshot:
         with self.lock:
             return {
                 **deepcopy(self.data),
@@ -413,15 +579,17 @@ class StartupDiagnostics:
     callbacks, background threads, command/response payloads or capabilities.
     """
 
-    def __init__(self):
-        self.records = []
+    def __init__(self) -> None:
+        self.records: list[StartupRecord] = []
         self.lock = threading.RLock()
-        self.events = []
+        self.events: list[StoredEvent] = []
         self.event_bytes = 0
         self.events_dropped = 0
         self.sequence = 0
 
-    def event(self, site, error=None, **facts):
+    def event(
+        self, site: str, error: BaseException | None = None, **facts: object
+    ) -> None:
         # Only fixed sites and scalar accounting facts; never copy request dicts.
         require(
             re.fullmatch(r"[A-Za-z0-9_.]{1,80}", site) is not None,
@@ -467,7 +635,7 @@ class StartupDiagnostics:
         ):
             facts["probe"] = probe
         thread = threading.current_thread().name
-        payload = {
+        payload: EventPayload = {
             "site": site,
             "thread": (
                 thread
@@ -504,7 +672,7 @@ class StartupDiagnostics:
             )
             self.event_bytes += len(serialized)
 
-    def prepare(self, argv, pass_fds):
+    def prepare(self, argv: Sequence[str], pass_fds: Iterable[int]) -> StartupRecord:
         renderer = (
             len(argv) == 12
             and argv[1] == "hosted-renderer"
@@ -568,20 +736,23 @@ class StartupDiagnostics:
             raise
         return record
 
-    def snapshot(self):
+    def snapshot(self) -> DiagnosticsSnapshot:
         with self.lock:
             return {
                 "version": 1,
                 "attempt_limit": ATTEMPT_LIMIT,
                 "stderr_prefix_limit": STDERR_LIMIT,
                 "attempts": [record.snapshot() for record in self.records],
-                "events": [
-                    {
-                        **json.loads(e["json"]),
-                        **{k: v for k, v in e.items() if k != "json"},
-                    }
-                    for e in self.events
-                ],
+                "events": cast(
+                    list[EventSnapshot],
+                    [
+                        {
+                            **json.loads(e["json"]),
+                            **{k: v for k, v in e.items() if k != "json"},
+                        }
+                        for e in self.events
+                    ],
+                ),
                 "event_limit": 64,
                 "event_byte_limit": 512 * 1024,
                 "event_bytes": self.event_bytes,
