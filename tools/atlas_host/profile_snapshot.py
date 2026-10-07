@@ -20,6 +20,41 @@ from .cache import binding as validate_binding
 from .startup_diagnostics import diagnose, diagnosed
 from .common import canonical, digest, integer, require
 
+from collections.abc import Callable, Generator, Iterator
+from typing import Any, NotRequired, TypedDict, Unpack, cast
+
+
+class PublicationOptions(TypedDict):
+    minimum_visited: int
+    maximum_visited: int
+    deadline: float
+    source_check: Callable[[], object]
+    final_check: Callable[[], object]
+    clock: NotRequired[Callable[[], float]]
+
+
+class SnapshotPageRow(TypedDict):
+    index: int
+    sum_abs: float
+    visited_count: int
+    expected_count: int
+    mean_abs: float | None
+    complete: bool
+
+
+class SnapshotPage(TypedDict):
+    revision: str
+    binding: dict[str, Any]
+    axis: str
+    start: int
+    end: int
+    axis_length: int
+    visited_values: int
+    total_values: int
+    original: list[SnapshotPageRow]
+    control: list[SnapshotPageRow]
+
+
 HEADER = struct.Struct("<8sII7Q32s32s32s")
 RECORD = struct.Struct("<ddQ")
 ALGORITHM = b"weight-atlas-strength-snapshot-v1:kahan-f64-abs:swap-or-not-8-v1"
@@ -39,7 +74,7 @@ FINITE_MAX = {
 }
 
 
-def layout(selected):
+def layout(selected: dict[str, Any]) -> tuple[int, int, bytes]:
     selected = validate_binding(selected)
     rows, cols = selected["rows"], selected["cols"]
     integer(rows, 1, 200000)
@@ -53,20 +88,20 @@ def layout(selected):
     return frame, live, raw
 
 
-def profile_identity(selected, seed):
+def profile_identity(selected: dict[str, Any], seed: int) -> bytes:
     integer(seed, 0, 2**32 - 1)
     return hashlib.sha256(
         canonical(["weight-atlas-strength-v1", selected, seed, "swap-or-not-8-v1"])
     ).digest()
 
 
-def _mix(x):
+def _mix(x: int) -> int:
     x = ((x ^ (x >> 30)) * 0xBF58476D1CE4E5B9) & MASK
     x = ((x ^ (x >> 27)) * 0x94D049BB133111EB) & MASK
     return x ^ (x >> 31)
 
 
-def destination(index, total, seed):
+def destination(index: int, total: int, seed: int) -> int:
     for round_index in range(8):
         key = _mix(seed ^ ((round_index * 0x9E3779B97F4A7C15) & MASK))
         other = (key % total - index) % total
@@ -75,11 +110,11 @@ def destination(index, total, seed):
     return index
 
 
-def _deadline(deadline, clock):
+def _deadline(deadline: float, clock: Callable[[], float]) -> None:
     require(clock() < deadline, "Snapshot deadline exhausted; Restart may be required")
 
 
-def new_memfd():
+def new_memfd() -> int:
     require(
         hasattr(os, "memfd_create") and hasattr(fcntl, "F_ADD_SEALS"),
         "Sealed memfd is unavailable; no disk fallback",
@@ -87,11 +122,11 @@ def new_memfd():
     return os.memfd_create("atlas-profile", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
 
 
-def seal(fd):
+def seal(fd: int) -> None:
     fcntl.fcntl(fd, fcntl.F_ADD_SEALS, SEALS)
 
 
-def check_sealed(fd, size):
+def check_sealed(fd: int, size: int) -> None:
     metadata = os.fstat(fd)
     require(
         stat.S_ISREG(metadata.st_mode)
@@ -105,7 +140,7 @@ def check_sealed(fd, size):
     )
 
 
-def _read(fd, count, offset):
+def _read(fd: int, count: int, offset: int) -> bytes:
     data = os.pread(fd, count, offset)
     require(len(data) == count, "Truncated snapshot")
     return data
@@ -121,8 +156,14 @@ class SnapshotInfo:
 
 
 def validation_steps(
-    fd, selected, seed, expected_revision, *, deadline, clock=time.monotonic
-):
+    fd: int,
+    selected: dict[str, Any],
+    seed: int,
+    expected_revision: str,
+    *,
+    deadline: float,
+    clock: Callable[[], float] = time.monotonic,
+) -> Generator[None, None, SnapshotInfo]:
     """Streaming full validation; no allocation from frame-provided dimensions.
 
     Control prefix verification is time bounded, potentially O(visited). It may
@@ -265,7 +306,15 @@ def validation_steps(
     return SnapshotInfo(expected_revision, visited, total, frame, live)
 
 
-def validate(fd, selected, seed, expected_revision, *, deadline, clock=time.monotonic):
+def validate(
+    fd: int,
+    selected: dict[str, Any],
+    seed: int,
+    expected_revision: str,
+    *,
+    deadline: float,
+    clock: Callable[[], float] = time.monotonic,
+) -> SnapshotInfo:
     steps = validation_steps(
         fd, selected, seed, expected_revision, deadline=deadline, clock=clock
     )
@@ -273,7 +322,7 @@ def validate(fd, selected, seed, expected_revision, *, deadline, clock=time.mono
         try:
             next(steps)
         except StopIteration as done:
-            return done.value
+            return cast(SnapshotInfo, done.value)
 
 
 class SnapshotStore:
@@ -284,27 +333,31 @@ class SnapshotStore:
     and final_check are mandatory trusted callbacks. No visitor-supplied FDs.
     """
 
-    def __init__(self, selected, seed, *, diagnostics=None):
+    def __init__(
+        self, selected: dict[str, Any], seed: int, *, diagnostics: object = None
+    ) -> None:
         self.diagnostics = diagnostics
         self.selected = validate_binding(selected)
         integer(seed, 0, 2**32 - 1)
         self.seed = seed
         self.frame_bytes, self.live_bytes, _ = layout(self.selected)
+        self.latest: int | None
+        self.pending: int | None
         self.latest = self.pending = None
-        self.info = None
+        self.info: SnapshotInfo | None = None
         self.readers = 0
         self.lock = threading.RLock()
         self.publication_serial = 0
         # Role-independent immutable tuple: watchdog reads never acquire lock,
         # and storage stays charged during a delayed or uncertain close.
-        self._owned = ()
-        self._uncertain = frozenset()
+        self._owned: tuple[int, ...] = ()
+        self._uncertain: frozenset[int] = frozenset()
 
     @property
-    def owned_storage_bytes(self):
+    def owned_storage_bytes(self) -> int:
         return len(self._owned) * self.frame_bytes
 
-    def _close_owned(self, fd):
+    def _close_owned(self, fd: int) -> None:
         require(
             fd in self._owned and fd not in self._uncertain,
             "Snapshot close disposition uncertain; do not retry descriptor",
@@ -323,7 +376,7 @@ class SnapshotStore:
             raise
         self._owned = tuple(owned for owned in self._owned if owned != fd)
 
-    def require_settled(self):
+    def require_settled(self) -> None:
         require(
             not self._uncertain
             and set(self._owned)
@@ -331,7 +384,7 @@ class SnapshotStore:
             "Uncertain retiring snapshot storage still owned",
         )
 
-    def begin(self):
+    def begin(self) -> int:
         with self.lock:
             self.require_settled()
             require(
@@ -342,7 +395,7 @@ class SnapshotStore:
             self._owned = self._owned + (self.pending,)
             return self.pending
 
-    def abort_candidate(self):
+    def abort_candidate(self) -> None:
         with self.lock:
             if self.pending is not None:
                 fd, self.pending = self.pending, None
@@ -350,21 +403,21 @@ class SnapshotStore:
 
     def publication_steps(
         self,
-        revision,
+        revision: str,
         *,
-        minimum_visited,
-        maximum_visited,
-        deadline,
-        source_check,
-        final_check,
-        clock=time.monotonic,
-    ):
+        minimum_visited: int,
+        maximum_visited: int,
+        deadline: float,
+        source_check: Callable[[], object],
+        final_check: Callable[[], object],
+        clock: Callable[[], float] = time.monotonic,
+    ) -> Generator[None, None, SnapshotInfo]:
         require(self.pending is not None, "No owned candidate")
         try:
             source_check()
             _deadline(deadline, clock)
             info = yield from validation_steps(
-                self.pending,
+                cast(int, self.pending),
                 self.selected,
                 self.seed,
                 revision,
@@ -394,16 +447,20 @@ class SnapshotStore:
             self.abort_candidate()
             raise
 
-    def publish(self, revision, **kwargs):
+    def publish(
+        self, revision: str, **kwargs: Unpack[PublicationOptions]
+    ) -> SnapshotInfo:
         steps = self.publication_steps(revision, **kwargs)
         while True:
             try:
                 next(steps)
             except StopIteration as done:
-                return done.value
+                return cast(SnapshotInfo, done.value)
 
     @contextmanager
-    def page_handle(self, revision, *, expected_publication=None):
+    def page_handle(
+        self, revision: str, *, expected_publication: int | None = None
+    ) -> Iterator[tuple[int, SnapshotInfo]]:
         # Serial host callback. No next admission/publication until reader exits;
         # no extra generation or duplicated FD escapes this context manager.
         with self.lock:
@@ -413,12 +470,13 @@ class SnapshotStore:
                 "Snapshot publication has not been accepted",
             )
             require(
-                self.latest is not None and self.info.revision == revision,
+                self.latest is not None
+                and cast(SnapshotInfo, self.info).revision == revision,
                 "Stale snapshot revision",
             )
             require(self.readers == 0, "One bounded page reader at a time")
             self.readers += 1
-            held = (self.latest, self.info)
+            held = (cast(int, self.latest), cast(SnapshotInfo, self.info))
         try:
             yield held
         finally:
@@ -426,8 +484,15 @@ class SnapshotStore:
                 self.readers -= 1
 
     def page(
-        self, revision, axis, start, count, *, source_check, expected_publication=None
-    ):
+        self,
+        revision: str,
+        axis: str,
+        start: int,
+        count: int,
+        *,
+        source_check: Callable[[], object],
+        expected_publication: int | None = None,
+    ) -> SnapshotPage:
         require(axis in ("rows", "columns"), "Invalid profile page axis")
         rows, cols = self.selected["rows"], self.selected["cols"]
         length, expected = (rows, cols) if axis == "rows" else (cols, rows)
@@ -442,10 +507,10 @@ class SnapshotStore:
         ):
             source_check()
             check_sealed(fd, self.frame_bytes)
-            paired = []
+            paired: list[list[SnapshotPageRow]] = []
             for position in positions:
                 raw = _read(fd, (end - start) * 24, base + 24 * (position + start))
-                records = []
+                records: list[SnapshotPageRow] = []
                 for index, (value, _, visited) in enumerate(
                     RECORD.iter_unpack(raw), start
                 ):
@@ -461,7 +526,7 @@ class SnapshotStore:
                     )
                 paired.append(records)
             source_check()
-            result = {
+            result: SnapshotPage = {
                 "revision": info.revision,
                 "binding": self.selected,
                 "axis": axis,
@@ -481,7 +546,7 @@ class SnapshotStore:
             result["binding"] = validate_binding(self.selected)
             return result
 
-    def close(self):
+    def close(self) -> None:
         with self.lock:
             require(self.readers == 0, "Close deferred until page reader exits")
             self.latest = self.pending = self.info = None
