@@ -829,9 +829,22 @@ fn reply_view(state: &State, socket: TcpStream, q: &Query) {
             q.get("left", "global_linear"),
             q.get("right", "global_asinh"),
         )?;
-        Ok(
-            json!({"api_version":1,"tensor":selected,"source_binding":state.slice_binding(&slice),"legends":l,"tile_bindings":{"left":state.tile_binding_for(&slice,q.get("left","global_linear"),&l["left"]),"right":state.tile_binding_for(&slice,q.get("right","global_asinh"),&l["right"])},"tile_size":256,"overlap":0,"source_values_unchanged":true}),
-        )
+        Ok(response::View {
+            tensor: selected,
+            source_binding: state.slice_binding(&slice),
+            left_binding: state.tile_binding_for(
+                &slice,
+                q.get("left", "global_linear"),
+                &l["left"],
+            ),
+            right_binding: state.tile_binding_for(
+                &slice,
+                q.get("right", "global_asinh"),
+                &l["right"],
+            ),
+            legends: l,
+        }
+        .into())
     })();
     match result {
         Ok(v) => json_reply(socket, 200, v),

@@ -1,4 +1,4 @@
-//! Typed inspection fields converted at the existing JSON value boundary.
+//! Typed viewer response fields converted at the existing JSON value boundary.
 use serde_json::{Map, Value};
 
 pub(super) struct Inspection<'a> {
@@ -52,6 +52,38 @@ impl From<Inspection<'_>> for Value {
             ("transformed", Value::Object(response.transformed)),
             ("transform_errors", Value::Object(response.transform_errors)),
             ("transforms_ready", Value::from(response.transforms_ready)),
+        ];
+        Value::Object(Map::from_iter(
+            fields
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value)),
+        ))
+    }
+}
+
+pub(super) struct View {
+    pub tensor: Value,
+    pub source_binding: Value,
+    pub legends: Value,
+    pub left_binding: String,
+    pub right_binding: String,
+}
+
+impl From<View> for Value {
+    fn from(response: View) -> Self {
+        let bindings = Map::from_iter([
+            ("left".to_owned(), Value::from(response.left_binding)),
+            ("right".to_owned(), Value::from(response.right_binding)),
+        ]);
+        let fields = [
+            ("api_version", Value::from(1)),
+            ("tensor", response.tensor),
+            ("source_binding", response.source_binding),
+            ("legends", response.legends),
+            ("tile_bindings", Value::Object(bindings)),
+            ("tile_size", Value::from(256)),
+            ("overlap", Value::from(0)),
+            ("source_values_unchanged", Value::from(true)),
         ];
         Value::Object(Map::from_iter(
             fields
