@@ -8,7 +8,8 @@ from pathlib import Path
 import resource
 import sys
 import time
-from typing import Any
+from typing import Any, TYPE_CHECKING, cast
+from collections.abc import Callable
 
 # Set before importing numerical libraries, including when imported by reference tests.
 for key in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
@@ -42,7 +43,11 @@ from atlas_host.inference_observations import (
     validate_record,
 )
 
-from atlas_host.inference_generation import GenerationBindings, run as run_generation
+from atlas_host.inference_generation import (
+    GenerationBindings,
+    Observation,
+    run as run_generation,
+)
 from atlas_host.inference_engine import LoaderRuntime, load_engine as bound_load_engine
 from atlas_host.inference_comparison import (
     ComparisonBindings,
@@ -55,13 +60,18 @@ from atlas_host.inference_architecture import architecture
 from atlas_host.inference_services import InferenceContracts
 
 
-def emit(record):
+def emit(record: object) -> None:
     print(json.dumps(record, allow_nan=False, separators=(",", ":")), flush=True)
 
 
 def load_engine(directory: Path) -> tuple[Any, Any, Any]:
-    import torch
-    from transformers import LlamaForCausalLM, PreTrainedTokenizerFast
+    if TYPE_CHECKING:
+        torch: Any
+        LlamaForCausalLM: type[Any]
+        PreTrainedTokenizerFast: type[Any]
+    else:
+        import torch
+        from transformers import LlamaForCausalLM, PreTrainedTokenizerFast
 
     def verify_parameters(model: Any) -> object:
         from atlas_host.inference_edits import verified_parameters
@@ -118,8 +128,8 @@ def generate(
     limit: Any,
     layer: Any,
     record: Record = emit,
-    capture_scores: Any = None,
-    activation_site: str = "block",
+    capture_scores: Callable[[Any], None] | None = None,
+    activation_site: object = "block",
     observation: Any = None,
 ) -> None:
     contracts = _contracts()
@@ -143,12 +153,15 @@ def generate(
             vocab=value.vocab_size,
             capture_sites=value.capture_sites,
             attention_semantics=ATTENTION_SEMANTICS,
-            validate_observation=contracts.validate_observation,
+            validate_observation=cast(
+                Callable[[Observation, str], Observation],
+                contracts.validate_observation,
+            ),
             validate_record=contracts.validate_record,
             lens_record=contracts.lens_record,
         ),
         capture_scores=capture_scores,
-        activation_site=activation_site,
+        activation_site=cast(str, activation_site),
         observation=observation,
     )
 
@@ -191,7 +204,7 @@ def compare(
     )
 
 
-def configure_worker_limits(cpu_seconds=90):
+def configure_worker_limits(cpu_seconds: object = 90) -> None:
     if type(cpu_seconds) is not int or not 1 <= cpu_seconds <= 90:
         raise ValueError("Invalid remaining worker CPU allowance")
     for kind, limit in (
@@ -204,6 +217,11 @@ def configure_worker_limits(cpu_seconds=90):
 
 
 def main() -> None:
+    if TYPE_CHECKING:
+        Tokenizer: type[Any]
+        transformers: Any
+        tokenizers: Any
+        safetensors: Any
     os.sched_setaffinity(0, {min(os.sched_getaffinity(0))})
     os.nice(10)
     if len(sys.argv) not in (2, 4):
@@ -236,7 +254,8 @@ def main() -> None:
         budget = SweepAdmissionBudget(sweep_deadline, cpu_allowance)
         with budget.verification():
             verify_model(directory, check=budget.check)
-        from tokenizers import Tokenizer
+        if not TYPE_CHECKING:
+            from tokenizers import Tokenizer
 
         preview_tokenizer = Tokenizer.from_file(str(directory / "tokenizer.json"))
         if any(
@@ -254,7 +273,8 @@ def main() -> None:
     pair_preview = None
     if request.get("mode") in prompt_pair.MODES:
         request = contracts.validate_request(request)
-        from tokenizers import Tokenizer
+        if not TYPE_CHECKING:
+            from tokenizers import Tokenizer
 
         preview_tokenizer = Tokenizer.from_file(str(directory / "tokenizer.json"))
         pair_preview = contracts.token_preview(preview_tokenizer, request["prompts"])
@@ -284,7 +304,9 @@ def main() -> None:
     started = time.perf_counter()
     torch, tokenizer, model = load_engine(directory)
     import platform
-    import transformers, tokenizers, safetensors
+
+    if not TYPE_CHECKING:
+        import transformers, tokenizers, safetensors
 
     emit(
         {

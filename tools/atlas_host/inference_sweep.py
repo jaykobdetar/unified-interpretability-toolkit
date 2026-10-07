@@ -1,7 +1,7 @@
 """One bounded fixed-context sweep: explicit subset, deterministic controls, undo."""
 
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 from collections.abc import Callable, Iterable, Iterator
 from atlas_host.inference_experiments import Generate, Record
 from atlas_host.inference_architecture import architecture
@@ -340,7 +340,7 @@ def run(
     model: Any,
     request: dict[str, Any],
     plan: Any,
-    deadline: float,
+    deadline: float | None,
     generate: Generate,
     record: Record,
     clock: Callable[[], float] = time.monotonic,
@@ -353,7 +353,7 @@ def run(
     total_ms = 0.0
 
     def exhausted() -> bool:
-        return deadline - clock() < 10 or (
+        return cast(float, deadline) - clock() < 10 or (
             cpu_deadline is not None and cpu_deadline - cpu_clock() < 5
         )
 

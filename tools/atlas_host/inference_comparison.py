@@ -20,7 +20,7 @@ class ComparisonBindings:
     ]
     validate_edits: Callable[[object, object], object]
     verified_parameters: Callable[[Any], object]
-    apply_edits: Callable[[Any, Any, object, object], None]
+    apply_edits: Callable[[Any, Any, object, object], object]
 
 
 def paired_step(
