@@ -230,7 +230,7 @@ def main() -> None:
     configure_worker_limits(cpu_allowance)
     # Entire request is bounded by coordinator and again here.
     request = json.loads(sys.stdin.buffer.readline(8193))
-    from live_inference import verify_model, SweepAdmissionBudget
+    from atlas_host.live_inference import verify_model, SweepAdmissionBudget
 
     directory = Path(sys.argv[1])
     from atlas_host import inference_prompt_pair as prompt_pair
