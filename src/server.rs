@@ -377,14 +377,12 @@ fn accept_backoff(failures: u32) -> Duration {
     Duration::from_millis((10u64 << failures.min(6)).min(250))
 }
 
-pub fn serve(state: Arc<State>, port: u16) -> Result<()> {
-    let listener = TcpListener::bind(("127.0.0.1", port))?;
-    let port = listener.local_addr()?.port();
-    let reuse = reuse_transport::Runtime::new().ok();
-    let worker_reuse = reuse.clone();
-    let (sender, receiver) = sync_channel::<Job>(8);
-    let worker = state.clone();
-    std::thread::Builder::new().name("atlas-numeric-worker".into()).spawn(move || loop {
+fn numeric_worker(
+    receiver: &std::sync::mpsc::Receiver<Job>,
+    worker: &Arc<State>,
+    worker_reuse: &Option<Arc<reuse_transport::Runtime>>,
+) {
+    loop {
         let job = match receiver.try_recv() {
             Ok(job) => Some(job),
             Err(TryRecvError::Disconnected) => break,
@@ -393,17 +391,27 @@ pub fn serve(state: Arc<State>, port: u16) -> Result<()> {
         let job = job.or_else(|| {
             let all = worker.progress.lock().unwrap().all_requested;
             let next = if all {
-                worker.source.tensors.iter().find(|t| t.available && worker.stats(t.id).is_none()).map(|t| t.id)
-            } else { None };
-            if let Some(id) = next { Some(Job::Calibrate(id)) }
-            else {
-                if all { worker.progress.lock().unwrap().all_requested = false; }
+                worker
+                    .source
+                    .tensors
+                    .iter()
+                    .find(|t| t.available && worker.stats(t.id).is_none())
+                    .map(|t| t.id)
+            } else {
+                None
+            };
+            if let Some(id) = next {
+                Some(Job::Calibrate(id))
+            } else {
+                if all {
+                    worker.progress.lock().unwrap().all_requested = false;
+                }
                 // OS channel wait; explicit calibration/tile sends wake the worker.
                 receiver.recv().ok()
             }
         });
         match job {
-            Some(Job::Wake) => {},
+            Some(Job::Wake) => {}
             Some(Job::Calibrate(id)) => {
                 if let Err(error) = worker.calibrate_one(id) {
                     eprintln!("Calibration paused: {error}");
@@ -411,7 +419,9 @@ pub fn serve(state: Arc<State>, port: u16) -> Result<()> {
                 }
             }
             Some(Job::Tile(connection, q)) => {
-                if disconnected(&connection.socket) { continue; }
+                if disconnected(&connection.socket) {
+                    continue;
+                }
                 if connection.expired(Instant::now()) {
                     connection.close_error(503, "Connection reuse eligibility expired");
                     continue;
@@ -419,28 +429,56 @@ pub fn serve(state: Arc<State>, port: u16) -> Result<()> {
                 let start = Instant::now();
                 let result = (|| {
                     let binding = q.get("binding", "");
-                    worker.tile_slice_bound(q.int("tensor", "0")?, &parse_indices(q.get("slice", ""))?,
-                        q.get("rule", "global_linear"), q.int("level", "0")?.try_into()?,
-                        q.int("x", "0")?, q.int("y", "0")?, (!binding.is_empty()).then_some(binding))
+                    worker.tile_slice_bound(
+                        q.int("tensor", "0")?,
+                        &parse_indices(q.get("slice", ""))?,
+                        q.get("rule", "global_linear"),
+                        q.int("level", "0")?.try_into()?,
+                        q.int("x", "0")?,
+                        q.int("y", "0")?,
+                        (!binding.is_empty()).then_some(binding),
+                    )
                 })();
                 match result {
                     Ok((png, cached, metrics)) => {
                         let mut headers = format!("X-Atlas-Factor: {}\r\nX-Atlas-Cache: {}\r\nX-Atlas-Seconds: {:.6}\r\nX-Atlas-Source-Bytes: {}\r\n",
                             metrics.factor, if cached { "hit" } else { "miss" }, start.elapsed().as_secs_f64(), metrics.source_bytes_read);
                         if !q.get("binding", "").is_empty() {
-                            headers.push_str("Cache-Control: private, max-age=86400, immutable\r\n");
+                            headers
+                                .push_str("Cache-Control: private, max-age=86400, immutable\r\n");
                         }
-                        reuse_transport::reply_tile(connection, &png, &headers, worker_reuse.as_deref());
+                        reuse_transport::reply_tile(
+                            connection,
+                            &png,
+                            &headers,
+                            worker_reuse.as_deref(),
+                        );
                     }
                     Err(error_value) => {
-                        let code = if error_value.to_string().contains("not ready") { 503 } else { 400 };
+                        let code = if error_value.to_string().contains("not ready") {
+                            503
+                        } else {
+                            400
+                        };
                         connection.close_error(code, error_value);
                     }
                 }
             }
             None => break,
         }
-    })?;
+    }
+}
+
+pub fn serve(state: Arc<State>, port: u16) -> Result<()> {
+    let listener = TcpListener::bind(("127.0.0.1", port))?;
+    let port = listener.local_addr()?.port();
+    let reuse = reuse_transport::Runtime::new().ok();
+    let worker_reuse = reuse.clone();
+    let (sender, receiver) = sync_channel::<Job>(8);
+    let worker = state.clone();
+    std::thread::Builder::new()
+        .name("atlas-numeric-worker".into())
+        .spawn(move || numeric_worker(&receiver, &worker, &worker_reuse))?;
     let (dispatch_sender, dispatch_receiver) =
         sync_channel::<reuse_transport::Completed>(DISPATCH_CAPACITY);
     let dispatch_state = state.clone();
