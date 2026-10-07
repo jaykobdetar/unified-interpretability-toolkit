@@ -3,6 +3,8 @@
 from copy import deepcopy
 import json
 import math
+from pathlib import Path
+from typing import Any, Callable, ContextManager, NotRequired, TypedDict, cast
 import os
 import shutil
 import select
@@ -19,20 +21,23 @@ from .profile_os import (
     LinuxProfileHooks,
     ProcessBook,
     FrozenBinary,
+    OwnedProcess,
+    ProfileSource,
     strict_json,
-    available_bytes,
     require_platform,
 )
-from .profile_service import ProfileService
-from .runtime_adapter import FixtureHost, check_fixture
-from .static_models import StaticPolicy
-from .supervisor import Supervisor
+from .memory import available_bytes
+from .profile_service import ProfileService, WatchSlot
+from .runtime_adapter import FixtureHost, NativeResponse, check_fixture
+from .static_models import PreparedStatic, StaticPolicy
+from .supervisor import AdmissionGrant, ComputeToken, Supervisor
 from .validation_policy import check_start, check_memory, BoundValidationPolicy
-from .registry import reservation
+from .registry import Registry, RegistryEntry, reservation
 from .profile_observation import SpawnObservationPending
 from .dense_static_admission import BoundDenseStaticAdmission, check_cache_available
 from .lifetime_guard import LifetimeGuard
-from .static_operation import StaticOperation as StaticOperation
+from .startup_diagnostics import StartupDiagnostics
+from .static_operation import OperationReader, StaticOperation as StaticOperation
 
 ROUTE_KIND = {
     "/tile": ("tile", "tile"),
@@ -46,18 +51,27 @@ ROUTE_KIND = {
 }
 
 
+class SpawnOptions(TypedDict):
+    pass_fds: tuple[int, ...]
+    receipt: bool
+    diagnostics: NotRequired[StartupDiagnostics]
+
+
 class NativeChannel:
     def __init__(
         self,
-        stream,
-        child,
-        supervisor,
-        service,
-        book,
+        stream: socket.socket,
+        child: OwnedProcess,
+        supervisor: Supervisor,
+        service: ProfileService,
+        book: ProcessBook,
         *,
-        clock=time.monotonic,
-        wait=select.select,
-    ):
+        clock: Callable[[], float] = time.monotonic,
+        wait: Callable[
+            [list[socket.socket], list[socket.socket], list[socket.socket], float],
+            object,
+        ] = select.select,
+    ) -> None:
         self.stream, self.child, self.supervisor, self.service, self.book = (
             stream,
             child,
@@ -69,13 +83,20 @@ class NativeChannel:
         self.failed = False
         self.settled_cpu = 0.0
         self.cpu_seen = 0.0
-        self.token = None
-        self.slot = None
+        self.token: ComputeToken | None = None
+        self.slot: WatchSlot | None = None
         self.lock = threading.RLock()
 
-    def _io(self, data, size, deadline, *, check=None):
+    def _io(
+        self,
+        data: bytes | None,
+        size: int | None,
+        deadline: float,
+        *,
+        check: Callable[[], object] | None = None,
+    ) -> bytes:
         result = bytearray()
-        while data if data is not None else len(result) < size:
+        while data if data is not None else len(result) < cast(int, size):
             if check is not None:
                 check()
             remaining = deadline - self.clock()
@@ -94,14 +115,14 @@ class NativeChannel:
                     require(n > 0, "Native channel closed")
                     data = data[n:]
                 else:
-                    part = self.stream.recv(size - len(result))
+                    part = self.stream.recv(cast(int, size) - len(result))
                     require(bool(part), "Native channel closed")
                     result.extend(part)
             except BlockingIOError:
                 continue
         return bytes(result)
 
-    def _reap_owned(self, token):
+    def _reap_owned(self, token: ComputeToken) -> bool:
         # All token transitions are serialized by self.lock. Repeated/late
         # observations of a completed operation are no-ops, not new watchers.
         if self.token is not token:
@@ -119,14 +140,14 @@ class NativeChannel:
             self.slot.disarm()  # Nonwaiting: safe inside the current callback.
         return True
 
-    def _fail_owned(self, token):
+    def _fail_owned(self, token: ComputeToken) -> None:
         self.failed = True
         self.child.stop()
         if self.token is token:
             token.poison()
             self._reap_owned(token)
 
-    def idle_pulse(self):
+    def idle_pulse(self) -> None:
         with self.lock:
             if self.failed:
                 return
@@ -151,7 +172,9 @@ class NativeChannel:
                 cpu - self.settled_cpu < 4.0, "Unsettled idle CPU allowance exhausted"
             )
 
-    def _static_read(self, path, context, operation):
+    def _static_read(
+        self, path: str, context: str, operation: StaticOperation
+    ) -> NativeResponse:
         require(
             type(operation) is StaticOperation
             and operation.app.supervisor is self.supervisor,
@@ -209,7 +232,9 @@ class NativeChannel:
         # ACK is native idle, not handler publication. Token/watch remain owned.
         return header["status"], body, header["mime"]
 
-    def read(self, path, context, *, operation=None):
+    def read(
+        self, path: str, context: str, *, operation: StaticOperation | None = None
+    ) -> NativeResponse:
         if operation is not None:
             return self._static_read(path, context, operation)
         with self.lock:
@@ -238,7 +263,7 @@ class NativeChannel:
             raise
         baseline = self.child.cpu
 
-        def guard():
+        def guard() -> None:
             with self.lock:
                 if self.token is not token:
                     return
@@ -314,7 +339,7 @@ class NativeChannel:
         finally:
             meter.freeze()
 
-    def stop(self):
+    def stop(self) -> bool:
         with self.lock:
             self.failed = True
             self.child.stop()
@@ -333,21 +358,21 @@ class NativeChannel:
 class HostedRenderer:
     def __init__(
         self,
-        entry,
-        cache,
-        binary,
-        book,
-        supervisor,
-        service,
-        diagnostics=None,
+        entry: RegistryEntry,
+        cache: str | Path,
+        binary: FrozenBinary,
+        book: ProcessBook,
+        supervisor: Supervisor,
+        service: ProfileService,
+        diagnostics: StartupDiagnostics | None = None,
         *,
-        operation=None,
-    ):
+        operation: StaticOperation | None = None,
+    ) -> None:
         require(book.settled(), "Previous owned process cleanup pending")
         self.stream, peer = socket.socketpair()
         self.stream.setblocking(False)
-        self.channel = None
-        self.child = None
+        self.channel: NativeChannel | None = None
+        self.child: OwnedProcess | None = None
         try:
             binary.check()
             argv = [
@@ -364,7 +389,7 @@ class HostedRenderer:
                 "--channel-fd",
                 str(peer.fileno()),
             ]
-            kwargs = {"pass_fds": (peer.fileno(),), "receipt": False}
+            kwargs: SpawnOptions = {"pass_fds": (peer.fileno(),), "receipt": False}
             if diagnostics is not None:
                 kwargs["diagnostics"] = diagnostics
             self.child = book.spawn(argv, **kwargs)
@@ -374,7 +399,7 @@ class HostedRenderer:
                 self.stream, self.child, supervisor, service, book
             )
             if operation is not None:
-                operation.add_reader(self)
+                operation.add_reader(cast(OperationReader, self))
         except BaseException:
             if self.child is not None:
                 self.child.stop()
@@ -383,28 +408,35 @@ class HostedRenderer:
         finally:
             peer.close()
 
-    def initialize(self):
-        self.child.initialize()
+    def initialize(self) -> None:
+        cast(OwnedProcess, self.child).initialize()
 
-    def alive(self):
-        return not self.child.sample()["reaped"] and not self.channel.failed
+    def alive(self) -> bool:
+        return (
+            not cast(OwnedProcess, self.child).sample()["reaped"]
+            and not cast(NativeChannel, self.channel).failed
+        )
 
-    def ready(self):
+    def ready(self) -> bool:
         return self.alive()  # First bounded command validates actual startup.
 
-    def read(self, path, *, operation=None):
-        return self.channel.read(path, "hosted-renderer", operation=operation)
+    def read(
+        self, path: str, *, operation: StaticOperation | None = None
+    ) -> NativeResponse:
+        return cast(NativeChannel, self.channel).read(
+            path, "hosted-renderer", operation=operation
+        )
 
-    def stop(self):
-        return self.channel.stop()
+    def stop(self) -> bool:
+        return cast(NativeChannel, self.channel).stop()
 
 
 class HostedContexts:
-    def __init__(self, host, lock):
+    def __init__(self, host: FixtureHost, lock: ContextManager[object]) -> None:
         self.host, self.lock = host, lock
-        self.bindings = {}
+        self.bindings: dict[bytes, dict[str, Any]] = {}
 
-    def authorize(self, model, context, tab):
+    def authorize(self, model: str, context: str, tab: str) -> None:
         with self.lock:
             host = self.host
             require(
@@ -417,12 +449,12 @@ class HostedContexts:
                 "Current live tab ownership required",
             )
 
-    def remember(self, model, context, value):
+    def remember(self, model: str, context: str, value: dict[str, Any]) -> None:
         selected = binding(value)
         with self.lock:
             require(
                 context == self.host.context
-                and model == self.host.entry["model_id"]
+                and model == cast(RegistryEntry, self.host.entry)["model_id"]
                 and selected["source_identity"] == self.host.source_identity
                 and selected["model_identity"] == self.host.model_identity,
                 "Native context binding mismatch",
@@ -430,7 +462,7 @@ class HostedContexts:
             # A bounded current selection cache, never a file/model catalog scan.
             self.bindings = {canonical(selected): deepcopy(selected)}
 
-    def resolve(self, data):
+    def resolve(self, data: dict[str, Any]) -> ProfileSource:
         with self.lock:
             self.authorize(data["model_id"], data["context_id"], data["tab_capability"])
             selected = binding(data["binding"])
@@ -438,10 +470,10 @@ class HostedContexts:
                 self.bindings.get(canonical(selected)) == selected,
                 "Read current native binding before admission",
             )
-            entry = deepcopy(self.host.entry)
+            entry = deepcopy(cast(RegistryEntry, self.host.entry))
             check_fixture(entry)
 
-            def check():
+            def check() -> None:
                 check_fixture(entry)
                 require(
                     self.host.context == data["context_id"]
@@ -468,15 +500,15 @@ class HostedApplication:
 
     def __init__(
         self,
-        registry,
-        cache,
-        binary_path,
-        binary_sha,
+        registry: Registry,
+        cache: str | Path,
+        binary_path: str | Path,
+        binary_sha: str,
         *,
-        startup_diagnostics=None,
-        launch_policy=None,
-        dense_policy=None,
-    ):
+        startup_diagnostics: StartupDiagnostics | None = None,
+        launch_policy: BoundValidationPolicy | None = None,
+        dense_policy: BoundDenseStaticAdmission | None = None,
+    ) -> None:
         # Fail before process inventory, binary I/O, threads or child creation.
         self.platform = require_platform()
         self.diagnostics = startup_diagnostics
@@ -495,7 +527,7 @@ class HostedApplication:
         self.dense_policy = dense_policy
         if dense_policy is not None:
             dense_policy.check_binary(self.binary)
-        self.static_operations = []
+        self.static_operations: list[StaticOperation] = []
         if launch_policy is not None:
             require(
                 type(launch_policy) is BoundValidationPolicy,
@@ -533,7 +565,7 @@ class HostedApplication:
         self.profiles.owner_cleanup = self._owned_shutdown_step
         self.api = PrivateProfileAPI(self.profiles, self.contexts.authorize)
 
-    def _admit_static(self, prepared):
+    def _admit_static(self, prepared: PreparedStatic) -> bool:
         require(
             type(self.dense_policy) is BoundDenseStaticAdmission
             and not self.lifetime.stopping,
@@ -551,13 +583,13 @@ class HostedApplication:
         require(
             op is not None
             and not op.failed
-            and token.kind == "metadata"
-            and token.current(),
+            and cast(ComputeToken, token).kind == "metadata"
+            and cast(ComputeToken, token).current(),
             "Exact pending startup reservation required",
         )
-        op.check()
-        self.dense_policy.admit(prepared)
-        self.dense_policy.check_binary(self.binary)
+        cast(StaticOperation, op).check()
+        cast(BoundDenseStaticAdmission, self.dense_policy).admit(prepared)
+        cast(BoundDenseStaticAdmission, self.dense_policy).check_binary(self.binary)
         reuse = (
             self.host.reader is not None
             and self.host.entry == prepared.entry
@@ -568,7 +600,8 @@ class HostedApplication:
             # The exact owned live reader already holds the native cache lock.
             # No new cold-start reservation or competing lock probe is needed.
             require(
-                self.host.reader.channel in op.channels,
+                cast(HostedRenderer, self.host.reader).channel
+                in cast(StaticOperation, op).channels,
                 "Current static reader ownership required",
             )
         else:
@@ -579,7 +612,7 @@ class HostedApplication:
         reservation(shutil.disk_usage(self.host.cache_root).free, metadata=65536)
         return True
 
-    def begin_static(self, grant, kind):
+    def begin_static(self, grant: AdmissionGrant, kind: str) -> StaticOperation:
         require(
             self.dense_policy is not None and not self.lifetime.stopping,
             "Static owner admission disabled",
@@ -587,7 +620,7 @@ class HostedApplication:
         op = StaticOperation(self, grant, kind)
         return op
 
-    def _lifetime_pulse(self):
+    def _lifetime_pulse(self) -> None:
         self.lifetime.pulse()
         if self.dense_policy is None:
             return
@@ -599,13 +632,15 @@ class HostedApplication:
                     and self.host.view_kind == "static"
                     and not self.supervisor.busy()
                 ):
-                    reader.channel.idle_pulse()
+                    cast(
+                        NativeChannel, cast(HostedRenderer, reader).channel
+                    ).idle_pulse()
             except BaseException:
                 self.host.stopping = True
                 self.host.leases.clear()
                 self.host._revoke_readiness()
-                reader.channel.failed = True
-                reader.child.stop()
+                cast(NativeChannel, cast(HostedRenderer, reader).channel).failed = True
+                cast(OwnedProcess, cast(HostedRenderer, reader).child).stop()
             # Lifetime execution also owns failed settlement after watch.close().
             # No replacement watch or renewed deadline is created.
             for op in self.static_operations:
@@ -618,7 +653,14 @@ class HostedApplication:
             self.lifetime.failed = self.lifetime.stopping = True
             self.lifetime.pulse()  # Existing shutdown/reap owner retains uncertainty.
 
-    def _renderer(self, entry, path, *, prepared=None, operation=None):
+    def _renderer(
+        self,
+        entry: RegistryEntry,
+        path: Path,
+        *,
+        prepared: PreparedStatic | None = None,
+        operation: StaticOperation | None = None,
+    ) -> HostedRenderer:
         require(not self.lifetime.stopping, "Hosted provider shutdown pending")
         if prepared is None:
             check_fixture(entry)
@@ -635,9 +677,9 @@ class HostedApplication:
                 and prepared.entry == entry,
                 "Exact private startup reservation required",
             )
-            operation.check()
-            self.dense_policy.admit(prepared)
-            self.dense_policy.check_binary(self.binary)
+            cast(StaticOperation, operation).check()
+            cast(BoundDenseStaticAdmission, self.dense_policy).admit(prepared)
+            cast(BoundDenseStaticAdmission, self.dense_policy).check_binary(self.binary)
             check_cache_available(path)
             require(
                 self.book.settled() and self.supervisor.profile_session is None,
@@ -647,8 +689,8 @@ class HostedApplication:
                 None, available_bytes(), shutil.disk_usage(self.host.cache_root).free
             )
             reservation(shutil.disk_usage(self.host.cache_root).free, metadata=65536)
-            operation.mutated = True
-            operation.check()
+            cast(StaticOperation, operation).mutated = True
+            cast(StaticOperation, operation).check()
         return HostedRenderer(
             entry,
             path,
@@ -660,7 +702,7 @@ class HostedApplication:
             operation=operation,
         )
 
-    def start_threads(self):
+    def start_threads(self) -> None:
         require_platform()
         check_start(
             self.launch_policy,
@@ -670,7 +712,7 @@ class HostedApplication:
         os.sched_setaffinity(0, {min(os.sched_getaffinity(0))})
         self.profiles.start_threads()  # Both new contexts inherit this one CPU.
 
-    def tick(self):
+    def tick(self) -> None:
         self.lifetime.pulse()
         self.book.cleanup(stopping_only=True)
         with self.lock:
@@ -685,7 +727,7 @@ class HostedApplication:
             ):
                 self.host.tick()
 
-    def _owned_shutdown_step(self):
+    def _owned_shutdown_step(self) -> bool:
         # Owner context/harness, never the independent watchdog. Nonblocking reap;
         # source handles and storage remain charged until their close is proven.
         for op in self.static_operations:
@@ -701,7 +743,7 @@ class HostedApplication:
             and self.supervisor.charged_snapshot_bytes() == 0
         )
 
-    def close(self):
+    def close(self) -> bool:
         self.lifetime.request_shutdown()
         self._owned_shutdown_step()
         # ProfileService cannot stop its independent lifetime watch until all
