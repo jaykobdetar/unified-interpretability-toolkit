@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Bounded coordinator protocol/control tests. Real generation is a separate test."""
 
-import importlib.util
 import io
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 from email.message import Message
@@ -15,9 +15,8 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("live", ROOT / "tools/live_inference.py")
-live = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(live)
+sys.path.insert(0, str(ROOT / "tools"))
+import live_inference as live
 
 
 class Contracts(unittest.TestCase):

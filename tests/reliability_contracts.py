@@ -2,22 +2,19 @@
 """Patched helper/control tests only: fake I/O, clocks, and children; no sockets/model."""
 
 import hashlib
-import importlib.util
 import io
 import json
 from pathlib import Path
 import subprocess
+import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 from email.message import Message
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location(
-    "live_reliability", ROOT / "tools/live_inference.py"
-)
-live = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(live)
+sys.path.insert(0, str(ROOT / "tools"))
+import live_inference as live
 
 
 class Clock:

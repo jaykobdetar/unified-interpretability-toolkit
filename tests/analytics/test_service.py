@@ -1,6 +1,5 @@
 """Small pure/mock production-adapter fixtures; no processes/listeners/SVD."""
 
-import importlib.util
 import io
 import json
 from pathlib import Path
@@ -18,11 +17,7 @@ from analytics.service import AnalyticsJobs, route
 from analytics.source import fingerprint
 from analytics.worker import analyze_request, catalog_from_payload, validate_request
 
-spec = importlib.util.spec_from_file_location(
-    "analytics_live_fixture", ROOT / "tools/live_inference.py"
-)
-live = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(live)
+import live_inference as live
 
 
 class AdapterTests(unittest.TestCase):
