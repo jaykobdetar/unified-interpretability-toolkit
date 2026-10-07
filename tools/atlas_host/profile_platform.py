@@ -7,11 +7,38 @@ must be reviewed/qualified before a new hosted launcher can install this module.
 
 from copy import deepcopy
 
-from .startup_diagnostics import diagnose, diagnosed
+from .startup_diagnostics import DiagnosticCollector, diagnose, diagnosed
 from .common import fields, integer, require
-from .profile_worker import ProfileJob
+from .profile_worker import (
+    ProfileJob,
+    WorkerChild,
+    WorkerRequest,
+    WorkerStatus,
+    WorkerWatchdog,
+)
 from .profile_observation import SpawnObservationPending
 from .validation_policy import check_start
+
+from .profile_snapshot import SnapshotPage, SnapshotStore
+from .supervisor import AdmissionGrant, ComputeToken, Supervisor
+
+from collections.abc import Callable, Mapping
+from typing import Any, Protocol, cast
+
+
+class ProfileHooks(Protocol):
+    def start_gate(self) -> tuple[int, int]: ...
+    def source_check(self) -> object: ...
+    def resources(self) -> Mapping[str, Any]: ...
+    def spawn(
+        self, request: WorkerRequest, output_fd: int, input_fd: int | None
+    ) -> WorkerChild | None: ...
+    def watch(
+        self, callback: Callable[[], object], deadline: float
+    ) -> WorkerWatchdog | None: ...
+    def no_child_created(self) -> bool: ...
+    def snapshot_closed(self, store: SnapshotStore) -> bool: ...
+
 
 MIB = 1024**2
 GIB = 1024**3
@@ -21,17 +48,17 @@ TERMINAL = {"complete", "partial", "error", "cancelled"}
 class DeferredToken:
     """Primitive release is intent; supervisor release follows terminal checks."""
 
-    def __init__(self, platform):
+    def __init__(self, platform: "ProfilePlatform") -> None:
         self.platform = platform
         self.requested = False
 
-    def current(self):
+    def current(self) -> bool:
         return self.platform.reserved.current() and not self.requested
 
-    def poison(self):
+    def poison(self) -> None:
         self.platform.reserved.poison()
 
-    def release(self):
+    def release(self) -> None:
         self.requested = True
 
 
@@ -44,7 +71,13 @@ class ProfilePlatform:
     watch must start independently before returning and close must be bounded.
     """
 
-    def __init__(self, supervisor, reserved, grant, hooks):
+    def __init__(
+        self,
+        supervisor: Supervisor,
+        reserved: ComputeToken,
+        grant: AdmissionGrant,
+        hooks: ProfileHooks,
+    ) -> None:
         require(
             reserved.kind == "profile" and reserved.current(),
             "Reserved profile operation required",
@@ -55,38 +88,42 @@ class ProfilePlatform:
             grant,
             hooks,
         )
-        self.diagnostics = getattr(hooks, "diagnostics", None)
+        self.diagnostics: DiagnosticCollector | None = getattr(
+            hooks, "diagnostics", None
+        )
         self.token = DeferredToken(self)
-        self.child = None
+        self.child: WorkerChild | None = None
         self.watch_closed = False
         self.spawn_attempted = False
         self.runtime = None
         self.closed = False
 
-    def clock(self):
+    def clock(self) -> float:
         return self.grant.clock()
 
-    def owner_cpu(self):
+    def owner_cpu(self) -> float:
         return self.grant.cpu.total()
 
-    def acquire(self):
+    def acquire(self) -> DeferredToken:
         self.grant.remaining()
         require(self.reserved.current(), "Supervised compute ownership lost")
         return self.token
 
-    def start_gate(self):
+    def start_gate(self) -> None:
         self.grant.remaining()
         available, disk = self.hooks.start_gate()
         check_start(getattr(self.hooks, "launch_policy", None), available, disk)
 
-    def source_check(self):
+    def source_check(self) -> None:
         # Page reads after a completed grant still validate source/owner context,
         # but cannot create another grant or revive numeric work.
         self.hooks.source_check()
         if not self.closed:
             self.grant.remaining()
 
-    def spawn(self, request, output_fd, input_fd):
+    def spawn(
+        self, request: WorkerRequest, output_fd: int, input_fd: int | None
+    ) -> WorkerChild:
         require(
             not self.spawn_attempted and input_fd is None,
             "One disposable Restart child only",
@@ -104,9 +141,9 @@ class ProfilePlatform:
         # Must return ownership before fallible post-spawn initialization.
         self.child = self.hooks.spawn(request, output_fd, None)
         require(self.child is not None, "Missing owned child")
-        return self.child
+        return cast(WorkerChild, self.child)
 
-    def resources_ok(self, frame_bytes):
+    def resources_ok(self, frame_bytes: int) -> bool:
         integer(frame_bytes, 0, 32 * MIB)
         pending = None
         try:
@@ -142,12 +179,12 @@ class ProfilePlatform:
                 reservation_bytes=self.supervisor.snapshot_reservation,
                 **observed,
             )
-        return okay
+        return cast(bool, okay)
 
-    def arm_watchdog(self, job):
+    def arm_watchdog(self, job: ProfileJob) -> WorkerWatchdog:
         platform = self
 
-        def guard():
+        def guard() -> None:
             try:
                 if platform.child is not None:
                     sample = platform.child.sample()
@@ -182,13 +219,13 @@ class ProfilePlatform:
         require(registration is not None, "Independent watchdog registration required")
 
         class Registration:
-            def close(self):
-                registration.close()
+            def close(self) -> None:
+                cast(WorkerWatchdog, registration).close()
                 platform.watch_closed = True
 
         return Registration()
 
-    def finish(self, job):
+    def finish(self, job: ProfileJob) -> bool:
         """Owner context only; called before an API-visible terminal snapshot."""
         if self.closed:
             return True
@@ -269,10 +306,21 @@ class SupervisedProfile:
     """
 
     def __init__(
-        self, supervisor, grant, hooks, selected, seed, tab, context, *, reserved=None
-    ):
-        self.diagnostics = getattr(hooks, "diagnostics", None)
-        self.platform = None
+        self,
+        supervisor: Supervisor,
+        grant: AdmissionGrant,
+        hooks: ProfileHooks,
+        selected: dict[str, Any],
+        seed: int,
+        tab: str,
+        context: str,
+        *,
+        reserved: ComputeToken | None = None,
+    ) -> None:
+        self.diagnostics: DiagnosticCollector | None = getattr(
+            hooks, "diagnostics", None
+        )
+        self.platform: ProfilePlatform | None = None
         token = reserved or supervisor.acquire("profile", context)
         require(
             token.kind == "profile" and token.context == context,
@@ -295,9 +343,9 @@ class SupervisedProfile:
             token.release()
             raise
 
-    def start(self, values):
+    def start(self, values: int) -> None:
         try:
-            remaining = self.platform.grant.remaining()
+            remaining = cast(ProfilePlatform, self.platform).grant.remaining()
             self.job.start(*self.auth, values, **remaining)
         except BaseException as diagnostic_error:
             diagnose(
@@ -312,27 +360,35 @@ class SupervisedProfile:
                 self.job.state, self.job.error = "error", "admission_failed"
             raise
         finally:
-            self.platform.finish(self.job)
+            cast(ProfilePlatform, self.platform).finish(self.job)
 
-    def restart(self, grant, hooks, values):
+    def restart(self, grant: AdmissionGrant, hooks: ProfileHooks, values: int) -> None:
         require(
-            self.platform.closed and self.job.state in ("complete", "partial", "error"),
+            cast(ProfilePlatform, self.platform).closed
+            and self.job.state in ("complete", "partial", "error"),
             "Previous operation requires cleanup",
         )
-        token = self.platform.supervisor.acquire("profile", self.auth[2])
-        self.platform = ProfilePlatform(self.platform.supervisor, token, grant, hooks)
+        token = cast(ProfilePlatform, self.platform).supervisor.acquire(
+            "profile", self.auth[2]
+        )
+        self.platform = ProfilePlatform(
+            cast(ProfilePlatform, self.platform).supervisor, token, grant, hooks
+        )
         self.job.platform = self.platform
         self.start(values)
 
-    def tick(self):
+    def tick(self) -> None:
         self.job.tick()
-        self.platform.finish(self.job)
+        cast(ProfilePlatform, self.platform).finish(self.job)
 
-    def status(self, tab, job, context):
+    def status(self, tab: str, job: str, context: str) -> WorkerStatus:
         result = self.job.status(tab, job, context)
         # Primitive completion is not public until outer anchored ledger and
         # native/shared ownership finalization have been verified too.
-        if result["state"] in TERMINAL and not self.platform.closed:
+        if (
+            result["state"] in TERMINAL
+            and not cast(ProfilePlatform, self.platform).closed
+        ):
             return {
                 "state": "stopping",
                 "error": result["error"],
@@ -342,11 +398,20 @@ class SupervisedProfile:
             }
         return result
 
-    def page(self, tab, capability, context, revision, axis, start, count):
+    def page(
+        self,
+        tab: str,
+        capability: str,
+        context: str,
+        revision: str,
+        axis: str,
+        start: int,
+        count: int,
+    ) -> SnapshotPage:
         # Never trust store.latest as proof of accepted public revision.
         self.job._owns(tab, capability, context)
         require(
-            self.platform.closed
+            cast(ProfilePlatform, self.platform).closed
             and self.job.state in ("complete", "partial")
             and self.job.accepted is not None
             and self.job.accepted["revision"] == revision,
@@ -354,14 +419,17 @@ class SupervisedProfile:
         )
         return self.job.page(tab, capability, context, revision, axis, start, count)
 
-    def close(self):
+    def close(self) -> None:
         require(
-            self.platform.closed and self.job.child is None,
+            cast(ProfilePlatform, self.platform).closed and self.job.child is None,
             "Worker cleanup must finish before session close",
         )
         self.job.store.close()
         require(
-            self.platform.hooks.snapshot_closed(self.job.store) is True,
+            cast(ProfilePlatform, self.platform).hooks.snapshot_closed(self.job.store)
+            is True,
             "All snapshot handles, including retiring storage, must be closed",
         )
-        self.platform.supervisor.close_profile(self, all_handles_closed=True)
+        cast(ProfilePlatform, self.platform).supervisor.close_profile(
+            self, all_handles_closed=True
+        )
