@@ -12,6 +12,9 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+_MYPY_FILES: tuple[str, ...] = tuple(
+    (ROOT / "dev/mypy-files.txt").read_text().splitlines()
+)
 
 
 def run(
@@ -256,7 +259,7 @@ def static_checks(dev_python: Path, ruff: Path) -> None:
             "dev/mypy.ini",
             "--cache-dir",
             "/dev/null",
-            "tools/check.py",
+            *_MYPY_FILES,
         ]
     )
 
