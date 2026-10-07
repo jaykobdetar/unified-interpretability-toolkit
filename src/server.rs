@@ -455,11 +455,8 @@ fn numeric_worker(
                         );
                     }
                     Err(error_value) => {
-                        let code = if error_value.to_string().contains("not ready") {
-                            503
-                        } else {
-                            400
-                        };
+                        let code =
+                            crate::http_status::ReadinessStatus::from_error(&error_value).code();
                         connection.close_error(code, error_value);
                     }
                 }
