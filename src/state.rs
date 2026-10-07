@@ -340,11 +340,11 @@ impl State {
         self.source.check()?;
         let stats = self
             .stats(t.id)
-            .ok_or("Complete selected-tensor calibration is not ready")?;
+            .ok_or_else(|| crate::error::Readiness::Tensor.error())?;
         let digest = stats
             .histogram_sha256
             .as_deref()
-            .ok_or("Exact percentile histogram is not ready")?;
+            .ok_or_else(|| crate::error::Readiness::Histogram.error())?;
         require(
             l["histogram_sha256"].as_str() == Some(digest),
             "Percentile calibration mismatch",

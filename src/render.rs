@@ -237,10 +237,10 @@ pub fn legend(rule: &str, stats: Option<&Stats>, global: Option<f64>) -> Result<
     }
     let g = definition.scope == Scope::Checkpoint;
     let bound = if g {
-        global.ok_or("Full checkpoint calibration is not ready")?
+        global.ok_or_else(|| crate::error::Readiness::Checkpoint.error())?
     } else {
         stats
-            .ok_or("Complete selected-tensor calibration is not ready")?
+            .ok_or_else(|| crate::error::Readiness::Tensor.error())?
             .max_abs
     };
     let bound = if definition.quantile_bound() {

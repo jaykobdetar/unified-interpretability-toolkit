@@ -20,8 +20,8 @@ enum Job {
     Calibrate(usize),
     Tile(TcpStream, Query),
 }
-fn code(e: &dyn std::fmt::Display) -> u16 {
-    crate::http_status::ReadinessStatus::from_error(e).code()
+fn code(e: &crate::Error) -> u16 {
+    crate::http_status::ReadinessStatus::from_native_error(e).code()
 }
 fn numeric_worker(receiver: std::sync::mpsc::Receiver<Job>, worker: &Arc<Comparison>) {
     for job in receiver {

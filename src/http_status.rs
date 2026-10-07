@@ -8,6 +8,14 @@ pub(crate) enum ReadinessStatus {
 }
 
 impl ReadinessStatus {
+    pub(crate) fn from_native_error(error: &crate::Error) -> Self {
+        if error.readiness().is_some() {
+            Self::ServiceUnavailable
+        } else {
+            Self::from_error(error)
+        }
+    }
+
     pub(crate) fn from_error(error: &dyn Display) -> Self {
         // Preserve incidental/custom error text and exactly one formatting call.
         if error.to_string().contains("not ready") {

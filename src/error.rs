@@ -1,9 +1,37 @@
 //! Native error families with original text, debug output and source behavior.
 use std::{error::Error as StdError, fmt};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Readiness {
+    Checkpoint,
+    Tensor,
+    Histogram,
+    Pair,
+}
+
+impl Readiness {
+    fn message(self) -> &'static str {
+        match self {
+            Self::Checkpoint => "Full checkpoint calibration is not ready",
+            Self::Tensor => "Complete selected-tensor calibration is not ready",
+            Self::Histogram => "Exact percentile histogram is not ready",
+            Self::Pair => "Complete paired-tensor calibration is not ready",
+        }
+    }
+
+    pub(crate) fn error(self) -> Error {
+        Refusal {
+            message: self.message().to_owned(),
+            readiness: Some(self),
+        }
+        .into()
+    }
+}
+
 /// Owned application refusal, including the existing validation/resource messages.
 pub struct Refusal {
     message: String,
+    readiness: Option<Readiness>,
 }
 
 impl fmt::Display for Refusal {
@@ -76,6 +104,13 @@ native_errors! {
 }
 
 impl Error {
+    pub(crate) fn readiness(&self) -> Option<Readiness> {
+        match self {
+            Self::Refusal(cause) => cause.readiness,
+            _ => None,
+        }
+    }
+
     /// Retain source lookup without requiring a trait import at existing callers.
     pub fn source(&self) -> Option<&(dyn StdError + 'static)> {
         StdError::source(self)
@@ -84,7 +119,11 @@ impl Error {
 
 impl From<String> for Error {
     fn from(message: String) -> Self {
-        Refusal { message }.into()
+        Refusal {
+            message,
+            readiness: None,
+        }
+        .into()
     }
 }
 
@@ -120,3 +159,7 @@ mod tests {
         assert!(error.source().is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/native_readiness_kinds.rs"]
+mod readiness_kind_vectors;

@@ -357,7 +357,7 @@ impl Comparison {
         self.pair(id)?;
         let s = self
             .scales(id)
-            .ok_or("Complete paired-tensor calibration is not ready")?;
+            .ok_or_else(|| crate::error::Readiness::Pair.error())?;
         let derived = quantity == "delta" || quantity == "abs_delta";
         let bound = if derived {
             s.difference_max

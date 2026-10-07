@@ -456,7 +456,8 @@ fn numeric_worker(
                     }
                     Err(error_value) => {
                         let code =
-                            crate::http_status::ReadinessStatus::from_error(&error_value).code();
+                            crate::http_status::ReadinessStatus::from_native_error(&error_value)
+                                .code();
                         connection.close_error(code, error_value);
                     }
                 }
@@ -894,7 +895,7 @@ fn reply_view(state: &State, socket: TcpStream, q: &Query) {
     match result {
         Ok(v) => json_reply(socket, 200, v),
         Err(e) => {
-            let code = crate::http_status::ReadinessStatus::from_error(&e).code();
+            let code = crate::http_status::ReadinessStatus::from_native_error(&e).code();
             error(socket, code, e)
         }
     }
