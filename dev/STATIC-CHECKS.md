@@ -27,3 +27,5 @@ This scope does not claim whole-repository typing, external numerical-library im
 The type and lint gates preserve existing formatter pins and run in the full development/CI runner. Neither selected static scope replaces the existing syntax, portable contract, Rust, smoke, launcher, behavior-lock or separately guarded browser/model checks.
 
 The shared explicit scope includes the qualified `atlas_host.static_operation` leaf and its implementation client, bringing the total to 94 targets. Existing target order and contract assertions remain preserved; matched omission faults cover both the original witness and the expanded declaration. The concrete hosted-runtime, adapter and launcher typing work remains open.
+
+The shared declaration includes the qualified runtime adapter and its implementation client, bringing the explicit scope to 96 targets. Original scope assertions and target order remain preserved with matched omission-fault evidence. The hosted-runtime and launcher implementations remain visible in the wider inventory pending their separate typing qualification.
