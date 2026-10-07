@@ -86,3 +86,7 @@ tools/atlas_host/profile_platform.py
 tests/typing/platform_clients.py
 tools/atlas_host/profile_service.py
 tests/typing/service_clients.py
+tools/atlas_host/host_assets.py
+tests/typing/host_asset_clients.py
+tools/atlas_host/dense_static_admission.py
+tests/typing/dense_admission_clients.py
