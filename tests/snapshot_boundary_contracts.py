@@ -101,8 +101,9 @@ class SnapshotBoundaries(unittest.TestCase):
         )
         call = Mock(return_value=15)
         fake_fcntl = SimpleNamespace(F_ADD_SEALS=1033, fcntl=call)
-        with patch.object(snapshot, "os", fake_os), patch.object(
-            snapshot, "fcntl", fake_fcntl
+        with (
+            patch.object(snapshot, "os", fake_os),
+            patch.object(snapshot, "fcntl", fake_fcntl),
         ):
             self.assertEqual(self.success(snapshot.new_memfd), 41)
             create.assert_called_once_with("atlas-profile", 3)
