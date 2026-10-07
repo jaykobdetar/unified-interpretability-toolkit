@@ -6,7 +6,7 @@ from os import PathLike
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 
 def require(condition: object, message: str) -> None:
@@ -41,12 +41,12 @@ def label(value: str, maximum: int | float = 128) -> str:
     return value
 
 
-def digest(value: str) -> str:
+def digest(value: object) -> str:
     require(
         type(value) is str and re.fullmatch("[0-9a-f]{64}", value) is not None,
         "Expected lowercase SHA-256 digest",
     )
-    return value
+    return cast(str, value)
 
 
 def canonical(value: object) -> bytes:
