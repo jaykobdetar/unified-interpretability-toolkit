@@ -179,3 +179,5 @@ The bounded worker implementation lives in atlas_host.inference_worker. Its root
 Coordinator tests import the public compatibility module through the tools search path, so patches target the same module globals used by the implementation. Test bodies and assertions remain independent of the source file location and private file-loader names.
 
 The coordinator implementation lives in atlas_host.live_inference. Its public root import shares the canonical module, classes, constants and mutable globals; the root script retains its original main dispatch and help text. Repository paths still resolve to the same root, and the worker imports the canonical coordinator helpers. Existing inference/browser guards keep their original root imports. Canonical module metadata follows the package location.
+
+Model presentation vectors use tiny headers and explicit in-memory calibration, progress, hash and cache records. Complete serialized responses retain catalog geometry, nullable statistics, rule metadata, source/revision bindings and diagnostic text across pending, locally complete and globally complete states. These fixtures execute no model or listener.
