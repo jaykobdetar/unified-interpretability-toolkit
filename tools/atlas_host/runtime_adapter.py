@@ -4,14 +4,26 @@ from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
+from typing import (
+    Any,
+    Callable,
+    NoReturn,
+    NotRequired,
+    Protocol,
+    TypeAlias,
+    TypedDict,
+    cast,
+)
 import secrets
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from .common import canonical, digest, fields, require
-from .registry import fingerprint
-from .static_models import StaticPolicy
-from .static_operation import StaticOperation
+from .dense_static_admission import BoundDenseStaticAdmission, check_native_model
+from .profile_os import strict_json
+from .registry import Registry, RegistryEntry, fingerprint
+from .static_models import BoundStatic, PreparedStatic, StaticPolicy
+from .static_operation import OperationApp, StaticOperation
 from .fixture_source import (
     FIXTURE_SHA as FIXTURE_SHA,
     FIXTURE_FILES as FIXTURE_FILES,
@@ -19,8 +31,8 @@ from .fixture_source import (
     check_fixture as check_fixture,
 )
 
-FIXTURE_TENSORS = {"matrix": [3, 5], "vector": [7], "zeros": [4]}
-READ_ROUTES = {
+FIXTURE_TENSORS: dict[str, list[int]] = {"matrix": [3, 5], "vector": [7], "zeros": [4]}
+READ_ROUTES: dict[str, tuple[str, set[str]]] = {
     "model": ("/api/model", set()),
     "progress": ("/api/progress", {"tensor"}),
     "tensor-status": ("/api/tensor-status", {"tensor"}),
@@ -30,13 +42,75 @@ READ_ROUTES = {
 }
 
 
+NativeResponse: TypeAlias = tuple[int, bytes, str]
+
+
+class OwnedRenderer(Protocol):
+    def alive(self) -> bool: ...
+    def ready(self) -> bool: ...
+    def stop(self) -> bool: ...
+    def read(self, path: str) -> NativeResponse: ...
+
+
+class StaticRenderer(OwnedRenderer, Protocol):
+    def read(
+        self, path: str, *, operation: StaticOperation | None = None
+    ) -> NativeResponse: ...
+
+
+FixtureFactory: TypeAlias = Callable[[RegistryEntry, Path], OwnedRenderer]
+
+
+class StaticFactory(Protocol):
+    def __call__(
+        self,
+        entry: RegistryEntry,
+        path: Path,
+        *,
+        prepared: PreparedStatic | None = None,
+        operation: StaticOperation | None = None,
+    ) -> OwnedRenderer: ...
+
+
+class DenseOperationApp(OperationApp, Protocol):
+    @property
+    def dense_policy(self) -> BoundDenseStaticAdmission | None: ...
+
+
+class StaticReceiptFields(TypedDict):
+    profiles_enabled: NotRequired[bool]
+
+
+class AcquisitionReceipt(TypedDict):
+    api_version: int
+    model_id: str
+    context_id: str | None
+    capability: str
+    lease_seconds: int
+    view_kind: str | None
+    profiles_enabled: NotRequired[bool]
+    state: str
+
+
+class HeartbeatReceipt(TypedDict):
+    api_version: int
+    context_id: str
+    lease_seconds: int
+
+
+class ReleaseReceipt(TypedDict):
+    api_version: int
+    released: bool
+    cleanup_pending: bool
+
+
 class HostError(ValueError):
-    def __init__(self, status, code, message):
+    def __init__(self, status: int, code: str, message: str) -> None:
         super().__init__(message)
         self.status, self.code = status, code
 
 
-def refuse(status, code, message):
+def refuse(status: int, code: str, message: str) -> NoReturn:
     raise HostError(status, code, message)
 
 
@@ -49,17 +123,28 @@ class FixtureHost:
     Every method is called by the existing serial coordinator, not HTTP threads.
     """
 
+    entry: RegistryEntry | None
+    reader: OwnedRenderer | None
+    context: str | None
+    leases: dict[str, float]
+    source_identity: str | None
+    model_identity: str | None
+    view_kind: str | None
+    static_prepared: PreparedStatic | None
+    static_bound: BoundStatic | None
+    observed_context: str | None
+
     def __init__(
         self,
-        registry,
-        cache_root,
-        factory,
+        registry: Registry,
+        cache_root: str | Path,
+        factory: FixtureFactory,
         *,
-        clock=time.monotonic,
-        static_policy=None,
-        static_admission=None,
-        dense_policy=None,
-    ):
+        clock: Callable[[], float] = time.monotonic,
+        static_policy: StaticPolicy | None = None,
+        static_admission: Callable[[PreparedStatic], bool] | None = None,
+        dense_policy: BoundDenseStaticAdmission | None = None,
+    ) -> None:
         require(
             static_policy is None
             or type(static_policy) is StaticPolicy
@@ -77,8 +162,6 @@ class FixtureHost:
             Path(cache_root).resolve(),
             factory,
         )
-        from .dense_static_admission import BoundDenseStaticAdmission
-
         require(
             dense_policy is None
             or type(dense_policy) is BoundDenseStaticAdmission
@@ -100,16 +183,16 @@ class FixtureHost:
         self.observed_context = None
 
     @property
-    def static_views_enabled(self):
+    def static_views_enabled(self) -> bool:
         return self.static_policy is not None and self.static_admission is not None
 
-    def _revoke_readiness(self):
+    def _revoke_readiness(self) -> None:
         self.source_identity = self.model_identity = None
         self.static_prepared = self.static_bound = None
         self.observed_alive = self.observed_ready = False
         self.observed_context = None
 
-    def _published_ready(self):
+    def _published_ready(self) -> bool:
         # Read cached coordinator observations only. alive()/ready() can reap.
         return bool(
             self.reader is not None
@@ -124,32 +207,32 @@ class FixtureHost:
             and (self.view_kind != "static" or self.static_bound is not None)
         )
 
-    def _observe_reader(self):
-        alive = self.reader.alive()
-        ready = self.reader.ready() if alive else False
+    def _observe_reader(self) -> None:
+        alive = cast(OwnedRenderer, self.reader).alive()
+        ready = cast(OwnedRenderer, self.reader).ready() if alive else False
         require(
             type(alive) is bool and type(ready) is bool, "Invalid owned reader health"
         )
         self.observed_alive, self.observed_ready = alive, ready
         self.observed_context = self.context
 
-    def _check_source(self):
-        fresh = self.registry.owner_receipt(self.entry["model_id"])
+    def _check_source(self) -> None:
+        fresh = self.registry.owner_receipt(cast(RegistryEntry, self.entry)["model_id"])
         require(fresh == self.entry, "Installed receipt changed")
         if self.view_kind == "static":
             require(self.static_prepared is not None, "Static preparation revoked")
-            self.static_prepared.check()
+            cast(PreparedStatic, self.static_prepared).check()
         else:
-            check_fixture(self.entry)
+            check_fixture(cast(RegistryEntry, self.entry))
 
-    def _clear(self):
+    def _clear(self) -> None:
         self.entry = self.reader = self.context = None
         self.leases.clear()
         self.stopping = False
         self.view_kind = None
         self._revoke_readiness()
 
-    def _stop(self):
+    def _stop(self) -> bool:
         self.stopping = True
         self.leases.clear()
         self._revoke_readiness()  # Revoke before fallible/uncertain stop.
@@ -158,7 +241,7 @@ class FixtureHost:
             return True
         return False
 
-    def tick(self):
+    def tick(self) -> None:
         if self.reader is None:
             return
         if self.stopping:
@@ -182,18 +265,21 @@ class FixtureHost:
         ):
             self._stop()
 
-    def close(self):
+    def close(self) -> bool:
         return self._stop()
 
-    def catalog(self):
+    def catalog(self) -> dict[str, Any]:
         # No tick/reap/start or payload reads from this read-only endpoint.
         ready = self._published_ready()
-        catalog = (
-            self.static_policy.catalog(
-                active_binding=self.static_bound, reader_ready=ready
-            )
-            if self.static_policy is not None
-            else self.registry.catalog()
+        catalog: dict[str, Any] = cast(
+            dict[str, Any],
+            (
+                self.static_policy.catalog(
+                    active_binding=self.static_bound, reader_ready=ready
+                )
+                if self.static_policy is not None
+                else self.registry.catalog()
+            ),
         )
         for item in catalog["models"]:
             item.setdefault("static_view_candidate", False)
@@ -229,7 +315,7 @@ class FixtureHost:
             "profiles_enabled": False,
         }
 
-    def _owns(self, context, capability):
+    def _owns(self, context: object, capability: object) -> bool:
         return (
             context == self.context
             and type(capability) is str
@@ -239,7 +325,9 @@ class FixtureHost:
             )
         )
 
-    def acquire(self, data, *, operation=None):
+    def acquire(
+        self, data: dict[str, Any], *, operation: StaticOperation | None = None
+    ) -> AcquisitionReceipt:
         fields(data, ("model_id",), ("context_id", "capability"))
         require(
             ("context_id" in data) == ("capability" in data),
@@ -282,7 +370,10 @@ class FixtureHost:
                 "fixture_unavailable",
                 "Enabled verified synthetic fixture required",
             )
-        if self.reader is not None and self.entry["model_id"] != entry["model_id"]:
+        if (
+            self.reader is not None
+            and cast(RegistryEntry, self.entry)["model_id"] != entry["model_id"]
+        ):
             if current is None or len(self.leases) != 1:
                 refuse(
                     409,
@@ -296,7 +387,8 @@ class FixtureHost:
                     require(
                         type(operation) is StaticOperation
                         and operation.app.host is self
-                        and operation.app.dense_policy is self.dense_policy
+                        and cast(DenseOperationApp, operation.app).dense_policy
+                        is self.dense_policy
                         and operation.token.kind == "metadata"
                         and operation.token.current(),
                         "Original private dense acquisition required",
@@ -306,27 +398,36 @@ class FixtureHost:
                 prepared = (
                     self.static_prepared
                     if self.reader is not None and self.entry == entry
-                    else self.static_policy.prepare(data["model_id"])
+                    else cast(StaticPolicy, self.static_policy).prepare(
+                        data["model_id"]
+                    )
                 )
                 require(prepared is not None, "Current static preparation required")
                 if operation is not None:
                     operation.prepared = prepared
                     operation.check()
                 require(
-                    prepared.entry == entry, "Static receipt changed before admission"
+                    cast(PreparedStatic, prepared).entry == entry,
+                    "Static receipt changed before admission",
                 )
                 require(
-                    self.static_admission(prepared) is True,
+                    cast(Callable[[PreparedStatic], bool], self.static_admission)(
+                        cast(PreparedStatic, prepared)
+                    )
+                    is True,
                     "Static owner/resource admission refused",
                 )
-                prepared.check()
+                cast(PreparedStatic, prepared).check()
             except (ValueError, OSError):
                 refuse(
                     409,
                     "static_unavailable",
                     "Registered static activation is unavailable",
                 )
-        if self.reader is not None and self.entry["model_id"] != entry["model_id"]:
+        if (
+            self.reader is not None
+            and cast(RegistryEntry, self.entry)["model_id"] != entry["model_id"]
+        ):
             if operation is not None:
                 operation.mutated = True
                 operation.check()
@@ -343,7 +444,7 @@ class FixtureHost:
             )
             try:
                 reader = (
-                    self.factory(
+                    cast(StaticFactory, self.factory)(
                         deepcopy(entry), cache, prepared=prepared, operation=operation
                     )
                     if kind == "static" and operation is not None
@@ -388,7 +489,7 @@ class FixtureHost:
                 self.read(
                     entry["model_id"],
                     "model",
-                    {"context": [self.context]},
+                    {"context": [cast(str, self.context)]},
                     operation=operation,
                 )
             operation.check()
@@ -399,11 +500,14 @@ class FixtureHost:
             "capability": current,
             "lease_seconds": 15,
             "view_kind": kind,
-            **({"profiles_enabled": False} if kind == "static" else {}),
+            **cast(
+                StaticReceiptFields,
+                ({"profiles_enabled": False} if kind == "static" else {}),
+            ),
             "state": "active" if self.source_identity else "starting",
         }
 
-    def heartbeat(self, context, data):
+    def heartbeat(self, context: str, data: dict[str, Any]) -> HeartbeatReceipt:
         fields(data, ("capability",))
         self.tick()
         if not self._owns(context, data["capability"]):
@@ -411,7 +515,7 @@ class FixtureHost:
         self.leases[data["capability"]] = self.clock() + 15
         return {"api_version": 1, "context_id": context, "lease_seconds": 15}
 
-    def release(self, context, data):
+    def release(self, context: str, data: dict[str, Any]) -> ReleaseReceipt:
         fields(data, ("capability",))
         self.tick()
         if not self._owns(context, data["capability"]):
@@ -421,7 +525,9 @@ class FixtureHost:
             self._stop()
         return {"api_version": 1, "released": True, "cleanup_pending": self.stopping}
 
-    def _validate_context(self, identifier, context, *, allow_unbound_model=False):
+    def _validate_context(
+        self, identifier: str, context: str, *, allow_unbound_model: bool = False
+    ) -> None:
         # Preserve the fixture's source_changed receipt before tick can dispose
         # the old context. This is also the pre-channel static source check.
         if (
@@ -469,7 +575,7 @@ class FixtureHost:
                 "Read selected model metadata before requesting values",
             )
 
-    def _bind_model(self, model):
+    def _bind_model(self, model: dict[str, Any]) -> None:
         if self.view_kind == "static":
             require(
                 self.observed_alive
@@ -480,11 +586,9 @@ class FixtureHost:
                 "Current owned ready reader required",
             )
             if self.dense_policy is not None:
-                from .dense_static_admission import check_native_model
-
-                check_native_model(self.static_prepared, model)
-            bound = self.static_policy.bind(
-                self.static_prepared, model, reader_ready=True
+                check_native_model(cast(PreparedStatic, self.static_prepared), model)
+            bound = cast(StaticPolicy, self.static_policy).bind(
+                cast(PreparedStatic, self.static_prepared), model, reader_ready=True
             )
             self.static_bound = bound
             self.source_identity = bound.prepared.source_identity
@@ -497,8 +601,9 @@ class FixtureHost:
         digest(model.get("source_identity"))
         digest(model.get("model_identity"))
         require(
-            model.get("source_directory") == self.entry["root"]
-            and model.get("revision") == self.entry["manifest"]["revision"]
+            model.get("source_directory") == cast(RegistryEntry, self.entry)["root"]
+            and model.get("revision")
+            == cast(RegistryEntry, self.entry)["manifest"]["revision"]
             and model.get("source_bytes") == 244
             and model.get("parameter_count") == 26,
             "Renderer differs from selected receipt",
@@ -517,11 +622,12 @@ class FixtureHost:
             type(tensors) is list and len(tensors) == 3, "Unexpected fixture catalog"
         )
         require(
-            {t.get("name") for t in tensors} == set(FIXTURE_TENSORS)
-            and {t.get("id") for t in tensors} == {0, 1, 2},
+            {t.get("name") for t in cast(list[dict[str, Any]], tensors)}
+            == set(FIXTURE_TENSORS)
+            and {t.get("id") for t in cast(list[dict[str, Any]], tensors)} == {0, 1, 2},
             "Unexpected fixture tensor identity",
         )
-        for tensor in tensors:
+        for tensor in cast(list[dict[str, Any]], tensors):
             require(
                 tensor.get("shape") == FIXTURE_TENSORS[tensor["name"]]
                 and tensor.get("dtype") == "BF16"
@@ -539,7 +645,14 @@ class FixtureHost:
             model["model_identity"],
         )
 
-    def read(self, identifier, route, query, *, operation=None):
+    def read(
+        self,
+        identifier: str,
+        route: str,
+        query: dict[str, list[str]],
+        *,
+        operation: StaticOperation | None = None,
+    ) -> NativeResponse:
         require(route in READ_ROUTES, "Unknown model read route")
         native, keys = READ_ROUTES[route]
         require(
@@ -571,9 +684,9 @@ class FixtureHost:
         owned_reader = self.reader
         try:
             status, body, mime = (
-                owned_reader.read(path, operation=operation)
+                cast(StaticRenderer, owned_reader).read(path, operation=operation)
                 if operation is not None
-                else owned_reader.read(path)
+                else cast(OwnedRenderer, owned_reader).read(path)
             )
             if operation is not None:
                 operation.check()
@@ -596,14 +709,14 @@ class FixtureHost:
                 require(mime == "image/png", "Unexpected tile response")
                 return status, body, mime
             require(mime == "application/json", "Unexpected renderer metadata response")
-            from .profile_os import strict_json
-
             model = strict_json(body)
             if route == "model":
                 self._bind_model(model)
                 if self.view_kind == "static":
-                    model = self.static_policy.project_model(
-                        self.static_bound, model, reader_ready=self._published_ready()
+                    model = cast(StaticPolicy, self.static_policy).project_model(
+                        cast(BoundStatic, self.static_bound),
+                        model,
+                        reader_ready=self._published_ready(),
                     )
                     model["profiles_enabled"] = False
                 else:
@@ -616,7 +729,9 @@ class FixtureHost:
                     ):
                         model.pop(key, None)
                     model["inference_editable"] = False
-                    model["content_digest"] = self.entry["content_digest"]
+                    model["content_digest"] = cast(RegistryEntry, self.entry)[
+                        "content_digest"
+                    ]
                     model["identity_validation"] = (
                         "Owner-registered synthetic fixture; current file identity checked. "
                         "Saved calibration is separate from source hash verification."
@@ -664,7 +779,14 @@ class FixtureHost:
         return 200, raw, "application/json"
 
 
-def dispatch(host, method, raw_path, data=None, *, operation=None):
+def dispatch(
+    host: FixtureHost,
+    method: str,
+    raw_path: str,
+    data: dict[str, Any] | None = None,
+    *,
+    operation: StaticOperation | None = None,
+) -> NativeResponse:
     """Pure handler router; HTTP guards run in the coordinator before this call."""
     parsed = urlsplit(raw_path)
     require(
@@ -679,9 +801,9 @@ def dispatch(host, method, raw_path, data=None, *, operation=None):
         return (
             202,
             canonical(
-                host.acquire(data, operation=operation)
+                host.acquire(cast(dict[str, Any], data), operation=operation)
                 if operation is not None
-                else host.acquire(data)
+                else host.acquire(cast(dict[str, Any], data))
             ),
             "application/json",
         )
@@ -693,7 +815,11 @@ def dispatch(host, method, raw_path, data=None, *, operation=None):
     ):
         action = {"heartbeat": host.heartbeat, "release": host.release}.get(parts[3])
         if action:
-            return 200, canonical(action(parts[2], data)), "application/json"
+            return (
+                200,
+                canonical(action(parts[2], cast(dict[str, Any], data))),
+                "application/json",
+            )
     if method == "GET" and len(parts) == 4 and parts[:2] == ["api", "models"]:
         return (
             host.read(parts[2], parts[3], query, operation=operation)
