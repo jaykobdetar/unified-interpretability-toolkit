@@ -10,6 +10,7 @@ import subprocess
 from http.server import HTTPServer
 
 from atlas_host.common import canonical, require
+from atlas_host.host_assets import ASSETS as ASSETS, BUNDLE as BUNDLE
 from atlas_host.config import load_config
 from atlas_host.registry import Registry
 from atlas_host.runtime_adapter import FixtureHost, HostError, dispatch
@@ -22,22 +23,6 @@ from live_inference import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-ASSETS = {
-    "/style.css": ("style.css", "text/css"),
-    "/atlas-tools.js": ("atlas-tools.js", "text/javascript"),
-    "/workspace-tools.js": ("workspace-tools.js", "text/javascript"),
-    "/inference.js": ("inference.js", "text/javascript"),
-    "/app.js": ("app.js", "text/javascript"),
-    "/host-client.js": ("host-client.js", "text/javascript"),
-}
-BUNDLE = [
-    "vendor/openseadragon.min.js",
-    "atlas-tools.js",
-    "host-client.js",
-    "app.js",
-    "workspace-tools.js",
-    "inference.js",
-]
 
 
 class Renderer:

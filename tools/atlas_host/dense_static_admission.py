@@ -17,6 +17,7 @@ from .profile_os import strict_json
 from .registry import fingerprint, validate_manifest
 from .static_models import _current
 from .validation_policy import package_root, source_names
+from .host_assets import ASSETS, BUNDLE
 
 REPOSITORY = "HuggingFaceTB/SmolLM2-135M"
 REVISION = "93efa2f097d58c2a74874c7e644dbc9b0cee75a2"
@@ -443,9 +444,7 @@ def _verified(path, expected, limit, *, json_artifact=False):
     return value, (str(path), tuple(sorted(before.items())))
 
 
-def runtime_names(root):
-    from host_atlas import ASSETS, BUNDLE
-
+def runtime_names(root: Path) -> list[str]:
     names = set(source_names(root))
     names.update(
         str(p.relative_to(root)) for p in (root / "tools").glob("inference_*.py")
