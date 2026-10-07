@@ -82,3 +82,7 @@ tools/atlas_host/validation_policy.py
 tests/typing/policy_clients.py
 tools/atlas_host/lifetime_guard.py
 tests/typing/lifetime_clients.py
+tools/atlas_host/profile_platform.py
+tests/typing/platform_clients.py
+tools/atlas_host/profile_service.py
+tests/typing/service_clients.py
