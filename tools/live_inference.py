@@ -22,8 +22,22 @@ import stat
 import subprocess
 import sys
 import time
-from typing import Any
+from typing import (
+    Any,
+    IO,
+    NoReturn,
+    Protocol,
+    TypedDict,
+    TypeAlias,
+    TYPE_CHECKING,
+    cast,
+)
+from collections.abc import Callable, Iterator, Mapping
+import socket
 from urllib.parse import urlsplit
+
+if TYPE_CHECKING:
+    from analytics.service import AnalyticsJobs, Handler as AnalyticsHandler
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -69,20 +83,60 @@ UPSTREAM_DEADLINE = 5.0
 IO_TICK = 0.1
 
 
+class TickOwner(Protocol):
+    def tick(self) -> object: ...
+
+
+class OwnedProcess(Protocol):
+    def poll(self) -> int | None: ...
+    def wait(self, *, timeout: float) -> int: ...
+    def terminate(self) -> None: ...
+    def kill(self) -> None: ...
+
+
+class ClosableServer(Protocol):
+    def server_close(self) -> None: ...
+
+
+class HashState(Protocol):
+    def update(self, data: bytes, /) -> None: ...
+    def hexdigest(self) -> str: ...
+
+
+Fingerprint: TypeAlias = tuple[int, int, int, int, int]
+
+
+class LayoutReceipt(TypedDict):
+    directory: str
+    files: dict[str, Fingerprint]
+
+
+class Snapshot(TypedDict):
+    session: str | None
+    status: str
+    steps: list[dict[str, Any]]
+    details: dict[str, Any]
+    peak_worker_rss_mib: float
+    minimum_available_gib: float
+    worker_alive: bool
+
+
 class BackendError(Exception):
-    def __init__(self, status, code, message):
+    def __init__(self, status: int, code: str, message: str) -> None:
         super().__init__(message)
         self.status, self.code = status, code
 
 
 class OperationDeadline:
-    def __init__(self, session, clock=None):
+    def __init__(
+        self, session: TickOwner, clock: Callable[[], float] | None = None
+    ) -> None:
         self.clock = clock or time.monotonic
         self.end = self.clock() + UPSTREAM_DEADLINE
         self.last_tick = -float("inf")
         self.session = session
 
-    def remaining(self):
+    def remaining(self) -> float:
         now = self.clock()
         if now - self.last_tick >= IO_TICK:
             self.session.tick()
@@ -100,14 +154,14 @@ class OperationDeadline:
 
 
 class DeadlineReader(io.RawIOBase):
-    def __init__(self, connection, deadline):
+    def __init__(self, connection: socket.socket, deadline: OperationDeadline) -> None:
         super().__init__()
         self.connection, self.deadline = connection, deadline
 
-    def readable(self):
+    def readable(self) -> bool:
         return True
 
-    def readinto(self, buffer):
+    def readinto(self, buffer: Any) -> int:
         while True:
             self.connection.settimeout(min(IO_TICK, self.deadline.remaining()))
             try:
@@ -117,7 +171,7 @@ class DeadlineReader(io.RawIOBase):
             except TimeoutError:
                 continue
 
-    def close(self):
+    def close(self) -> None:
         try:
             self.connection.close()
         finally:
@@ -125,10 +179,10 @@ class DeadlineReader(io.RawIOBase):
 
 
 class DeadlineSocket:
-    def __init__(self, connection, deadline):
+    def __init__(self, connection: socket.socket, deadline: OperationDeadline) -> None:
         self.connection, self.deadline = connection, deadline
 
-    def sendall(self, data):
+    def sendall(self, data: bytes | bytearray | memoryview) -> None:
         data = memoryview(data)
         while data:
             self.connection.settimeout(min(IO_TICK, self.deadline.remaining()))
@@ -141,25 +195,41 @@ class DeadlineSocket:
                 continue
         self.deadline.remaining()
 
-    def makefile(self, mode):
+    def makefile(self, mode: str) -> io.BufferedReader:
         if mode != "rb":
             raise ValueError("Only upstream response reads are supported")
         # HTTPConnection closes its socket upon a Connection: close response.
         # Keep a separately owned descriptor alive until HTTPResponse closes.
         return io.BufferedReader(DeadlineReader(self.connection.dup(), self.deadline))
 
-    def close(self):
+    def close(self) -> None:
         self.connection.close()
 
 
-def proxy_request(port, method, path, session):
+class ProxyConnection(Protocol):
+    sock: socket.socket | DeadlineSocket | None
+
+    def connect(self) -> None: ...
+    def request(
+        self, method: str, path: str, *, headers: Mapping[str, str]
+    ) -> None: ...
+    def getresponse(self) -> http.client.HTTPResponse: ...
+    def close(self) -> None: ...
+
+
+def proxy_request(
+    port: int, method: str, path: str, session: TickOwner
+) -> tuple[int, bytes, str]:
     deadline = OperationDeadline(session)
-    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=REQUEST_DEADLINE)
+    conn = cast(
+        ProxyConnection,
+        http.client.HTTPConnection("127.0.0.1", port, timeout=REQUEST_DEADLINE),
+    )
     try:
         deadline.remaining()
         conn.connect()  # Loopback connection establishment is bounded separately.
         deadline.remaining()
-        conn.sock = DeadlineSocket(conn.sock, deadline)
+        conn.sock = DeadlineSocket(cast(socket.socket, conn.sock), deadline)
         headers = {"X-Atlas-Local": "1"} if method == "POST" else {}
         conn.request(method, path, headers=headers)
         response = conn.getresponse()
@@ -191,14 +261,16 @@ def proxy_request(port, method, path, session):
         conn.close()
 
 
-def process_alive(process):
+def process_alive(process: OwnedProcess) -> bool:
     try:
         return process.poll() is None
     except OSError:
         return True  # An unknown reap result must retain ownership/admission.
 
 
-def signal_and_reap(process, *, terminate=False, timeout=0.2):
+def signal_and_reap(
+    process: OwnedProcess, *, terminate: bool = False, timeout: float = 0.2
+) -> bool:
     """One bounded attempt. False retains ownership; no unrelated PID is touched."""
     try:
         if process_alive(process):
@@ -215,10 +287,10 @@ def signal_and_reap(process, *, terminate=False, timeout=0.2):
 class SweepAdmissionBudget:
     """One job budget; interruptible verification on this Linux main-thread owner."""
 
-    def __init__(self, deadline, cpu_deadline):
+    def __init__(self, deadline: float, cpu_deadline: float) -> None:
         self.deadline, self.cpu_deadline = deadline, cpu_deadline
 
-    def check(self):
+    def check(self) -> None:
         if time.monotonic() >= self.deadline:
             raise ValueError(
                 "Total sweep wall budget exhausted during verification; no further work"
@@ -230,7 +302,7 @@ class SweepAdmissionBudget:
         if available() < 3.25 * GIB:
             raise ValueError("Sweep verification stopped by available-memory reserve")
 
-    def remaining_cpu(self):
+    def remaining_cpu(self) -> int:
         self.check()
         # RLIMIT_CPU uses integer seconds. Round down, never grant a fresh 90 s.
         remaining = int(self.cpu_deadline - time.process_time())
@@ -239,20 +311,20 @@ class SweepAdmissionBudget:
         return min(90, remaining)
 
     @contextmanager
-    def verification(self):
+    def verification(self) -> Iterator[None]:
         self.check()
         # An existing timer is another owner's deadline, never ours to replace.
         if signal.getitimer(signal.ITIMER_REAL) != (0.0, 0.0):
             raise ValueError("An existing deadline timer prevents sweep verification")
         previous = signal.getsignal(signal.SIGALRM)
 
-        def arm():
+        def arm() -> None:
             signal.setitimer(
                 signal.ITIMER_REAL,
                 max(0.000001, min(IO_TICK, self.deadline - time.monotonic())),
             )
 
-        def alarm(_signal, _frame):
+        def alarm(_signal: int, _frame: object) -> None:
             # Raising interrupts a blocked regular-file open/read on this POSIX
             # main thread; a returning handler would permit automatic syscall retry.
             self.check()
@@ -268,34 +340,34 @@ class SweepAdmissionBudget:
             signal.signal(signal.SIGALRM, previous)
 
 
-def verify_model(directory, check=None):
-    def checkpoint():
+def verify_model(directory: Path, check: Callable[[], object] | None = None) -> None:
+    def checkpoint() -> None:
         if check is not None:
             check()
 
     for name, expected in MANIFEST["files"].items():
         checkpoint()
         with (directory / name).open("rb") as source:
-            digest = hashlib.sha256()
+            digest: HashState | str = hashlib.sha256()
             while True:
                 checkpoint()
                 block = source.read(1024 * 1024)
                 checkpoint()
                 if not block:
                     break
-                digest.update(block)
+                cast(HashState, digest).update(block)
                 checkpoint()
-            digest = digest.hexdigest()
+            digest = cast(HashState, digest).hexdigest()
         checkpoint()
         if digest != expected:
             raise ValueError(f"Pinned file hash mismatch: {name}")
 
 
-def layout_fingerprints(directory):
+def layout_fingerprints(directory: Path) -> LayoutReceipt | None:
     """Private correspondence to freshly verified regular pinned files."""
     try:
         directory = directory.resolve(strict=True)
-        files = {}
+        files: dict[str, Fingerprint] = {}
         for name in MANIFEST["files"]:
             value = (directory / name).lstat()
             if not stat.S_ISREG(value.st_mode):
@@ -312,10 +384,10 @@ def layout_fingerprints(directory):
         return None
 
 
-def verified_layout_receipt(directory, *, required):
+def verified_layout_receipt(directory: Path, *, required: bool) -> LayoutReceipt | None:
     """Reuse pinned verification; optional analytics evidence fails closed."""
     before = layout_fingerprints(directory)
-    check = None
+    check: Callable[[], object] | None = None
     if not required:
         # Ordinary analytics sources remain unbound. Only the exact bounded
         # pinned configuration can trigger this small-model startup verifier.
@@ -334,7 +406,7 @@ def verified_layout_receipt(directory, *, required):
             return None
         deadline = time.monotonic() + UPSTREAM_DEADLINE
 
-        def check():
+        def check() -> None:
             if time.monotonic() >= deadline or available() < 3.25 * GIB:
                 raise ValueError("Configuration receipt verification budget reached")
 
@@ -351,7 +423,9 @@ def verified_layout_receipt(directory, *, required):
     )
 
 
-def current_layout_binding(model_info, session):
+def current_layout_binding(
+    model_info: Mapping[str, Any], session: "Session"
+) -> dict[str, Any] | None:
     receipt = session.head_layout_receipt
     if receipt is None:
         return session.head_layout_binding
@@ -410,31 +484,31 @@ def _contracts() -> InferenceContracts:
 
 
 class Session:
-    def __init__(self, python, model):
+    def __init__(self, python: str | os.PathLike[str], model: Path) -> None:
         self.python, self.model = python, model
-        self.process = None
-        self.analytics = None
+        self.process: subprocess.Popen[bytes] | None = None
+        self.analytics: "AnalyticsJobs | None" = None
         self.inference_enabled = True
         # Internal validated correspondence only; never take from HTTP. Direct
         # Session construction does no file I/O and remains unbound by default.
-        self.head_layout_binding = None
-        self.head_layout_receipt = None
-        self.stop_reason = None
-        self.id = None
+        self.head_layout_binding: dict[str, Any] | None = None
+        self.head_layout_receipt: LayoutReceipt | None = None
+        self.stop_reason: str | None = None
+        self.id: str | None = None
         self.status = "idle"
-        self.steps = deque(maxlen=MAX_TRACE)
-        self.details = {}
+        self.steps: deque[dict[str, Any]] = deque(maxlen=MAX_TRACE)
+        self.details: dict[str, Any] = {}
         self.mode = "generation"
-        self.pair_request = None
-        self.sweep_plan = None
-        self.observation = None
-        self.capture_layer = None
+        self.pair_request: dict[str, Any] | None = None
+        self.sweep_plan: dict[str, Any] | None = None
+        self.observation: dict[str, Any] | None = None
+        self.capture_layer: int | None = None
         self.buffer = b""
         self.last_seen = self.started = time.monotonic()
         self.peak_rss = 0
         self.minimum_available = available()
 
-    def snapshot(self):
+    def snapshot(self) -> Snapshot:
         return {
             "session": self.id,
             "status": self.status,
@@ -490,7 +564,7 @@ class Session:
             "sweep": contracts.sweep_schema(),
         }
 
-    def owns(self, capability):
+    def owns(self, capability: object) -> bool:
         return (
             isinstance(capability, str)
             and self.id is not None
@@ -499,7 +573,7 @@ class Session:
             )
         )
 
-    def stop(self, reason="cancelled"):
+    def stop(self, reason: str = "cancelled") -> bool:
         if self.mode == "sweep" and self.sweep_plan:
             current = self.details.get("sweep_current")
             remaining = sweep.record_ids(self.sweep_plan)[
@@ -534,7 +608,7 @@ class Session:
             self.status = reason
         return True
 
-    def start(self, data: dict[str, Any]) -> dict[str, Any]:
+    def start(self, data: dict[str, Any]) -> Snapshot:
         job_started = time.monotonic()
         admission_cpu_started = time.process_time()
         self.tick()
@@ -550,7 +624,10 @@ class Session:
         value = contracts.architecture
         mode = data.get("mode", "generation")
         experiment = for_coordinator(data, mode)
-        sweep_plan = None
+        sweep_plan: dict[str, Any] | None = None
+        observation: dict[str, Any] | None
+        layer: int | None
+        request: dict[str, Any]
         if experiment is REGISTRY[Kind.SWEEP]:
             sweep_plan = contracts.build_plan(data)
             request = dict(data)
@@ -655,12 +732,12 @@ class Session:
                 env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
                 bufsize=0,
             )
-            self.process.stdin.write(
+            cast(IO[bytes], self.process.stdin).write(
                 json.dumps(request, allow_nan=False, ensure_ascii=False).encode()
                 + b"\n"
             )
-            self.process.stdin.close()
-            os.set_blocking(self.process.stdout.fileno(), False)
+            cast(IO[bytes], self.process.stdin).close()
+            os.set_blocking(cast(IO[bytes], self.process.stdout).fileno(), False)
         except Exception:
             self.stop("error")
             raise ValueError(
@@ -716,7 +793,7 @@ class Session:
         eof = False
         for _ in range(8):
             try:
-                data = os.read(self.process.stdout.fileno(), 65536)
+                data = os.read(cast(IO[bytes], self.process.stdout).fileno(), 65536)
             except BlockingIOError:
                 break
             if not data:
@@ -747,9 +824,13 @@ class Session:
                         if "baseline" in event or "edited" in event:
                             contracts.validate_pair(event)
                         if self.mode == "sweep":
-                            contracts.validate_sweep_step(event, self.sweep_plan)
+                            contracts.validate_sweep_step(
+                                event, cast(dict[str, Any], self.sweep_plan)
+                            )
                         elif self.mode == "prompt_pair":
-                            contracts.validate_pair_step(event, self.pair_request)
+                            contracts.validate_pair_step(
+                                event, cast(dict[str, Any], self.pair_request)
+                            )
                         elif self.mode == "prompt_pair_preview":
                             raise ValueError(
                                 "Preview cannot produce activation records"
@@ -761,7 +842,7 @@ class Session:
                         self.steps.append(event)
                         if self.mode == "sweep":
                             self.details["sweep_coverage"] = sweep.coverage(
-                                self.sweep_plan, len(self.steps)
+                                cast(dict[str, Any], self.sweep_plan), len(self.steps)
                             )
                         self.status = "running"
                     elif kind == "error":
@@ -774,9 +855,14 @@ class Session:
                             self.mode != "sweep"
                             or event.get("status") not in ("complete", "time_limit")
                             or event.get("coverage")
-                            != sweep.coverage(self.sweep_plan, len(self.steps))
+                            != sweep.coverage(
+                                cast(dict[str, Any], self.sweep_plan), len(self.steps)
+                            )
                             or (event["status"] == "complete")
-                            != (len(self.steps) == self.sweep_plan["records"])
+                            != (
+                                len(self.steps)
+                                == cast(dict[str, Any], self.sweep_plan)["records"]
+                            )
                         ):
                             raise ValueError(
                                 "Invalid sweep completion/partial coverage"
@@ -806,7 +892,7 @@ class Session:
                             )
                         if self.mode == "prompt_pair" and event.get(
                             "record_count"
-                        ) != len(self.pair_request["positions"]):
+                        ) != len(cast(dict[str, Any], self.pair_request)["positions"]):
                             raise ValueError("Prompt-pair coverage incomplete")
                         count = (
                             event.get("record_count")
@@ -842,16 +928,28 @@ class Session:
             self.stop()
 
 
+class CoordinatorServer(Protocol):
+    session: Session
+    analytics: "AnalyticsJobs"
+    server_port: int
+    atlas_port: int
+    timeout: float | None
+
+    def handle_request(self) -> None: ...
+    def server_close(self) -> None: ...
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
 
-    def setup(self):
+    def setup(self) -> None:
         super().setup()
         self.connection.settimeout(REQUEST_DEADLINE)
 
-    def handle(self):
+    def handle(self) -> None:
         # A complete request has an absolute 0.5 s receive deadline, so a slow
         # socket cannot starve the single coordinator's resource/lease checks.
+        needed: int | None
         deadline, raw, needed = time.monotonic() + REQUEST_DEADLINE, bytearray(), None
         try:
             while needed is None or len(raw) < needed:
@@ -885,10 +983,10 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, OSError, http.client.HTTPException):
             return
 
-    def log_message(self, *_args):
+    def log_message(self, *_args: object) -> None:
         pass  # URLs, prompts and errors are not logged.
 
-    def send(self, status, body, mime="application/json"):
+    def send(self, status: int, body: object, mime: str = "application/json") -> None:
         if not isinstance(body, bytes):
             body = json.dumps(body, allow_nan=False).encode()
         self.send_response(status)
@@ -903,8 +1001,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def validated(self):
-        port = self.server.server_port
+    def validated(self) -> tuple[str, int]:
+        port = cast(CoordinatorServer, self.server).server_port
         host = self.headers.get("Host")
         if host not in (f"localhost:{port}", f"127.0.0.1:{port}"):
             raise ValueError("Host must be loopback")
@@ -932,8 +1030,8 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("Invalid local URL")
         return path, length
 
-    def handle_action(self):
-        session = self.server.session
+    def handle_action(self) -> None:
+        session = cast(CoordinatorServer, self.server).session
         try:
             path, length = self.validated()
             if self.command == "POST" and self.headers.get("X-Atlas-Local") != "1":
@@ -941,7 +1039,12 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/analytics"):
                 from analytics.service import route
 
-                return route(self, path, length, self.server.analytics)
+                return route(
+                    cast("AnalyticsHandler[None]", self),
+                    path,
+                    length,
+                    cast(CoordinatorServer, self.server).analytics,
+                )
             if path.startswith("/api/inference"):
                 if not session.inference_enabled:
                     return self.send(
@@ -1010,7 +1113,10 @@ class Handler(BaseHTTPRequestHandler):
             if length:
                 raise ValueError("Only inference actions accept request bodies")
             status, body, mime = proxy_request(
-                self.server.atlas_port, self.command, self.path, session
+                cast(CoordinatorServer, self.server).atlas_port,
+                self.command,
+                self.path,
+                session,
             )
             if self.command == "GET" and path == "/api/model" and status == 200:
                 body = json.dumps(
@@ -1031,7 +1137,9 @@ class Handler(BaseHTTPRequestHandler):
     do_POST = handle_action
 
 
-def bind_inference_source(model_info, session):
+def bind_inference_source(
+    model_info: Mapping[str, Any], session: Session
+) -> dict[str, Any]:
     # Only a native, single-source view of the pinned inference directory can
     # supply edit coordinates. A paired checkpoint view has a different space.
     model_info = dict(model_info)
@@ -1051,13 +1159,15 @@ def bind_inference_source(model_info, session):
     )
 
 
-def cleanup_owned(session, atlas, server):
+def cleanup_owned(
+    session: Session, atlas: OwnedProcess, server: ClosableServer
+) -> bool:
     worker_done = atlas_done = False
     try:
         # Repeated bounded attempts retain the same child; no replacement work.
         for _ in range(8):
             worker_done = session.stop()
-            analytics = getattr(session, "analytics", None)
+            analytics: "AnalyticsJobs | None" = getattr(session, "analytics", None)
             if analytics is not None:
                 worker_done = analytics.stop() and worker_done
             if worker_done:
@@ -1073,7 +1183,7 @@ def cleanup_owned(session, atlas, server):
     return worker_done and atlas_done
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument(
@@ -1112,12 +1222,12 @@ def main():
     session = Session(args.python, args.model.resolve())
     session.inference_enabled = not args.analytics_only
     session.head_layout_receipt = receipt
-    server = HTTPServer(("127.0.0.1", args.port), Handler)
+    server = cast(CoordinatorServer, HTTPServer(("127.0.0.1", args.port), Handler))
     server.timeout = 0.1
     server.session, server.atlas_port = session, args.atlas_port
     from analytics.service import AnalyticsJobs
 
-    def analysis_model():
+    def analysis_model() -> Any:
         status, body, _mime = proxy_request(
             args.atlas_port, "GET", "/api/model", session
         )
@@ -1155,7 +1265,7 @@ def main():
         stdout=subprocess.DEVNULL,
     )
 
-    def shutdown(*_args):
+    def shutdown(*_args: object) -> NoReturn:
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, shutdown)
