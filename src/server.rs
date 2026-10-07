@@ -1431,3 +1431,7 @@ mod dispatch_vectors {
 #[cfg(test)]
 #[path = "../tests/support/native_error_boundary.rs"]
 mod error_boundary_vectors;
+
+#[cfg(test)]
+#[path = "../tests/support/native_view_response.rs"]
+mod view_response_vectors;
