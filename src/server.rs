@@ -859,11 +859,7 @@ fn reply_view(state: &State, socket: TcpStream, q: &Query) {
     match result {
         Ok(v) => json_reply(socket, 200, v),
         Err(e) => {
-            let code = if e.to_string().contains("not ready") {
-                503
-            } else {
-                400
-            };
+            let code = crate::http_status::ReadinessStatus::from_error(&e).code();
             error(socket, code, e)
         }
     }

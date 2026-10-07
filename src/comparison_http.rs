@@ -21,11 +21,7 @@ enum Job {
     Tile(TcpStream, Query),
 }
 fn code(e: &dyn std::fmt::Display) -> u16 {
-    if e.to_string().contains("not ready") {
-        503
-    } else {
-        400
-    }
+    crate::http_status::ReadinessStatus::from_error(e).code()
 }
 pub fn serve(state: Arc<Comparison>, port: u16) -> Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
