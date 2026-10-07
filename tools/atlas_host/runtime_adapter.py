@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from .common import canonical, digest, fields, require
 from .registry import fingerprint
 from .static_models import StaticPolicy
+from .static_operation import StaticOperation
 from .fixture_source import (
     FIXTURE_SHA as FIXTURE_SHA,
     FIXTURE_FILES as FIXTURE_FILES,
@@ -292,8 +293,6 @@ class FixtureHost:
         if kind == "static":
             try:
                 if self.dense_policy is not None:
-                    from .hosted_runtime import StaticOperation
-
                     require(
                         type(operation) is StaticOperation
                         and operation.app.host is self
