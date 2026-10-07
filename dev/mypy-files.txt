@@ -72,3 +72,7 @@ tools/atlas_host/profile_api.py
 tests/typing/profile_api_clients.py
 tools/atlas_host/profile_snapshot.py
 tests/typing/snapshot_clients.py
+tools/atlas_host/profile_worker.py
+tests/typing/profile_worker_clients.py
+tools/atlas_host/profile_os.py
+tests/typing/profile_os_clients.py
