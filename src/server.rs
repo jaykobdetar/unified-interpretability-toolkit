@@ -725,6 +725,17 @@ fn dispatch(
     reply_static(socket, &path)
 }
 
+// Queue admission and clearing the previous error share the publication lock.
+// The private callback must remain nonblocking: the worker also needs this lock.
+fn queue_calibration(state: &State, enqueue: impl FnOnce() -> bool) -> bool {
+    let mut progress = state.progress.lock().unwrap();
+    if !enqueue() {
+        return false;
+    }
+    progress.error = None;
+    true
+}
+
 fn reply_calibration(
     state: &State,
     sender: &SyncSender<Job>,
@@ -769,8 +780,7 @@ fn reply_calibration(
         Ok(id) => {
             if state.stats(id).is_some() {
                 json_reply(socket, 200, json!({"api_version":1,"complete":true}));
-            } else if sender.try_send(Job::Calibrate(id)).is_ok() {
-                state.progress.lock().unwrap().error = None;
+            } else if queue_calibration(state, || sender.try_send(Job::Calibrate(id)).is_ok()) {
                 json_reply(socket, 202, json!({"api_version":1,"queued":id}));
             } else {
                 error(socket, 503, "Numeric queue full; retry shortly")
@@ -1448,3 +1458,7 @@ mod error_boundary_vectors;
 #[cfg(test)]
 #[path = "../tests/support/native_view_response.rs"]
 mod view_response_vectors;
+
+#[cfg(test)]
+#[path = "../tests/support/native_calibration_admission.rs"]
+mod calibration_admission_vectors;
