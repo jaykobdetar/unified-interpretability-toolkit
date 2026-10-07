@@ -19,6 +19,7 @@ from .memory import available_bytes
 from .registry import fingerprint
 from .profile_observation import SpawnObservationPending
 from .startup_diagnostics import (
+    DiagnosticCollector,
     StartupDiagnostics,
     StartupRecord,
     safe_error,
@@ -176,7 +177,7 @@ def children(pid: int) -> set[int]:
 class ThreadMeter:
     """Registered thread CPU clock, frozen by that thread before it exits."""
 
-    def __init__(self, *, diagnostics: StartupDiagnostics | None = None) -> None:
+    def __init__(self, *, diagnostics: DiagnosticCollector | None = None) -> None:
         self.diagnostics = diagnostics
         self.clock_id: int | None = None
         self.final: float | None = None

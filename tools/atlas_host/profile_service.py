@@ -5,21 +5,106 @@ import secrets
 import threading
 import time
 
-from .startup_diagnostics import diagnose, diagnosed
+from .startup_diagnostics import DiagnosticCollector, diagnose, diagnosed
 from .common import require
-from .supervisor import AdmissionGrant, CpuLedger
-from .profile_platform import SupervisedProfile
-from .profile_os import ThreadMeter
+from .supervisor import AdmissionGrant, ComputeToken, CpuLedger, Supervisor
+from .profile_platform import ProfileHooks, ProfilePlatform, SupervisedProfile
+from .profile_os import ProfileSource, ThreadMeter
+
+
+from .profile_snapshot import SnapshotPage
+from .profile_worker import WorkerChild, WorkerStatus
+
+from collections.abc import Callable
+from typing import Any, NotRequired, Protocol, TypedDict, cast
+
+
+class ServiceMeter(Protocol):
+    def register(self) -> object: ...
+    def read(self) -> float: ...
+    def freeze(self) -> object: ...
+
+
+class ServiceContext(Protocol):
+    def authorize(self, model: str, context: str, tab: str, /) -> object: ...
+    def resolve(self, data: dict[str, Any], /) -> ProfileSource: ...
+
+
+class HooksFactory(Protocol):
+    def __call__(
+        self, source: ProfileSource, watch: "WatchSlot", /
+    ) -> ProfileHooks: ...
+
+
+class RuntimeFactory(Protocol):
+    def __call__(
+        self,
+        supervisor: Supervisor,
+        grant: AdmissionGrant,
+        hooks: ProfileHooks,
+        selected: dict[str, Any],
+        seed: int,
+        tab: str,
+        context: str,
+        *,
+        reserved: ComputeToken | None = None,
+    ) -> SupervisedProfile: ...
+
+
+class WaitableChild(WorkerChild, Protocol):
+    @property
+    def reaped(self) -> bool: ...
+    def wait(self, timeout: float) -> object: ...
+
+
+class ServiceSnapshot(WorkerStatus):
+    version: int
+    model_id: str
+    context_id: str
+    job_id: str
+
+
+class StartedSnapshot(ServiceSnapshot):
+    job_capability: str
+
+
+class Reconciliation(TypedDict):
+    state: str
+    cleanup_pending: bool
+    resume_available: bool
+    no_owned_work: NotRequired[bool]
+
+
+class ServiceRecord(TypedDict):
+    id: str
+    cap: str
+    tab: str
+    model_id: str
+    context_id: str
+    source: ProfileSource
+    data: dict[str, Any]
+    grant: AdmissionGrant
+    token: ComputeToken
+    runtime: SupervisedProfile | None
+    previous: "ServiceRecord | None"
+    cancel: bool
+    lease: float
+    pending: bool
+    ready: bool
+    status: WorkerStatus
+    watch: NotRequired["WatchSlot"]
 
 
 class WatchSlot:
-    def __init__(self, loop, callback, deadline):
+    def __init__(
+        self, loop: "WatchdogLoop", callback: Callable[[], object], deadline: float
+    ) -> None:
         self.loop, self.callback, self.deadline = loop, callback, deadline
         self.running = False
         self.failed = False
         self.closed = False
 
-    def register(self, callback, deadline):
+    def register(self, callback: Callable[[], object], deadline: float) -> "WatchSlot":
         with self.loop.condition:
             require(
                 not self.closed and not self.failed and deadline <= self.deadline,
@@ -28,7 +113,7 @@ class WatchSlot:
             self.callback = callback
             return self
 
-    def disarm(self):
+    def disarm(self) -> None:
         """Stop new callbacks without waiting for this callback to join itself."""
         with self.loop.condition:
             require(not self.failed, "Independent watchdog callback failed")
@@ -36,7 +121,7 @@ class WatchSlot:
             if not self.running and self in self.loop.slots:
                 self.loop.slots.remove(self)
 
-    def close(self):
+    def close(self) -> None:
         with self.loop.condition:
             self.closed = True
             require(
@@ -49,24 +134,30 @@ class WatchSlot:
 
 
 class WatchdogLoop:
-    def __init__(self, meter, *, clock=time.monotonic, diagnostics=None):
+    def __init__(
+        self,
+        meter: ServiceMeter,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        diagnostics: DiagnosticCollector | None = None,
+    ) -> None:
         self.diagnostics = diagnostics
         self.meter, self.clock = meter, clock
         self.condition = threading.Condition()
-        self.slots = []
+        self.slots: list[WatchSlot] = []
         self.stopped = False
         self.ready = threading.Event()
-        self.thread = None
-        self.lifetime = None
+        self.thread: threading.Thread | None = None
+        self.lifetime: Callable[[], object] | None = None
 
-    def set_lifetime(self, callback):
+    def set_lifetime(self, callback: Callable[[], object]) -> None:
         require(
             self.thread is None and self.lifetime is None,
             "Lifetime watch already installed",
         )
         self.lifetime = callback
 
-    def bind(self, callback, deadline):
+    def bind(self, callback: Callable[[], object], deadline: float) -> WatchSlot:
         with self.condition:
             self.slots = [
                 s for s in self.slots if not s.closed or s.running or s.failed
@@ -82,7 +173,7 @@ class WatchdogLoop:
             self.condition.notify_all()
             return slot
 
-    def pulse(self):
+    def pulse(self) -> None:
         # Public only to deterministic doubles; production loop owns calls.
         with self.condition:
             slots = list(self.slots)
@@ -110,7 +201,7 @@ class WatchdogLoop:
                     self.condition.notify_all()
 
     @diagnosed("profile_service.execution_thread")
-    def run(self):
+    def run(self) -> None:
         self.meter.register()
         self.ready.set()
         try:
@@ -125,7 +216,7 @@ class WatchdogLoop:
         finally:
             self.meter.freeze()
 
-    def start(self):
+    def start(self) -> None:
         require(self.thread is None, "Watchdog already started")
         self.thread = threading.Thread(
             target=self.run, name="atlas-profile-watchdog", daemon=True
@@ -133,7 +224,7 @@ class WatchdogLoop:
         self.thread.start()
         require(self.ready.wait(0.5), "Watchdog startup unavailable")
 
-    def close(self):
+    def close(self) -> None:
         with self.condition:
             require(not self.slots, "Active watchdog ownership remains")
             self.stopped = True
@@ -153,16 +244,16 @@ class ProfileService:
 
     def __init__(
         self,
-        supervisor,
-        context,
-        hooks_factory,
+        supervisor: Supervisor,
+        context: ServiceContext,
+        hooks_factory: HooksFactory,
         *,
-        clock=time.monotonic,
-        runtime_factory=SupervisedProfile,
-        owner_meter=None,
-        watchdog=None,
-        diagnostics=None,
-    ):
+        clock: Callable[[], float] = time.monotonic,
+        runtime_factory: RuntimeFactory = SupervisedProfile,
+        owner_meter: ServiceMeter | None = None,
+        watchdog: WatchdogLoop | None = None,
+        diagnostics: DiagnosticCollector | None = None,
+    ) -> None:
         self.diagnostics = diagnostics
         self.supervisor, self.context, self.hooks_factory = (
             supervisor,
@@ -180,17 +271,17 @@ class ProfileService:
         self.lock = threading.RLock()
         self.wake = threading.Event()
         self.ready = threading.Event()
-        self.record = None
-        self.thread = None
+        self.record: ServiceRecord | None = None
+        self.thread: threading.Thread | None = None
         self.stopped = False
         self.shutdown_requested = threading.Event()
-        self.owner_cleanup = None
+        self.owner_cleanup: Callable[[], bool] | None = None
 
-    def request_shutdown(self):
+    def request_shutdown(self) -> None:
         self.shutdown_requested.set()
         self.wake.set()
 
-    def admission(self):
+    def admission(self) -> tuple[AdmissionGrant, ThreadMeter]:
         # Called before HTTP framing/body parse. Freeze on that same HTTP thread.
         require(
             self.thread is not None
@@ -213,7 +304,7 @@ class ProfileService:
         )
         return AdmissionGrant(self.clock, ledger), meter
 
-    def _owner(self, data, *, job=True):
+    def _owner(self, data: dict[str, Any], *, job: bool = True) -> ServiceRecord:
         self.context.authorize(
             data["model_id"], data["context_id"], data["tab_capability"]
         )
@@ -227,17 +318,19 @@ class ProfileService:
         )
         if job:
             require(
-                r["id"] == data["job_id"]
-                and secrets.compare_digest(r["cap"], data["job_capability"]),
+                cast(ServiceRecord, r)["id"] == data["job_id"]
+                and secrets.compare_digest(
+                    cast(ServiceRecord, r)["cap"], data["job_capability"]
+                ),
                 "Private job mismatch",
             )
-        return r
+        return cast(ServiceRecord, r)
 
-    def _snapshot(self, r):
+    def _snapshot(self, r: ServiceRecord) -> ServiceSnapshot:
         if (r["cancel"] or self.shutdown_requested.is_set()) and r["status"][
             "state"
         ] != "cancelled":
-            status = {
+            status: WorkerStatus = {
                 "state": "stopping",
                 "accepted": None,
                 "error": r["status"]["error"],
@@ -254,7 +347,7 @@ class ProfileService:
             **deepcopy(status),
         }
 
-    def start(self, data, grant):
+    def start(self, data: dict[str, Any], grant: AdmissionGrant) -> StartedSnapshot:
         with self.lock:
             require(
                 not self.shutdown_requested.is_set(), "Hosted provider shutdown pending"
@@ -275,7 +368,7 @@ class ProfileService:
                     "Explicit Restart after cleanup required",
                 )
             token = self.supervisor.acquire("profile", data["context_id"])
-            r = {
+            r: ServiceRecord = {
                 "id": secrets.token_hex(16),
                 "cap": secrets.token_hex(32),
                 "tab": data["tab_capability"],
@@ -300,7 +393,7 @@ class ProfileService:
                 },
             }
 
-            def admission_guard():
+            def admission_guard() -> None:
                 try:
                     grant.remaining()
                     require(
@@ -319,8 +412,11 @@ class ProfileService:
                     runtime = r["runtime"]
                     if runtime is not None:
                         runtime.job.cancel_event.set()
-                        if runtime.platform.child is not None:
-                            runtime.platform.child.stop()
+                        if cast(ProfilePlatform, runtime.platform).child is not None:
+                            cast(
+                                WorkerChild,
+                                cast(ProfilePlatform, runtime.platform).child,
+                            ).stop()
                     self.wake.set()
 
             try:
@@ -338,7 +434,7 @@ class ProfileService:
             self.wake.set()
             return {**self._snapshot(r), "job_capability": r["cap"]}
 
-    def finish_admission(self, grant):
+    def finish_admission(self, grant: AdmissionGrant) -> None:
         # HTTP bridge freezes its CPU meter after response handling, before wake.
         with self.lock:
             r = self.record
@@ -346,11 +442,11 @@ class ProfileService:
                 r["ready"] = True
                 self.wake.set()
 
-    def status(self, data):
+    def status(self, data: dict[str, Any]) -> ServiceSnapshot:
         with self.lock:
             return self._snapshot(self._owner(data))
 
-    def page(self, data):
+    def page(self, data: dict[str, Any]) -> SnapshotPage:
         require(
             not self.shutdown_requested.is_set(), "Hosted provider shutdown pending"
         )
@@ -364,7 +460,7 @@ class ProfileService:
             )
             runtime = r["runtime"]
             require(runtime is not None, "No accepted profile")
-            return runtime.page(
+            return cast(SupervisedProfile, runtime).page(
                 r["tab"],
                 r["cap"],
                 r["context_id"],
@@ -374,7 +470,7 @@ class ProfileService:
                 data["count"],
             )
 
-    def _cancel(self, r):
+    def _cancel(self, r: ServiceRecord) -> None:
         if r["status"]["state"] == "cancelled":
             return
         if (
@@ -404,23 +500,24 @@ class ProfileService:
         runtime = r["runtime"]
         if runtime is not None:
             runtime.job.cancel_event.set()
-            if runtime.platform.child is not None:
-                runtime.platform.child.stop()
+            if cast(ProfilePlatform, runtime.platform).child is not None:
+                cast(WorkerChild, cast(ProfilePlatform, runtime.platform).child).stop()
         self.wake.set()
 
-    def cancel(self, data):
+    def cancel(self, data: dict[str, Any]) -> ServiceSnapshot:
         with self.lock:
             r = self._owner(data)
             self._cancel(r)
             return self._snapshot(r)
 
-    def reconcile(self, data):
+    def reconcile(self, data: dict[str, Any]) -> Reconciliation:
         # Prove only this authorized tab's ownership, never global availability.
         # A retained predecessor may still own storage during explicit Restart.
         with self.lock, self.supervisor.lock:
             self.context.authorize(
                 data["model_id"], data["context_id"], data["tab_capability"]
             )
+            records: list[ServiceRecord]
             records, r = [], self.record
             while r is not None:
                 require(
@@ -474,7 +571,7 @@ class ProfileService:
                 "no_owned_work": True,
             }
 
-    def heartbeat(self, data):
+    def heartbeat(self, data: dict[str, Any]) -> ServiceSnapshot:
         with self.lock:
             require(
                 not self.shutdown_requested.is_set(), "Hosted provider shutdown pending"
@@ -488,7 +585,7 @@ class ProfileService:
                 r["runtime"].job.heartbeat(r["tab"], r["cap"], r["context_id"])
             return self._snapshot(r)
 
-    def step(self):
+    def step(self) -> None:
         # Dedicated owner only; HTTP status never calls this method.
         r = self.record
         if r is None or r["status"]["state"] == "cancelled":
@@ -501,6 +598,7 @@ class ProfileService:
         if self.clock() >= r["lease"]:
             with self.lock:
                 self._cancel(r)
+        runtime: SupervisedProfile | None
         try:
             if r["pending"]:
                 r["pending"] = False
@@ -538,7 +636,7 @@ class ProfileService:
             runtime = r["runtime"]
             if runtime is None:
                 return
-            if r["cancel"] and runtime.platform.closed:
+            if r["cancel"] and cast(ProfilePlatform, runtime.platform).closed:
                 runtime.close()
                 r["runtime"] = None
                 with self.lock:
@@ -551,7 +649,7 @@ class ProfileService:
                     }
                 return
             runtime.tick()
-            if r["cancel"] and runtime.platform.closed:
+            if r["cancel"] and cast(ProfilePlatform, runtime.platform).closed:
                 runtime.close()
                 r["runtime"] = None
                 with self.lock:
@@ -584,8 +682,10 @@ class ProfileService:
             runtime = r["runtime"]
             if runtime is not None:
                 runtime.job.cancel_event.set()
-                if runtime.platform.child is not None:
-                    runtime.platform.child.stop()
+                if cast(ProfilePlatform, runtime.platform).child is not None:
+                    cast(
+                        WorkerChild, cast(ProfilePlatform, runtime.platform).child
+                    ).stop()
             else:
                 r["cancel"] = True
                 # Constructor failure releases only when it proves no child/FD.
@@ -603,7 +703,7 @@ class ProfileService:
                     }
 
     @diagnosed("profile_service.execution_thread")
-    def run(self):
+    def run(self) -> None:
         self.owner_meter.register()
         self.ready.set()
         try:
@@ -620,9 +720,13 @@ class ProfileService:
                         )
                 r = self.record
                 runtime = None if r is None else r["runtime"]
-                child = None if runtime is None else runtime.platform.child
-                if child is not None and not child.reaped:
-                    child.wait(0.05)
+                child = (
+                    None
+                    if runtime is None
+                    else cast(ProfilePlatform, runtime.platform).child
+                )
+                if child is not None and not cast(WaitableChild, child).reaped:
+                    cast(WaitableChild, child).wait(0.05)
                 elif runtime is not None and runtime.job.state == "validating":
                     continue  # Bounded primitive validation steps, under same grant.
                 else:
@@ -631,7 +735,7 @@ class ProfileService:
         finally:
             self.owner_meter.freeze()
 
-    def start_threads(self):
+    def start_threads(self) -> None:
         require(self.thread is None, "Owner already started")
         self.watchdog.start()
         self.thread = threading.Thread(
@@ -640,7 +744,7 @@ class ProfileService:
         self.thread.start()
         require(self.ready.wait(0.5), "Owner startup unavailable")
 
-    def close(self):
+    def close(self) -> bool:
         with self.lock:
             if (
                 self.record is not None
