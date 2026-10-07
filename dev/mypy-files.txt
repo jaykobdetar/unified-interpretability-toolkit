@@ -61,3 +61,10 @@ tools/atlas_host/inference_worker.py
 tests/typing/package_worker_clients.py
 tools/atlas_host/live_inference.py
 tests/typing/package_coordinator_clients.py
+tools/atlas_host/profile_observation.py
+tools/atlas_host/startup_diagnostics.py
+tests/typing/host_leaf_clients.py
+tools/atlas_host/supervisor.py
+tests/typing/supervisor_clients.py
+tools/atlas_host/static_models.py
+tests/typing/static_policy_clients.py
