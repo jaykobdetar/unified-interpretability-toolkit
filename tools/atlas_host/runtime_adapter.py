@@ -11,9 +11,13 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from .common import canonical, digest, fields, require
 from .registry import fingerprint
 from .static_models import StaticPolicy
+from .fixture_source import (
+    FIXTURE_SHA as FIXTURE_SHA,
+    FIXTURE_FILES as FIXTURE_FILES,
+    fixture_entry as fixture_entry,
+    check_fixture as check_fixture,
+)
 
-FIXTURE_SHA = "c0075bfc55f9e51ccac3c5511ea55a5ca19744b002921e8d2e4ae3f60d321be3"
-FIXTURE_FILES = [{"name": "tiny.safetensors", "bytes": 244, "sha256": FIXTURE_SHA}]
 FIXTURE_TENSORS = {"matrix": [3, 5], "vector": [7], "zeros": [4]}
 READ_ROUTES = {
     "model": ("/api/model", set()),
@@ -33,53 +37,6 @@ class HostError(ValueError):
 
 def refuse(status, code, message):
     raise HostError(status, code, message)
-
-
-def fixture_entry(entry):
-    return (
-        entry["manifest"]["provenance"] == "synthetic_fixture"
-        and entry["manifest"]["files"] == FIXTURE_FILES
-    )
-
-
-def check_fixture(entry, *, hash_bytes=False):
-    require(
-        entry["enabled"] and fixture_entry(entry),
-        "Only enabled exact synthetic fixtures may activate",
-    )
-    root = Path(entry["root"])
-    # Match all files the source loader could interpret, not only the listed shard.
-    interpreted = {
-        path.name
-        for path in root.iterdir()
-        if path.name.endswith(".safetensors")
-        or path.name == "model.safetensors.index.json"
-    }
-    require(interpreted == {"tiny.safetensors"}, "Fixture source inventory changed")
-    path = root / "tiny.safetensors"
-    before = fingerprint(path.lstat())
-    require(
-        before == entry["fingerprints"]["tiny.safetensors"],
-        "Fixture fingerprint changed",
-    )
-    if hash_bytes:
-        # Exactly 244 known fixture bytes, not an arbitrary model hash request.
-        import os
-
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, "rb") as source:
-            require(
-                fingerprint(os.fstat(source.fileno())) == before,
-                "Fixture source changed",
-            )
-            raw = source.read(245)
-            require(
-                len(raw) == 244 and hashlib.sha256(raw).hexdigest() == FIXTURE_SHA,
-                "Fixture hash differs from the allowed synthetic source",
-            )
-        require(
-            fingerprint(path.lstat()) == before, "Fixture changed during activation"
-        )
 
 
 class FixtureHost:

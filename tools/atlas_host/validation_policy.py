@@ -96,7 +96,7 @@ class BoundValidationPolicy:
         binary.check()
 
     def check_entry(self, entry):
-        from .runtime_adapter import check_fixture
+        from .fixture_source import check_fixture
 
         self.check()
         check_fixture(entry, hash_bytes=True)
