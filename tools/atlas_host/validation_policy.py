@@ -9,7 +9,19 @@ import hashlib
 from pathlib import Path
 
 from .common import digest, fields, integer, require, read_json
-from .registry import fingerprint
+from .registry import RegistryEntry, fingerprint
+
+from collections.abc import Mapping
+from typing import Any, Protocol, TypeAlias
+
+FileIdentity: TypeAlias = tuple[str, tuple[tuple[str, int], ...]]
+
+
+class ValidationBinary(Protocol):
+    @property
+    def path(self) -> Path: ...
+    def check(self) -> object: ...
+
 
 MIB = 1024**2
 GIB = 1024**3
@@ -25,11 +37,11 @@ TOPOLOGY = ["coordinator", "resident_renderer", "one_disposable_worker"]
 _SEAL = object()
 
 
-def package_root():
+def package_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def source_names(root):
+def source_names(root: Path) -> list[str]:
     """Only the runtime package, native sources, Cargo and the exact fixture."""
     names = {
         "Cargo.toml",
@@ -46,7 +58,7 @@ def source_names(root):
     return sorted(names)
 
 
-def _verified_file(path, expected, limit):
+def _verified_file(path: Path, expected: str, limit: int) -> FileIdentity:
     digest(expected)
     require(not path.is_symlink(), "Recipe symlink unavailable")
     before = fingerprint(path.stat())
@@ -64,19 +76,19 @@ def _verified_file(path, expected, limit):
 class BoundValidationPolicy:
     receipt_sha256: str
     binary_sha256: str
-    source_inventory: tuple
-    files: tuple
+    source_inventory: tuple[str, ...]
+    files: tuple[FileIdentity, ...]
     monitor_path: str
     harness_path: str
     binary_path: str
     _seal: object
 
     @property
-    def start_bytes(self):
+    def start_bytes(self) -> int:
         # Reviewed sample (25.28125 MiB + 1720 B) leaves the 256 MiB margin floor.
         return STOP_RESERVE + TREE_CEILING + 256 * MIB
 
-    def check(self):
+    def check(self) -> None:
         require(self._seal is _SEAL, "Owner-reviewed recipe required")
         require(
             tuple(source_names(package_root())) == self.source_inventory,
@@ -90,18 +102,18 @@ class BoundValidationPolicy:
                 "Bound recipe changed",
             )
 
-    def check_binary(self, binary):
+    def check_binary(self, binary: ValidationBinary) -> None:
         self.check()
         require(str(binary.path) == self.binary_path, "Recipe binary path mismatch")
         binary.check()
 
-    def check_entry(self, entry):
+    def check_entry(self, entry: RegistryEntry) -> None:
         from .fixture_source import check_fixture
 
         self.check()
         check_fixture(entry, hash_bytes=True)
 
-    def command(self, interpreter, root):
+    def command(self, interpreter: str, root: str | Path) -> list[str]:
         self.check()
         require(
             interpreter == "/usr/bin/python3"
@@ -118,8 +130,13 @@ class BoundValidationPolicy:
 
 
 def bind_reviewed_recipe(
-    receipt_path, approved_sha256, *, monitor_path, harness_path, binary_path
-):
+    receipt_path: str | Path,
+    approved_sha256: str,
+    *,
+    monitor_path: str | Path,
+    harness_path: str | Path,
+    binary_path: str | Path,
+) -> BoundValidationPolicy:
     """Called only by trusted owner bootstrap, before choosing a cheaper gate.
 
     Review receipt digest and exact script paths are never obtained from HTTP.
@@ -199,7 +216,9 @@ def bind_reviewed_recipe(
     return policy
 
 
-def check_start(policy, available, disk):
+def check_start(
+    policy: BoundValidationPolicy | None, available: int, disk: int
+) -> None:
     integer(available)
     integer(disk)
     if policy is None:
@@ -213,7 +232,9 @@ def check_start(policy, available, disk):
     )
 
 
-def check_memory(observed, snapshot_bytes, *, allow_pending=False):
+def check_memory(
+    observed: Mapping[str, Any], snapshot_bytes: int, *, allow_pending: bool = False
+) -> None:
     fields(
         observed,
         ("rss_bytes", "available_bytes", "all_owned_accounted", "descendants_clear"),
@@ -236,15 +257,15 @@ def check_memory(observed, snapshot_bytes, *, allow_pending=False):
 class QualificationBoundary:
     """Trusted outer monitor adapter; never a replacement for provider inventory."""
 
-    def __init__(self, policy):
+    def __init__(self, policy: BoundValidationPolicy) -> None:
         require(type(policy) is BoundValidationPolicy, "Owner-reviewed recipe required")
         policy.check()
         self.policy = policy
 
-    def preflight(self, available, disk):
+    def preflight(self, available: int, disk: int) -> None:
         check_start(self.policy, available, disk)
 
-    def check_sample(self, observed):
+    def check_sample(self, observed: Mapping[str, Any]) -> None:
         # Conservatively charge the full supported two-frame maximum, including
         # idle results. The provider's independent guard checks actual inventory.
         check_memory(observed, SNAPSHOT_MAX)
