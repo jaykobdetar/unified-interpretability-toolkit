@@ -94,3 +94,7 @@ tools/atlas_host/static_operation.py
 tests/typing/static_operation_clients.py
 tools/atlas_host/runtime_adapter.py
 tests/typing/runtime_adapter_clients.py
+tools/host_atlas.py
+tests/typing/host_launcher_clients.py
+tools/atlas_host/hosted_runtime.py
+tests/typing/hosted_runtime_clients.py
