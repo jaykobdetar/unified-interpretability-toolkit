@@ -14,10 +14,44 @@ import sys
 
 from .common import canonical, digest, fields, integer, require
 from .profile_os import strict_json
-from .registry import fingerprint, validate_manifest
-from .static_models import _current
-from .validation_policy import package_root, source_names
+from .registry import Registry, RegistryEntry, fingerprint, validate_manifest
+from .static_models import PreparedStatic, _current
+from .validation_policy import (
+    FileIdentity,
+    ValidationBinary,
+    package_root,
+    source_names,
+)
 from .host_assets import ASSETS, BUNDLE
+
+from typing import Any, TypeVar, TypedDict, cast
+
+ValueT = TypeVar("ValueT")
+
+
+class RootIdentity(TypedDict):
+    canonical_root: str
+    device: int
+    directory_inode: int
+    filesystem_type: str
+
+
+class RequiredApis(TypedDict):
+    stat_ns: bool
+    fstat: bool
+    pread: bool
+    o_nofollow: bool
+    flock_lock_ex: bool
+
+
+class PlatformObservation(TypedDict):
+    system: str
+    kernel_release: str
+    native_arch: str
+    python_implementation: str
+    python_version: str
+    required_apis: RequiredApis
+
 
 REPOSITORY = "HuggingFaceTB/SmolLM2-135M"
 REVISION = "93efa2f097d58c2a74874c7e644dbc9b0cee75a2"
@@ -48,7 +82,7 @@ NATIVE_SOURCE_PINS = {
 }
 _SEAL = object()
 
-SCHEMAS = {
+SCHEMAS: dict[str, dict[str, Any]] = {
     "cacheProbe": {
         "additionalProperties": False,
         "properties": {
@@ -367,10 +401,10 @@ SCHEMAS = {
 }
 
 
-def validate_support(value, kind):
+def validate_support(value: ValueT, kind: str) -> ValueT:
     """The reviewed finite schema subset, with exact JSON numeric/boolean types."""
 
-    def visit(v, s):
+    def visit(v: Any, s: dict[str, Any]) -> None:
         if "$ref" in s:
             return visit(v, SCHEMAS[s["$ref"].split("/")[-1]])
         if "const" in s:
@@ -410,7 +444,9 @@ def validate_support(value, kind):
     return value
 
 
-def _verified(path, expected, limit, *, json_artifact=False):
+def _verified(
+    path: str | Path, expected: str, limit: int, *, json_artifact: bool = False
+) -> tuple[Any, FileIdentity]:
     digest(expected)
     path = Path(path)
     require(
@@ -467,7 +503,7 @@ def runtime_names(root: Path) -> list[str]:
     return sorted(names)
 
 
-def _git_version(root):
+def _git_version(root: str | Path) -> list[str]:
     # Trusted bootstrap, bounded Git metadata command; never an HTTP/model job.
     result = subprocess.run(
         ["git", "rev-parse", "HEAD", "HEAD^{tree}"],
@@ -483,7 +519,7 @@ def _git_version(root):
     return values
 
 
-def _root_identity(path):
+def _root_identity(path: str | Path) -> RootIdentity:
     path = Path(path)
     require(
         path.is_dir()
@@ -511,11 +547,11 @@ def _root_identity(path):
         "canonical_root": str(path),
         "device": info.st_dev,
         "directory_inode": info.st_ino,
-        "filesystem_type": chosen[1],
+        "filesystem_type": cast(tuple[str, str], chosen)[1],
     }
 
 
-def _platform():
+def _platform() -> PlatformObservation:
     import fcntl
 
     return {
@@ -534,7 +570,7 @@ def _platform():
     }
 
 
-def filesystem_checks(v, source, cache):
+def filesystem_checks(v: dict[str, Any], source: str | Path, cache: str | Path) -> None:
     validate_support(v, "filesystemReceipt")
     require(
         v["source"] == _root_identity(source)
@@ -579,7 +615,7 @@ def filesystem_checks(v, source, cache):
             "Ordinary write evidence differs",
         )
 
-        def publication(item, temp):
+        def publication(item: dict[str, Any], temp: str) -> None:
             require(
                 item["before"]["device"] == item["after"]["device"]
                 and item["before"]["inode"] != item["after"]["inode"]
@@ -596,7 +632,7 @@ def filesystem_checks(v, source, cache):
         if role == "cache":
             publication(probe["atomic_publish"], "temporary")
 
-        def fingerprints(item):
+        def fingerprints(item: Any) -> None:
             if type(item) is dict:
                 if set(item) == {"device", "inode", "bytes", "mtime_ns", "ctime_ns"}:
                     require(
@@ -610,7 +646,7 @@ def filesystem_checks(v, source, cache):
         fingerprints(probe)
 
 
-def check_cache_available(path):
+def check_cache_available(path: str | Path) -> None:
     """Cooperative owner preflight of the existing native atlas.lock, no writes.
 
     Native State::open repeats and retains the exclusive lock. This preflight
@@ -647,7 +683,7 @@ def check_cache_available(path):
         os.close(fd)
 
 
-def target_entry(entry):
+def target_entry(entry: RegistryEntry) -> None:
     manifest = validate_manifest(entry["manifest"])
     require(
         entry["enabled"] is True
@@ -671,19 +707,19 @@ def target_entry(entry):
 
 @dataclass(frozen=True)
 class BoundDenseStaticAdmission:
-    registry: object
+    registry: Registry
     model_id: str
     owner_sha: str
     binary_sha: str
     binary_path: str
-    files: tuple
-    inventory: tuple
+    files: tuple[FileIdentity, ...]
+    inventory: tuple[str, ...]
     source_root: str
     cache_root: str
-    filesystem: object
+    filesystem: dict[str, Any]
     _seal: object
 
-    def check(self):
+    def check(self) -> RegistryEntry:
         require(self._seal is _SEAL, "Sealed owner policy required")
         for name, saved in self.files:
             path = Path(name)
@@ -713,7 +749,7 @@ class BoundDenseStaticAdmission:
         )
         return entry
 
-    def allows(self, identifier):
+    def allows(self, identifier: str) -> bool:
         if identifier != self.model_id:
             return False
         try:
@@ -731,7 +767,7 @@ class BoundDenseStaticAdmission:
         except (ValueError, OSError, KeyError):
             return False
 
-    def admit(self, prepared):
+    def admit(self, prepared: PreparedStatic) -> bool:
         require(prepared.entry == self.check(), "Prepared owner receipt differs")
         require(
             prepared.descriptor["model_type"] == "llama"
@@ -743,13 +779,19 @@ class BoundDenseStaticAdmission:
         prepared.check()
         return True
 
-    def check_binary(self, binary):
+    def check_binary(self, binary: ValidationBinary) -> None:
         self.check()
         binary.check()
         require(str(binary.path) == self.binary_path, "Owner binary path differs")
 
 
-def bind_dense_policy(path, approved_sha, registry, cache, binary_path):
+def bind_dense_policy(
+    path: str | Path,
+    approved_sha: str,
+    registry: Registry,
+    cache: str | Path,
+    binary_path: str | Path,
+) -> BoundDenseStaticAdmission:
     """Trusted owner pair approves an exact bundle for its reviewed test scope.
 
     Absence is closed. No registration, license insertion, filesystem experiment,
@@ -872,13 +914,13 @@ def bind_dense_policy(path, approved_sha, registry, cache, binary_path):
     return result
 
 
-def check_native_model(prepared, model):
+def check_native_model(prepared: PreparedStatic, model: dict[str, Any]) -> None:
     """Structural binder is separate; this checks owner name and saved-stat claims."""
     require(
         type(model) is dict and model.get("name") == prepared.entry["name"],
         "Native owner name differs",
     )
-    c = model.get("coverage")
+    c = cast(dict[str, Any], model.get("coverage"))
     require(
         type(c) is dict
         and "fresh_source_hashes" in model
@@ -891,7 +933,7 @@ def check_native_model(prepared, model):
         "sha_missing_expected_shards",
         "sha_verified_shards",
     ):
-        integer(c.get(key), 0, 0)
+        integer(cast(int, c.get(key)), 0, 0)
     require(
         c.get("source_complete") is True
         and c.get("active_tensor") is None
@@ -902,14 +944,14 @@ def check_native_model(prepared, model):
         "calibration_error" in c and c["calibration_error"] is None,
         "Native calibration error pending",
     )
-    integer(c.get("materialized_bytes"), 0, 2 * 1024**3)
-    integer(c.get("materialized_tiles"), 0, 1000)
+    integer(cast(int, c.get("materialized_bytes")), 0, 2 * 1024**3)
+    integer(cast(int, c.get("materialized_tiles")), 0, 1000)
     require(
         c.get("cache_budget_bytes") == 2 * 1024**3
         and c.get("fine_tile_file_cap") == 1000,
         "Native cache cap differs",
     )
-    tensors = model.get("catalog")
+    tensors = cast(list[Any], model.get("catalog"))
     require(type(tensors) is list, "Native catalog required")
     completed = 0
     values = 0
@@ -967,8 +1009,8 @@ def check_native_model(prepared, model):
             "Saved BF16 encoding differs",
         )
         maxima.append(t["max_abs"])
-    integer(c.get("calibrated_tensors"), completed, completed)
-    integer(c.get("values_streamed"), values, values)
+    integer(cast(int, c.get("calibrated_tensors")), completed, completed)
+    integer(cast(int, c.get("values_streamed")), values, values)
     complete = completed == len(tensors) and bool(tensors)
     require(
         type(model.get("calibration_complete")) is bool
