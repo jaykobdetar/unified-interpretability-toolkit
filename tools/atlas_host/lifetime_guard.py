@@ -1,12 +1,33 @@
 """Independent whole-provider memory enforcement through idle and cleanup."""
 
 from .profile_observation import SpawnObservationPending
-from .startup_diagnostics import diagnose
+from .startup_diagnostics import DiagnosticCollector, diagnose
 from .validation_policy import check_memory
 
 
+from collections.abc import Callable, Mapping
+from typing import Protocol
+
+
+class LifetimeResources(Protocol):
+    def resources(self) -> Mapping[str, object]: ...
+    def request_stop_all(self) -> None: ...
+
+
+class LifetimeSupervisor(Protocol):
+    def prevent_admission(self) -> None: ...
+    def charged_snapshot_bytes(self) -> int: ...
+
+
 class LifetimeGuard:
-    def __init__(self, book, supervisor, request_cleanup, *, diagnostics=None):
+    def __init__(
+        self,
+        book: LifetimeResources,
+        supervisor: LifetimeSupervisor,
+        request_cleanup: Callable[[], object],
+        *,
+        diagnostics: DiagnosticCollector | None = None,
+    ) -> None:
         self.book, self.supervisor, self.request_cleanup = (
             book,
             supervisor,
@@ -16,14 +37,14 @@ class LifetimeGuard:
         self.failed = False
         self.stopping = False
 
-    def request_shutdown(self):
+    def request_shutdown(self) -> None:
         self.stopping = True
         self.supervisor.prevent_admission()
         # Wake the owner even if a signal/observation fails. No grant is created.
         self.request_cleanup()
         self.book.request_stop_all()
 
-    def pulse(self):
+    def pulse(self) -> bool:
         try:
             pending = False
             try:
