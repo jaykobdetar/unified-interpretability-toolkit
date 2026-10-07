@@ -180,6 +180,7 @@ class Sequence(unittest.TestCase):
         commands = []
         python, ruff = Path("/synthetic-development-python"), Path("/synthetic-ruff")
         with (
+            patch.object(check, "_MYPY_FILES", ("tools/check.py",), create=True),
             patch.object(Path, "is_file", return_value=True),
             patch.object(check, "require_version"),
             patch.object(check, "formatter_files", return_value=FILES),
