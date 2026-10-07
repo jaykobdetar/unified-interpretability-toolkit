@@ -80,13 +80,17 @@ EXPECTED = (
     "tests/typing/supervisor_clients.py",
     "tools/atlas_host/static_models.py",
     "tests/typing/static_policy_clients.py",
+    "tools/atlas_host/profile_api.py",
+    "tests/typing/profile_api_clients.py",
+    "tools/atlas_host/profile_snapshot.py",
+    "tests/typing/snapshot_clients.py",
 )
 
 
 class DefaultTypeScope(unittest.TestCase):
     def test_default_declaration_keeps_all_qualified_targets(self):
         self.assertEqual(check._MYPY_FILES, EXPECTED)
-        self.assertEqual(len(EXPECTED), 70)
+        self.assertEqual(len(EXPECTED), 74)
         self.assertEqual(len(set(EXPECTED)), len(EXPECTED))
         for relative in EXPECTED:
             with self.subTest(path=relative):

@@ -68,3 +68,7 @@ tools/atlas_host/supervisor.py
 tests/typing/supervisor_clients.py
 tools/atlas_host/static_models.py
 tests/typing/static_policy_clients.py
+tools/atlas_host/profile_api.py
+tests/typing/profile_api_clients.py
+tools/atlas_host/profile_snapshot.py
+tests/typing/snapshot_clients.py
