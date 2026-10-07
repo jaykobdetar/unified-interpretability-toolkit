@@ -90,3 +90,5 @@ tools/atlas_host/host_assets.py
 tests/typing/host_asset_clients.py
 tools/atlas_host/dense_static_admission.py
 tests/typing/dense_admission_clients.py
+tools/atlas_host/static_operation.py
+tests/typing/static_operation_clients.py
