@@ -648,22 +648,39 @@ impl State {
             .tensors
             .iter()
             .map(|t| {
-                let mut v = serde_json::to_value(t).unwrap();
+                let v = serde_json::to_value(t).unwrap();
                 let s = c.tensors.get(&t.id);
-                v["calibration_complete"] = json!(s.is_some());
-                v["slice_required"] = json!(t.available && t.shape.len()>2);
-                v["display_axes"] = json!(if t.shape.len()==1 {vec![0]} else if t.shape.len()>1 {vec![t.shape.len()-2,t.shape.len()-1]} else {vec![]});
-                v["max_abs"] = json!(s.map(|s| s.max_abs));
-                v["median_nonzero_abs"] = json!(s.map(|s| s.median_nonzero_abs));
-                v["q99"] = json!(s.map(|s| s.q99));
-                v["quantile_order_statistics"] = json!(s.map(|_| "exact"));
-                v["quantile_interpolation"] = json!(s.map(|_| "linear in F64; final floating-point rounding possible"));
-                v["robust_clipped_count"] = json!(s.map(|s| s.robust_clipped_count));
-                v["rule_status"] = json!({"tensor_signed_percentile":if !t.available {"unavailable: numeric tensor viewing unsupported"} else if t.dtype == "F32" {"unsupported: exact F32 absolute-value rank index pending"} else if s.is_none() {"calibration pending"} else {"supported dtype; requires a valid exact histogram"}});
-                v["exact_zero_count"] = json!(s.map(|s| s.exact_zero_count));
-                v["unique_bit_patterns"] = json!(s.and_then(|s| s.unique_bit_patterns));
-                v["calibration_method"] = json!(s.map(|s| s.calibration_method.as_str()));
-                v
+                Value::from(response::ModelTensor {
+                    tensor: v,
+                    calibration_complete: s.is_some(),
+                    slice_required: t.available && t.shape.len() > 2,
+                    display_axes: if t.shape.len() == 1 {
+                        vec![0]
+                    } else if t.shape.len() > 1 {
+                        vec![t.shape.len() - 2, t.shape.len() - 1]
+                    } else {
+                        vec![]
+                    },
+                    max_abs: s.map(|s| s.max_abs),
+                    median_nonzero_abs: s.map(|s| s.median_nonzero_abs),
+                    q99: s.map(|s| s.q99),
+                    quantile_order_statistics: s.map(|_| "exact"),
+                    quantile_interpolation: s
+                        .map(|_| "linear in F64; final floating-point rounding possible"),
+                    robust_clipped_count: s.map(|s| s.robust_clipped_count),
+                    signed_percentile_status: if !t.available {
+                        "unavailable: numeric tensor viewing unsupported"
+                    } else if t.dtype == "F32" {
+                        "unsupported: exact F32 absolute-value rank index pending"
+                    } else if s.is_none() {
+                        "calibration pending"
+                    } else {
+                        "supported dtype; requires a valid exact histogram"
+                    },
+                    exact_zero_count: s.map(|s| s.exact_zero_count),
+                    unique_bit_patterns: s.and_then(|s| s.unique_bit_patterns),
+                    calibration_method: s.map(|s| s.calibration_method.as_str()),
+                })
             })
             .collect::<Vec<_>>();
         let cache = self.cache.lock().unwrap();
@@ -682,14 +699,46 @@ impl State {
                 .filter(|r| r["matches_saved_expected_sha"].is_null())
                 .count()
         });
-        let mut model = json!({"api_version":1,"extensions":["progressive-calibration-v1","source-dtypes-v1","trailing-slices-v1","source-binding-v2"],"backend":"Rust","name":self.name,"revision":self.revision,"representation":"Original BF16/F16/F32 source values; no model execution","parameter_count":total,"global_max":g,"calibration_complete":g.is_some(),"source_directory":self.source.root,"source_bytes":self.source.bytes,"header_bytes_read":self.source.header_bytes,"source_identity":self.source.identity,"model_identity":self.model_identity(),"identity_validation":self.calibration_note,"fresh_source_hashes":fresh,"catalog":catalog,"rules":RULES.iter().map(|r|render::rule_info(r).unwrap()).collect::<Vec<_>>(),"coverage":{"source_complete":true,"sha_hashed_shards":hashed,"sha_expected_matched_shards":matched,"sha_missing_expected_shards":missing_expectation,"sha_verified_shards":matched,"source_validation":"Complete header/index coverage; file identity checked. Freshly hashed shards and matches against saved local expectations are counted separately; saved expectations are not newly authenticated upstream.","statistics_complete":g.is_some(),"values_streamed":c.tensors.values().map(|s|s.count).sum::<usize>(),"calibrated_tensors":c.tensors.len(),"active_tensor":p.active,"calibration_error":p.error,"all_requested":p.all_requested,"materialized_tiles":cache.entries.len(),"materialized_bytes":cache.bytes,"cache_budget_bytes":cache.budget_bytes,"fine_tile_file_cap":cache.file_cap,"all_pixels_materialized":false,"rendering_policy":"On-demand numeric tiles. No full-model pixel pyramid required."},"render_semantics":"Each pooled pixel is the F64 mean of the pointwise transformed field over aligned source blocks. Only real edge addresses count. Summation/libm rounding can differ from Python; raw source values are unchanged."});
-        // Keep additive status fields outside the large base JSON macro so its
-        // expansion stays within the existing crate recursion limit.
-        model["global_calibration_supported"] = json!(unsupported == 0);
-        model["global_calibration_unavailable_reason"] = json!(global_unavailable_reason);
-        model["supported_calibration_complete"] = json!(supported_complete);
-        model["coverage"]["supported_tensors"] = json!(supported);
-        model["coverage"]["unavailable_tensors"] = json!(unsupported);
+        let model = Value::from(response::Model {
+            name: &self.name,
+            revision: &self.revision,
+            parameter_count: total,
+            global_max: g,
+            calibration_complete: g.is_some(),
+            source_directory: &self.source.root,
+            source_bytes: self.source.bytes,
+            header_bytes_read: self.source.header_bytes,
+            source_identity: &self.source.identity,
+            model_identity: self.model_identity(),
+            identity_validation: &self.calibration_note,
+            fresh_source_hashes: &fresh,
+            catalog: &catalog,
+            rules: RULES
+                .iter()
+                .map(|r| render::rule_info(r).unwrap())
+                .collect::<Vec<_>>(),
+            coverage: response::ModelCoverage {
+                sha_hashed_shards: hashed,
+                sha_expected_matched_shards: matched,
+                sha_missing_expected_shards: missing_expectation,
+                sha_verified_shards: matched,
+                statistics_complete: g.is_some(),
+                values_streamed: c.tensors.values().map(|s| s.count).sum::<usize>(),
+                calibrated_tensors: c.tensors.len(),
+                active_tensor: p.active,
+                calibration_error: &p.error,
+                all_requested: p.all_requested,
+                materialized_tiles: cache.entries.len(),
+                materialized_bytes: cache.bytes,
+                cache_budget_bytes: cache.budget_bytes,
+                fine_tile_file_cap: cache.file_cap,
+                supported_tensors: supported,
+                unavailable_tensors: unsupported,
+            },
+            global_calibration_supported: unsupported == 0,
+            global_calibration_unavailable_reason: global_unavailable_reason,
+            supported_calibration_complete: supported_complete,
+        });
         Ok(model)
     }
 }
