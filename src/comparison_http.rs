@@ -23,21 +23,44 @@ enum Job {
 fn code(e: &dyn std::fmt::Display) -> u16 {
     crate::http_status::ReadinessStatus::from_error(e).code()
 }
+fn numeric_worker(receiver: std::sync::mpsc::Receiver<Job>, worker: &Arc<Comparison>) {
+    for job in receiver {
+        match job {
+            Job::Calibrate(id) => {
+                if let Err(e) = worker.calibrate_one(id) {
+                    eprintln!("Comparison calibration paused: {e}");
+                }
+            }
+            Job::Tile(socket, q) => {
+                if server::disconnected(&socket) {
+                    continue;
+                }
+                let start = Instant::now();
+                let result = (|| {
+                    worker.tile(
+                        q.int("tensor", "0")?,
+                        q.get("quantity", "delta"),
+                        q.get("mapping", "linear"),
+                        q.int("level", "0")?.try_into()?,
+                        q.int("x", "0")?,
+                        q.int("y", "0")?,
+                    )
+                })();
+                match result {Ok((png,cached,m))=>server::reply(socket,200,"image/png",&png,&format!("X-Atlas-Factor: {}\r\nX-Atlas-Cache: {}\r\nX-Atlas-Seconds: {:.6}\r\nX-Atlas-Source-Bytes: {}\r\nX-Atlas-Coordinate-Space: checkpoint-comparison-v1\r\nX-Atlas-Inference-Editable: false\r\nX-Atlas-Comparison-Identity: {}\r\nX-Atlas-Source-A-Identity: {}\r\nX-Atlas-Source-B-Identity: {}\r\n",m.factor,if cached{"hit"}else{"miss"},start.elapsed().as_secs_f64(),m.source_bytes_read,worker.identity,worker.a.identity,worker.b.identity)),Err(e)=>server::error(socket,code(&e),e)}
+            }
+        }
+    }
+}
+
 pub fn serve(state: Arc<Comparison>, port: u16) -> Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let port = listener.local_addr()?.port();
     let (sender, receiver) = sync_channel::<Job>(8);
     let worker = state.clone();
-    std::thread::Builder::new().name("atlas-comparison-numeric".into()).stack_size(2*1024*1024).spawn(move||{
-        for job in receiver {match job {
-            Job::Calibrate(id)=>{if let Err(e)=worker.calibrate_one(id){eprintln!("Comparison calibration paused: {e}");}},
-            Job::Tile(socket,q)=>{
-                if server::disconnected(&socket){continue}
-                let start=Instant::now();let result=(||{worker.tile(q.int("tensor","0")?,q.get("quantity","delta"),q.get("mapping","linear"),q.int("level","0")?.try_into()?,q.int("x","0")?,q.int("y","0")?)})();
-                match result {Ok((png,cached,m))=>server::reply(socket,200,"image/png",&png,&format!("X-Atlas-Factor: {}\r\nX-Atlas-Cache: {}\r\nX-Atlas-Seconds: {:.6}\r\nX-Atlas-Source-Bytes: {}\r\nX-Atlas-Coordinate-Space: checkpoint-comparison-v1\r\nX-Atlas-Inference-Editable: false\r\nX-Atlas-Comparison-Identity: {}\r\nX-Atlas-Source-A-Identity: {}\r\nX-Atlas-Source-B-Identity: {}\r\n",m.factor,if cached{"hit"}else{"miss"},start.elapsed().as_secs_f64(),m.source_bytes_read,worker.identity,worker.a.identity,worker.b.identity)),Err(e)=>server::error(socket,code(&e),e)}
-            }
-        }}
-    })?;
+    std::thread::Builder::new()
+        .name("atlas-comparison-numeric".into())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || numeric_worker(receiver, &worker))?;
     let (dispatch_sender, dispatch_receiver) =
         sync_channel::<server::CompletedRequest>(server::DISPATCH_CAPACITY);
     let dispatch_state = state.clone();
