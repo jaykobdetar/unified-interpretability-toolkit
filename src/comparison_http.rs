@@ -432,3 +432,7 @@ mod dispatch_vectors {
         assert_eq!(body["comparison_identity"], fixture.state.identity);
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/native_readiness_status.rs"]
+mod readiness_status_vectors;
