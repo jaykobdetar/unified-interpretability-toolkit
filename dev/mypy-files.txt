@@ -117,3 +117,5 @@ tools/analytics/make_examples.py
 tools/check_model_hashes.py
 tools/make_fixture.py
 tools/smoke.py
+tools/atlas_host/experiment_schema.py
+tools/generate_experiment_schema.py
