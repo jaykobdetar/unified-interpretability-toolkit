@@ -76,7 +76,11 @@
         if (typeof x === "string")
           check(x.length <= 16384, "Experiment text exceeds limit");
         if (Array.isArray(x))
-          check(x.length <= 576, "Experiment array exceeds limit");
+          check(
+            x.length <=
+              /* layout-fact: archive_array_limit */ 576 /* end-layout-fact */,
+            "Experiment array exceeds limit",
+          );
         if (x && typeof x === "object")
           for (const [k, v] of Object.entries(x)) {
             check(
@@ -170,7 +174,8 @@
           step.index === index &&
             Array.isArray(step.activation) &&
             step.activation.length > 0 &&
-            step.activation.length <= 576 &&
+            step.activation.length <=
+              /* layout-fact: archive_activation_limit */ 576 /* end-layout-fact */ &&
             step.activation.every(Number.isFinite),
           "Invalid archived activation",
         );
@@ -352,14 +357,14 @@
     };
     const architecture = (a) => {
       const dimensions = {
-        width: 576,
-        layers: 30,
-        query_heads: 9,
-        kv_heads: 3,
-        head_dim: 64,
-        queries_per_kv: 3,
-        vocab_size: 49152,
-        intermediate_size: 1536,
+        width: /* layout-fact: width */ 576 /* end-layout-fact */,
+        layers: /* layout-fact: layers */ 30 /* end-layout-fact */,
+        query_heads: /* layout-fact: query_heads */ 9 /* end-layout-fact */,
+        kv_heads: /* layout-fact: kv_heads */ 3 /* end-layout-fact */,
+        head_dim: /* layout-fact: head_dim */ 64 /* end-layout-fact */,
+        queries_per_kv: /* layout-fact: queries_per_kv */ 3 /* end-layout-fact */,
+        vocab_size: /* layout-fact: vocab_size */ 49152 /* end-layout-fact */,
+        intermediate_size: /* layout-fact: intermediate_size */ 1536 /* end-layout-fact */,
       };
       check(
         Object.entries(dimensions).every(([k, v]) => a[k] === v) &&

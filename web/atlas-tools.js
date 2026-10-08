@@ -765,7 +765,7 @@
   const STARTERS = [
     {
       name: "model.layers.0.self_attn.q_proj.weight",
-      shape: [576, 576],
+      shape: /* layout-fact: q_projection */ [576, 576] /* end-layout-fact */,
       region: [64, 0, 71, 7],
       title: "Positive and negative share a head",
       description:
@@ -774,7 +774,7 @@
     },
     {
       name: "model.layers.0.self_attn.k_proj.weight",
-      shape: [192, 576],
+      shape: /* layout-fact: k_projection */ [192, 576] /* end-layout-fact */,
       region: [0, 0, 7, 7],
       title: "Keys have fewer head groups",
       description:
@@ -783,7 +783,7 @@
     },
     {
       name: "model.layers.0.input_layernorm.weight",
-      shape: [576],
+      shape: /* layout-fact: norm_vector */ [576] /* end-layout-fact */,
       region: [0, 0, 0, 31],
       title: "A vector stays a vector",
       description:

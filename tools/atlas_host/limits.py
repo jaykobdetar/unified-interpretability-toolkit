@@ -151,3 +151,7 @@ VIEWER_MIN_TILE_CACHE_BYTES: Final[int] = 16 * 1024**2
 VIEWER_MAX_TILE_CACHE_BYTES: Final[int] = 64 * 1024**3
 VIEWER_MIN_TILE_CACHE_FILES: Final[int] = 64
 VIEWER_MAX_TILE_CACHE_FILES: Final[int] = 100000
+
+# Browser archive intake: independent resource policies, not model geometry.
+ARCHIVE_MAX_ARRAY_VALUES: Final[int] = 576
+ARCHIVE_MAX_ACTIVATION_VALUES: Final[int] = 576
