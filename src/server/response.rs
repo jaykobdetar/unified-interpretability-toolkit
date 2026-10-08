@@ -157,3 +157,18 @@ impl From<Selection<'_>> for Value {
         tensor
     }
 }
+
+pub(super) struct Startup<'a> {
+    pub state: &'a crate::state::State,
+    pub port: u16,
+}
+
+impl TryFrom<Startup<'_>> for Value {
+    type Error = crate::Error;
+    fn try_from(report: Startup<'_>) -> crate::Result<Self> {
+        let Startup { state, port } = report;
+        Ok(
+            serde_json::json!({"listening":format!("http://127.0.0.1:{port}"),"metadata_ready_seconds":state.started.elapsed().as_secs_f64(),"header_bytes":state.source.header_bytes,"tensors":state.source.tensors.len(),"peak_rss_mib":crate::peak_rss_mib(),"resources":crate::resources::snapshot()?}),
+        )
+    }
+}

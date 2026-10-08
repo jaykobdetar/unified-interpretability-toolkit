@@ -16,6 +16,8 @@ use std::{
     },
     time::Instant,
 };
+mod response;
+
 enum Job {
     Calibrate(usize),
     Tile(TcpStream, Query),
@@ -74,7 +76,10 @@ pub fn serve(state: Arc<Comparison>, port: u16) -> Result<()> {
         })?;
     println!(
         "{}",
-        json!({"listening":format!("http://127.0.0.1:{port}"),"comparison_identity":state.identity,"coordinate_space":crate::comparison::VERSION,"inference_editable":false,"tensors":state.pairs.len(),"peak_rss_mib":crate::peak_rss_mib()})
+        Value::from(response::Startup {
+            state: &state,
+            port
+        })
     );
     std::io::stdout().flush()?;
     server::run_transport(listener, dispatch_sender)

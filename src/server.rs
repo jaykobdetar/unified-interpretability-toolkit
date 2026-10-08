@@ -501,7 +501,10 @@ pub fn serve(state: Arc<State>, port: u16) -> Result<()> {
         })?;
     println!(
         "{}",
-        json!({"listening":format!("http://127.0.0.1:{port}"),"metadata_ready_seconds":state.started.elapsed().as_secs_f64(),"header_bytes":state.source.header_bytes,"tensors":state.source.tensors.len(),"peak_rss_mib":crate::peak_rss_mib(),"resources":crate::resources::snapshot()?})
+        Value::try_from(response::Startup {
+            state: &state,
+            port
+        })?
     );
     std::io::stdout().flush()?;
     reuse_transport::run(listener, dispatch_sender, reuse)

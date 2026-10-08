@@ -99,7 +99,11 @@ fn compatible(a: &Source, b: &Source) -> Result<Vec<Pair>> {
         missing.is_empty() && extra.is_empty() && shape.is_empty(),
         &format!(
             "Complete named-shape compatibility failed: {}",
-            json!({"missing_in_b_count":missing.len(),"extra_in_b_count":extra.len(),"shape_mismatch_count":shape.len(),"missing_in_b":missing.iter().take(20).collect::<Vec<_>>(),"extra_in_b":extra.iter().take(20).collect::<Vec<_>>(),"shape_mismatch":shape.iter().take(20).collect::<Vec<_>>() })
+            Value::from(response::CompatibilityDiagnostic {
+                missing: &missing,
+                extra: &extra,
+                shape: &shape
+            })
         ),
     )?;
     a.tensors

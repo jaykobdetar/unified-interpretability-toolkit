@@ -234,3 +234,37 @@ fn source_mutation_and_outputs_inside_either_source_fail_closed() {
     drop(c);
     std::fs::remove_dir_all(r).unwrap();
 }
+
+#[test]
+fn named_shape_diagnostic_keeps_exact_counts_order_and_twenty_name_bound() {
+    let r = root("diagnostic-envelope");
+    let missing = (0..21)
+        .map(|i| format!("missing-{i:02}"))
+        .collect::<Vec<_>>();
+    let extra = (0..21).map(|i| format!("extra-{i:02}")).collect::<Vec<_>>();
+    let mut left = missing
+        .iter()
+        .map(|name| (name.as_str(), Dtype::Bf16, vec![1], vec![0x3f80]))
+        .collect::<Vec<_>>();
+    let mut right = extra
+        .iter()
+        .map(|name| (name.as_str(), Dtype::Bf16, vec![1], vec![0x3f80]))
+        .collect::<Vec<_>>();
+    left.push(("shared", Dtype::Bf16, vec![2], vec![0x3f80, 0x4000]));
+    right.push(("shared", Dtype::Bf16, vec![1, 2], vec![0x3f80, 0x4000]));
+    let a = model(&r, "a", &left);
+    let b = model(&r, "b", &right);
+    let cache = r.join("cache");
+    let error = Comparison::open(&a, &b, &cache).err().unwrap().to_string();
+    let expected = json!({"missing_in_b_count":21,"extra_in_b_count":21,"shape_mismatch_count":1,
+        "missing_in_b":&missing[..20],"extra_in_b":&extra[..20],"shape_mismatch":["shared"]});
+    assert_eq!(
+        error,
+        format!("Complete named-shape compatibility failed: {expected}")
+    );
+    assert!(
+        !cache.exists(),
+        "diagnostic refusal must precede cache creation assertion"
+    );
+    std::fs::remove_dir_all(r).unwrap();
+}

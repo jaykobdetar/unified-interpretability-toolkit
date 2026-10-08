@@ -225,3 +225,20 @@ impl From<CatalogEntry<'_>> for Value {
         pair
     }
 }
+
+pub(super) struct CompatibilityDiagnostic<'a> {
+    pub missing: &'a [&'a str],
+    pub extra: &'a [&'a str],
+    pub shape: &'a [&'a str],
+}
+
+impl From<CompatibilityDiagnostic<'_>> for Value {
+    fn from(report: CompatibilityDiagnostic<'_>) -> Self {
+        let CompatibilityDiagnostic {
+            missing,
+            extra,
+            shape,
+        } = report;
+        json!({"missing_in_b_count":missing.len(),"extra_in_b_count":extra.len(),"shape_mismatch_count":shape.len(),"missing_in_b":missing.iter().take(20).collect::<Vec<_>>(),"extra_in_b":extra.iter().take(20).collect::<Vec<_>>(),"shape_mismatch":shape.iter().take(20).collect::<Vec<_>>() })
+    }
+}
