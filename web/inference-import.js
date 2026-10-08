@@ -1,6 +1,6 @@
 (() => {
   "use strict";
-  // Closed, bounded archive import. No DOM, transport, storage, or worker ownership.
+  // Closed, bounded archive contract factory. No DOM, transport, storage, or worker ownership.
   const AtlasExperimentImport = (() => {
     const utf8Size = (text) => new TextEncoder().encode(text).length;
     const MAX_BYTES = 1048576,
@@ -1032,5 +1032,5 @@
     };
   })();
   if (typeof module !== "undefined") module.exports = AtlasExperimentImport;
-  else globalThis.AtlasExperimentImport = AtlasExperimentImport;
+  else document.currentScript.atlasRegisterImport(AtlasExperimentImport);
 })();

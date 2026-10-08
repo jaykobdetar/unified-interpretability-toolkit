@@ -839,46 +839,52 @@ class AtlasExperimentLog {
 // The closed import codec is requested only by an explicit archive action.
 const AtlasExperimentImport =
   typeof module !== "undefined" ? require("./inference-import.js") : null;
-let importCodecPromise = null;
-function loadExperimentImport() {
-  const ready = () => {
-    const c = globalThis.AtlasExperimentImport;
-    if (!c || typeof c.read !== "function" || typeof c.append !== "function")
-      throw new Error("Archive importer did not initialize");
-    return c;
+const loadExperimentImport = (() => {
+  let importCodecPromise = null;
+  let importedExperimentCodec;
+  return function loadExperimentImport() {
+    const ready = () => {
+      const c = importedExperimentCodec;
+      if (!c || typeof c.read !== "function" || typeof c.append !== "function")
+        throw new Error("Archive importer did not initialize");
+      return c;
+    };
+    if (importCodecPromise) return importCodecPromise;
+    importCodecPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.atlasRegisterImport = (codec) => {
+        importedExperimentCodec = codec;
+      };
+      script.src = "/inference-import.js";
+      script.async = true;
+      const failed = () => {
+        clearTimeout(timeout);
+        script.remove();
+        reject(
+          new Error(
+            "Archive importer unavailable; existing records unchanged. Retry explicitly.",
+          ),
+        );
+      };
+      const timeout = setTimeout(failed, 15000);
+      script.onload = () => {
+        clearTimeout(timeout);
+        script.remove();
+        try {
+          resolve(ready());
+        } catch (error) {
+          reject(error);
+        }
+      };
+      script.onerror = failed;
+      document.head.append(script);
+    }).catch((error) => {
+      importCodecPromise = null;
+      throw error;
+    });
+    return importCodecPromise;
   };
-  if (importCodecPromise) return importCodecPromise;
-  importCodecPromise = new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = "/inference-import.js";
-    script.async = true;
-    const failed = () => {
-      clearTimeout(timeout);
-      script.remove();
-      reject(
-        new Error(
-          "Archive importer unavailable; existing records unchanged. Retry explicitly.",
-        ),
-      );
-    };
-    const timeout = setTimeout(failed, 15000);
-    script.onload = () => {
-      clearTimeout(timeout);
-      script.remove();
-      try {
-        resolve(ready());
-      } catch (error) {
-        reject(error);
-      }
-    };
-    script.onerror = failed;
-    document.head.append(script);
-  }).catch((error) => {
-    importCodecPromise = null;
-    throw error;
-  });
-  return importCodecPromise;
-}
+})();
 
 class AtlasLogStorage {
   constructor(storage, tabStorage, makeOwner) {
