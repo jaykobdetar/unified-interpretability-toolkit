@@ -213,6 +213,125 @@ def _slot(registry: Registry) -> Iterator[None]:
         os.close(fd)
 
 
+def _stream_files(
+    manifest: dict[str, Any],
+    reviewed: AcquisitionPlan,
+    temporary: Path,
+    deadline: float,
+    clock: Callable[[], float],
+    fetch: Fetch,
+    check: Callable[[int], dict[str, int]],
+) -> None:
+    remaining = reviewed["payload_bytes"]
+    for file in manifest["files"]:
+        check(remaining)
+        measured = hashlib.sha256()
+        left = file["bytes"]
+        with fetch(
+            _url(manifest, file["name"]),
+            min(10, max(0.001, deadline - clock())),
+        ) as source:
+            fd = os.open(
+                temporary / file["name"],
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+            )
+            with os.fdopen(fd, "wb") as output:
+                while left:
+                    check(remaining)
+                    block = source.read(min(65536, left))
+                    check(remaining)
+                    require(
+                        type(block) is bytes and 0 < len(block) <= min(65536, left),
+                        "Pinned data ended early or exceeded read bound",
+                    )
+                    measured.update(block)
+                    output.write(block)
+                    left -= len(block)
+                    remaining -= len(block)
+                require(not source.read(1), "Pinned data exceeded expected size")
+                require(
+                    measured.hexdigest() == file["sha256"],
+                    "Pinned data hash mismatch",
+                )
+                output.flush()
+                os.fsync(output.fileno())
+        check(remaining)
+
+
+def _publish_installed(
+    registry: Registry,
+    destination: Path,
+    parent: Path,
+    manifest: dict[str, Any],
+    name: str,
+    max_bytes: int,
+    deadline: float,
+    clock: Callable[[], float],
+    check: Callable[[int], dict[str, int]],
+    plan_digest: str,
+) -> dict[str, Any]:
+    durable = False
+    registration_attempted = False
+    try:
+        directory = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+            durable = True
+        finally:
+            os.close(directory)
+        check(0)
+        registration_attempted = True
+        receipt = registry.register(
+            destination,
+            manifest,
+            name,
+            max_bytes=max_bytes,
+            timeout_ms=min(5000, max(1, int((deadline - clock()) * 1000))),
+            publish_disabled=True,
+        )
+        return {
+            **receipt,
+            "installed": True,
+            "registered": True,
+            "inference_ready": False,
+            "plan_digest": plan_digest,
+            "installation_durability": "parent_directory_fsync_confirmed",
+            "registry_publication": "confirmed",
+        }
+    except AcquisitionDeadline:
+        reason = "deadline_after_install_data_retained"
+        publication = "not_attempted"
+    except OSError:
+        # Registry I/O may fail after its atomic replacement. Never call
+        # an unconfirmed publication definitely absent or disabled.
+        reason = (
+            "registry_publication_unconfirmed"
+            if registration_attempted
+            else "post_install_io_error_data_retained"
+        )
+        publication = "unconfirmed" if registration_attempted else "not_attempted"
+    except ValueError:
+        reason = (
+            "verified_data_retained_for_owner_registration"
+            if registration_attempted
+            else "post_install_admission_failed_data_retained"
+        )
+        publication = "not_published" if registration_attempted else "not_attempted"
+    return {
+        "installed": True,
+        "registered": None if publication == "unconfirmed" else False,
+        "enabled": None if publication == "unconfirmed" else False,
+        "inference_ready": False,
+        "plan_digest": plan_digest,
+        "reason": reason,
+        "installation_durability": (
+            "parent_directory_fsync_confirmed" if durable else "unconfirmed"
+        ),
+        "registry_publication": publication,
+    }
+
+
 def acquire(
     registry: Registry,
     destination: str | PathLike[str],
@@ -278,44 +397,7 @@ def acquire(
         temporary = Path(tempfile.mkdtemp(prefix=".atlas-acquire-", dir=parent))
         installed = False
         try:
-            remaining = reviewed["payload_bytes"]
-            for file in manifest["files"]:
-                check(remaining)
-                measured = hashlib.sha256()
-                left = file["bytes"]
-                with fetch(
-                    _url(manifest, file["name"]),
-                    min(10, max(0.001, deadline - clock())),
-                ) as source:
-                    fd = os.open(
-                        temporary / file["name"],
-                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                        0o600,
-                    )
-                    with os.fdopen(fd, "wb") as output:
-                        while left:
-                            check(remaining)
-                            block = source.read(min(65536, left))
-                            check(remaining)
-                            require(
-                                type(block) is bytes
-                                and 0 < len(block) <= min(65536, left),
-                                "Pinned data ended early or exceeded read bound",
-                            )
-                            measured.update(block)
-                            output.write(block)
-                            left -= len(block)
-                            remaining -= len(block)
-                        require(
-                            not source.read(1), "Pinned data exceeded expected size"
-                        )
-                        require(
-                            measured.hexdigest() == file["sha256"],
-                            "Pinned data hash mismatch",
-                        )
-                        output.flush()
-                        os.fsync(output.fileno())
-                check(remaining)
+            _stream_files(manifest, reviewed, temporary, deadline, clock, fetch, check)
             # Destination must still be unused; never replace an owner directory.
             require(
                 not destination.exists() and not destination.is_symlink(),
@@ -323,69 +405,18 @@ def acquire(
             )
             _install_new_directory(temporary, destination)
             installed = True
-            durable = False
-            registration_attempted = False
-            try:
-                directory = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(directory)
-                    durable = True
-                finally:
-                    os.close(directory)
-                check(0)
-                registration_attempted = True
-                receipt = registry.register(
-                    destination,
-                    manifest,
-                    name,
-                    max_bytes=max_bytes,
-                    timeout_ms=min(5000, max(1, int((deadline - clock()) * 1000))),
-                    publish_disabled=True,
-                )
-                return {
-                    **receipt,
-                    "installed": True,
-                    "registered": True,
-                    "inference_ready": False,
-                    "plan_digest": plan_digest,
-                    "installation_durability": "parent_directory_fsync_confirmed",
-                    "registry_publication": "confirmed",
-                }
-            except AcquisitionDeadline:
-                reason = "deadline_after_install_data_retained"
-                publication = "not_attempted"
-            except OSError:
-                # Registry I/O may fail after its atomic replacement. Never call
-                # an unconfirmed publication definitely absent or disabled.
-                reason = (
-                    "registry_publication_unconfirmed"
-                    if registration_attempted
-                    else "post_install_io_error_data_retained"
-                )
-                publication = (
-                    "unconfirmed" if registration_attempted else "not_attempted"
-                )
-            except ValueError:
-                reason = (
-                    "verified_data_retained_for_owner_registration"
-                    if registration_attempted
-                    else "post_install_admission_failed_data_retained"
-                )
-                publication = (
-                    "not_published" if registration_attempted else "not_attempted"
-                )
-            return {
-                "installed": True,
-                "registered": None if publication == "unconfirmed" else False,
-                "enabled": None if publication == "unconfirmed" else False,
-                "inference_ready": False,
-                "plan_digest": plan_digest,
-                "reason": reason,
-                "installation_durability": (
-                    "parent_directory_fsync_confirmed" if durable else "unconfirmed"
-                ),
-                "registry_publication": publication,
-            }
+            return _publish_installed(
+                registry,
+                destination,
+                parent,
+                manifest,
+                name,
+                max_bytes,
+                deadline,
+                clock,
+                check,
+                plan_digest,
+            )
         finally:
             if not installed:
                 shutil.rmtree(temporary)
