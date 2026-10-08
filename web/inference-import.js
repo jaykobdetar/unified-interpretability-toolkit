@@ -98,7 +98,7 @@
       bounded(value, 0);
       return value;
     }
-    function validateRecord(record, { experimentRecord: experimentRecord }) {
+    function validateRecordEnvelope(record) {
       keys(
         record,
         "schema created_at status complete worker_cleanup_confirmed termination privacy request settings runtime limits summary baseline edited steps sweep_plan",
@@ -157,6 +157,9 @@
         Array.isArray(record.steps) && record.steps.length <= 32,
         "Invalid archived trace cap",
       );
+      return request;
+    }
+    function validateTraceBudget(record, request) {
       let equivalents = 0,
         width = null;
       for (const [index, step] of record.steps.entries()) {
@@ -222,125 +225,158 @@
             record.limits?.prompts <= 2,
           "Archived sweep cap exceeded",
         );
-      const edit = (e) => {
-        const element = e.kind === "element",
-          fields = [
-            "tensor",
-            "shape",
-            "kind",
-            "operation",
-            ...(element ? ["row", "col"] : ["start", "end"]),
-            ...(e.operation === "scale" ? ["scale"] : []),
-          ];
-        keys(e, fields);
-        check(
-          Object.keys(e).length === fields.length &&
-            typeof e.tensor === "string" &&
-            e.tensor.length > 0 &&
-            Array.isArray(e.shape) &&
-            e.shape.length === 2 &&
-            e.shape.every((n) => integer(n, 1, Number.MAX_SAFE_INTEGER)) &&
-            Number.isSafeInteger(e.shape[0] * e.shape[1]) &&
-            ["element", "rows", "columns"].includes(e.kind) &&
-            ["zero", "scale"].includes(e.operation),
-          "Invalid archived edit",
-        );
-        check(
-          element
-            ? integer(e.row, 0, e.shape[0] - 1) &&
-                integer(e.col, 0, e.shape[1] - 1)
-            : integer(e.start, 0, e.shape[e.kind === "rows" ? 0 : 1] - 1) &&
-                integer(e.end, e.start + 1, e.shape[e.kind === "rows" ? 0 : 1]),
-          "Edit coordinates exceed native shape",
-        );
-        if (e.operation === "scale")
-          check(
-            Number.isFinite(e.scale) && Math.abs(e.scale) <= 100,
-            "Invalid edit scale",
-          );
-      };
-      (request.edits || []).forEach(edit);
-      const target = (t) => {
-        const fields = [
+    }
+    const edit = (e) => {
+      const element = e.kind === "element",
+        fields = [
+          "tensor",
+          "shape",
           "kind",
-          "layer",
-          ...(t.kind === "offset"
-            ? ["heads", "offset"]
-            : t.kind === "layer_heads"
-              ? []
-              : ["head"]),
+          "operation",
+          ...(element ? ["row", "col"] : ["start", "end"]),
+          ...(e.operation === "scale" ? ["scale"] : []),
         ];
-        keys(t, fields);
+      keys(e, fields);
+      check(
+        Object.keys(e).length === fields.length &&
+          typeof e.tensor === "string" &&
+          e.tensor.length > 0 &&
+          Array.isArray(e.shape) &&
+          e.shape.length === 2 &&
+          e.shape.every((n) => integer(n, 1, Number.MAX_SAFE_INTEGER)) &&
+          Number.isSafeInteger(e.shape[0] * e.shape[1]) &&
+          ["element", "rows", "columns"].includes(e.kind) &&
+          ["zero", "scale"].includes(e.operation),
+        "Invalid archived edit",
+      );
+      check(
+        element
+          ? integer(e.row, 0, e.shape[0] - 1) &&
+              integer(e.col, 0, e.shape[1] - 1)
+          : integer(e.start, 0, e.shape[e.kind === "rows" ? 0 : 1] - 1) &&
+              integer(e.end, e.start + 1, e.shape[e.kind === "rows" ? 0 : 1]),
+        "Edit coordinates exceed native shape",
+      );
+      if (e.operation === "scale")
         check(
-          Object.keys(t).length === fields.length &&
-            ["head", "query_head", "offset", "layer_heads"].includes(t.kind) &&
-            integer(t.layer, 0, 29) &&
-            (t.kind === "layer_heads" ||
-              (t.kind === "offset"
-                ? Array.isArray(t.heads) &&
-                  t.heads.length > 0 &&
-                  t.heads.length <= 8 &&
-                  new Set(t.heads).size === t.heads.length &&
-                  t.heads.every((h) => integer(h, 0, 8)) &&
-                  integer(t.offset, 0, 63)
-                : integer(t.head, 0, 8))),
-          "Invalid archived target",
+          Number.isFinite(e.scale) && Math.abs(e.scale) <= 100,
+          "Invalid edit scale",
         );
+    };
+    const target = (t) => {
+      const fields = [
+        "kind",
+        "layer",
+        ...(t.kind === "offset"
+          ? ["heads", "offset"]
+          : t.kind === "layer_heads"
+            ? []
+            : ["head"]),
+      ];
+      keys(t, fields);
+      check(
+        Object.keys(t).length === fields.length &&
+          ["head", "query_head", "offset", "layer_heads"].includes(t.kind) &&
+          integer(t.layer, 0, 29) &&
+          (t.kind === "layer_heads" ||
+            (t.kind === "offset"
+              ? Array.isArray(t.heads) &&
+                t.heads.length > 0 &&
+                t.heads.length <= 8 &&
+                new Set(t.heads).size === t.heads.length &&
+                t.heads.every((h) => integer(h, 0, 8)) &&
+                integer(t.offset, 0, 63)
+              : integer(t.head, 0, 8))),
+        "Invalid archived target",
+      );
+    };
+    const candidates = (a) =>
+      a?.forEach((c) => {
+        keys(c, "id piece baseline_logit edited_logit delta");
+        check(
+          Object.keys(c).length === 5 &&
+            integer(c.id, 0, 49151) &&
+            typeof c.piece === "string" &&
+            utf8Size(c.piece) <= 1024,
+          "Invalid candidate fields",
+        );
+        check(
+          [c.baseline_logit, c.edited_logit, c.delta].every(
+            (x) => x === null || Number.isFinite(x),
+          ) &&
+            c.delta ===
+              (c.baseline_logit === null || c.edited_logit === null
+                ? null
+                : c.edited_logit - c.baseline_logit),
+          "Invalid candidate scores",
+        );
+      });
+    const coverage = (v) => {
+      if (v && typeof v === "object") {
+        for (const k of ["planned_ids", "completed_ids", "unrun_ids"])
+          check(
+            Array.isArray(v[k]) &&
+              v[k].length <= 32 &&
+              v[k].every((x) => typeof x === "string") &&
+              new Set(v[k]).size === v[k].length,
+            "Invalid coverage IDs",
+          );
+        check(
+          typeof v.complete === "boolean" &&
+            (v.interrupted_id === null ||
+              typeof v.interrupted_id === "string") &&
+            Array.isArray(v.unfinished_heads) &&
+            v.unfinished_heads.every((h) => integer(h, 0, 8)),
+          "Invalid coverage state",
+        );
+        keys(
+          v,
+          "planned_ids completed_ids unrun_ids interrupted_id complete finished_targets unfinished_targets unfinished_heads",
+        );
+        check(
+          Object.keys(v).length === 8 &&
+            [v.finished_targets, v.unfinished_targets].every(
+              (a) => Array.isArray(a) && a.length <= 9,
+            ),
+          "Invalid target coverage",
+        );
+        for (const a of [v.finished_targets, v.unfinished_targets])
+          a?.forEach(target);
+      }
+    };
+    const architecture = (a) => {
+      const dimensions = {
+        width: 576,
+        layers: 30,
+        query_heads: 9,
+        kv_heads: 3,
+        head_dim: 64,
+        queries_per_kv: 3,
+        vocab_size: 49152,
+        intermediate_size: 1536,
       };
-      const candidates = (a) =>
-        a?.forEach((c) => {
-          keys(c, "id piece baseline_logit edited_logit delta");
-          check(
-            Object.keys(c).length === 5 &&
-              integer(c.id, 0, 49151) &&
-              typeof c.piece === "string" &&
-              utf8Size(c.piece) <= 1024,
-            "Invalid candidate fields",
-          );
-          check(
-            [c.baseline_logit, c.edited_logit, c.delta].every(
-              (x) => x === null || Number.isFinite(x),
-            ) &&
-              c.delta ===
-                (c.baseline_logit === null || c.edited_logit === null
-                  ? null
-                  : c.edited_logit - c.baseline_logit),
-            "Invalid candidate scores",
-          );
-        });
-      const coverage = (v) => {
-        if (v && typeof v === "object") {
-          for (const k of ["planned_ids", "completed_ids", "unrun_ids"])
-            check(
-              Array.isArray(v[k]) &&
-                v[k].length <= 32 &&
-                v[k].every((x) => typeof x === "string") &&
-                new Set(v[k]).size === v[k].length,
-              "Invalid coverage IDs",
-            );
-          check(
-            typeof v.complete === "boolean" &&
-              (v.interrupted_id === null ||
-                typeof v.interrupted_id === "string") &&
-              Array.isArray(v.unfinished_heads) &&
-              v.unfinished_heads.every((h) => integer(h, 0, 8)),
-            "Invalid coverage state",
-          );
-          keys(
-            v,
-            "planned_ids completed_ids unrun_ids interrupted_id complete finished_targets unfinished_targets unfinished_heads",
-          );
-          check(
-            Object.keys(v).length === 8 &&
-              [v.finished_targets, v.unfinished_targets].every(
-                (a) => Array.isArray(a) && a.length <= 9,
-              ),
-            "Invalid target coverage",
-          );
-          for (const a of [v.finished_targets, v.unfinished_targets])
-            a?.forEach(target);
-        }
-      };
+      check(
+        Object.entries(dimensions).every(([k, v]) => a[k] === v) &&
+          a.model_type === "llama" &&
+          a.layout === "llama-eager-head-major-v1",
+        "Invalid archived architecture",
+      );
+      keys(
+        a,
+        "model_type width layers query_heads kv_heads head_dim queries_per_kv vocab_size intermediate_size capture_sites layout head_ablation query_intervention",
+      );
+      keys(a.capture_sites, "block attention mlp");
+      check(
+        Object.keys(a).length === 13 &&
+          Object.keys(a.capture_sites).length === 3 &&
+          Object.values(a.capture_sites).every((x) => typeof x === "string") &&
+          a.head_ablation === "o_proj columns" &&
+          a.query_intervention === "q_proj rows",
+        "Invalid capture architecture",
+      );
+    };
+    function validateRelatedFields(record, request) {
+      (request.edits || []).forEach(edit);
       coverage(record.summary?.coverage);
       coverage(record.summary?.sweep_coverage);
       request.targets?.forEach(target);
@@ -354,6 +390,8 @@
           candidates(step.sweep.candidates);
         }
       }
+    }
+    function validateSweepPlan(record) {
       if (record.sweep_plan) {
         const plan = record.sweep_plan;
         keys(
@@ -371,39 +409,6 @@
           );
           c.edits.forEach(edit);
         }
-        const architecture = (a) => {
-          const dimensions = {
-            width: 576,
-            layers: 30,
-            query_heads: 9,
-            kv_heads: 3,
-            head_dim: 64,
-            queries_per_kv: 3,
-            vocab_size: 49152,
-            intermediate_size: 1536,
-          };
-          check(
-            Object.entries(dimensions).every(([k, v]) => a[k] === v) &&
-              a.model_type === "llama" &&
-              a.layout === "llama-eager-head-major-v1",
-            "Invalid archived architecture",
-          );
-          keys(
-            a,
-            "model_type width layers query_heads kv_heads head_dim queries_per_kv vocab_size intermediate_size capture_sites layout head_ablation query_intervention",
-          );
-          keys(a.capture_sites, "block attention mlp");
-          check(
-            Object.keys(a).length === 13 &&
-              Object.keys(a.capture_sites).length === 3 &&
-              Object.values(a.capture_sites).every(
-                (x) => typeof x === "string",
-              ) &&
-              a.head_ablation === "o_proj columns" &&
-              a.query_intervention === "q_proj rows",
-            "Invalid capture architecture",
-          );
-        };
         architecture(plan.architecture);
         keys(
           plan.limits,
@@ -442,6 +447,8 @@
           "Invalid sweep metadata",
         );
       }
+    }
+    function validateRequest(record, request) {
       // Semantic constraints are independent of the exporter field projection.
       const pair = request.mode === "prompt_pair",
         sweep = request.mode === "sweep",
@@ -482,6 +489,9 @@
           integer(budget, 1, 32) && record.steps.length <= budget,
           "Invalid generation budget",
         );
+      return { pair, sweep, budget };
+    }
+    function validateModeInputs(record, request, pair, sweep) {
       if (pair) {
         check(
           Array.isArray(request.positions) &&
@@ -532,6 +542,8 @@
           "Invalid sweep plan counts or capture",
         );
       }
+    }
+    function validatePrivateRequest(record, request, pair) {
       if (request.prompts !== undefined)
         check(
           Array.isArray(request.prompts) &&
@@ -566,13 +578,15 @@
           "Invalid observation request",
         );
       }
-      const ids = (v, cap) =>
-        check(
-          Array.isArray(v) &&
-            v.length <= cap &&
-            v.every((id) => integer(id, 0, 49151)),
-          "Invalid archived token IDs or budget",
-        );
+    }
+    const ids = (v, cap) =>
+      check(
+        Array.isArray(v) &&
+          v.length <= cap &&
+          v.every((id) => integer(id, 0, 49151)),
+        "Invalid archived token IDs or budget",
+      );
+    function validateLeafFields(record, request, budget) {
       if (request.prompt_ids !== undefined) ids(request.prompt_ids, 128);
       const rules = {},
         rule = (names, test) =>
@@ -639,6 +653,8 @@
         ...record.steps,
       ])
         leaves(v);
+    }
+    function validateTraceRelations(record, request, pair, sweep, budget) {
       for (const step of record.steps) {
         check(
           pair
@@ -679,6 +695,8 @@
             "Invalid attention positions",
           );
       }
+    }
+    function validateSweepTrace(record, request, sweep) {
       if (sweep) {
         const p = record.sweep_plan,
           planned = p.cases.flatMap((c) =>
@@ -750,6 +768,8 @@
           );
         }
       }
+    }
+    function validateCandidateRelations(record) {
       for (const step of record.steps) {
         for (const table of [
           step.top_logits,
@@ -785,6 +805,8 @@
             "Invalid sweep score delta",
           );
       }
+    }
+    function validateConsent(record, request, pair, sweep) {
       check(
         typeof record.privacy?.prompt_included === "boolean" &&
           (record.termination === null ||
@@ -805,6 +827,8 @@
             "Missing consented plan digest",
           );
       }
+    }
+    function validateCandidateTables(record) {
       for (const step of record.steps) {
         for (const c of step.top_logits || []) {
           keys(c, "id value");
@@ -829,6 +853,8 @@
           );
         }
       }
+    }
+    function rebuildRecord(record, request, experimentRecord) {
       // Rebuild through the exporter: removes unknown fields and recomputes derived
       // status/privacy/settings/limits. Equality refuses anything it would discard.
       const req = {
@@ -866,6 +892,23 @@
         "Archive differs from the supported export contract",
       );
       return rebuilt;
+    }
+    function validateRecord(record, { experimentRecord: experimentRecord }) {
+      // Preserve the historical first-error order as well as the export bytes.
+      const request = validateRecordEnvelope(record);
+      validateTraceBudget(record, request);
+      validateRelatedFields(record, request);
+      validateSweepPlan(record);
+      const { pair, sweep, budget } = validateRequest(record, request);
+      validateModeInputs(record, request, pair, sweep);
+      validatePrivateRequest(record, request, pair);
+      validateLeafFields(record, request, budget);
+      validateTraceRelations(record, request, pair, sweep, budget);
+      validateSweepTrace(record, request, sweep);
+      validateCandidateRelations(record);
+      validateConsent(record, request, pair, sweep);
+      validateCandidateTables(record);
+      return rebuildRecord(record, request, experimentRecord);
     }
     function read(
       text,
