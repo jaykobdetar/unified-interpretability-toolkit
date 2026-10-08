@@ -2,7 +2,7 @@
 // Derived from validated reference frontend. Progressive extension; frozen API SHA256: 665f2e600fd22676f757f4ee59f3603d92bd3811a4444551bab062ffe057ffd7
 const $ = (id) => document.getElementById(id);
 const SIDES = ["left", "right"];
-const RULE_IDS = [
+const RULE_IDS = /* rule-ids */ [
   "global_linear",
   "global_asinh",
   "tensor_linear",
@@ -11,7 +11,7 @@ const RULE_IDS = [
   "tensor_magnitude_asinh",
   "tensor_robust99",
   "tensor_signed_percentile",
-];
+]; /* end-rule-ids */
 const state = {
   model: null,
   tensor: null,

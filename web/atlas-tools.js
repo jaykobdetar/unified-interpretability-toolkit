@@ -5,7 +5,7 @@
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.AtlasTools = api;
 })(globalThis, () => {
-  const RULES = [
+  const RULES = /* rule-ids */ [
     "global_linear",
     "global_asinh",
     "tensor_linear",
@@ -14,7 +14,7 @@
     "tensor_magnitude_asinh",
     "tensor_robust99",
     "tensor_signed_percentile",
-  ];
+  ]; /* end-rule-ids */
   const MAX_CELLS = 256,
     MAX_BYTES = 262144,
     MAX_NOTES = 100,

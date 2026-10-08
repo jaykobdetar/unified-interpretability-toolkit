@@ -43,6 +43,7 @@ def lint() -> None:
                 run(["node", "--check", str(file.relative_to(ROOT))])
     run(["bash", "-n", "run-atlas.sh"])
     run([sys.executable, "-B", "tools/generate_experiment_schema.py", "--check"])
+    run([sys.executable, "-B", "tools/generate_rule_catalog.py", "--check"])
 
 
 def contracts() -> None:

@@ -1,0 +1,90 @@
+[
+  {
+    "id": "global_linear",
+    "title": "Global linear",
+    "formula": "clip(x/G, -1, 1)",
+    "scope": "Checkpoint",
+    "transform": "SignedLinear",
+    "statistics": "Maximum",
+    "supported_dtypes": "NUMERIC",
+    "availability_note": "",
+    "dtype_refusal": ""
+  },
+  {
+    "id": "global_asinh",
+    "title": "Global asinh",
+    "formula": "clip(asinh(x/s)/asinh(G/s), -1, 1); s = G/100 (all-zero fallback 1)",
+    "scope": "Checkpoint",
+    "transform": "SignedAsinh",
+    "statistics": "Maximum",
+    "supported_dtypes": "NUMERIC",
+    "availability_note": "",
+    "dtype_refusal": ""
+  },
+  {
+    "id": "tensor_linear",
+    "title": "Tensor linear",
+    "formula": "clip(x/M, -1, 1)",
+    "scope": "Tensor",
+    "transform": "SignedLinear",
+    "statistics": "Maximum",
+    "supported_dtypes": "NUMERIC",
+    "availability_note": "",
+    "dtype_refusal": ""
+  },
+  {
+    "id": "tensor_asinh",
+    "title": "Tensor asinh",
+    "formula": "clip(asinh(x/s)/asinh(M/s), -1, 1); s = median nonzero |x| (all-zero fallback 1)",
+    "scope": "Tensor",
+    "transform": "SignedAsinh",
+    "statistics": "MaximumAndMedian",
+    "supported_dtypes": "NUMERIC",
+    "availability_note": "",
+    "dtype_refusal": ""
+  },
+  {
+    "id": "tensor_magnitude",
+    "title": "Tensor magnitude",
+    "formula": "f(x) = abs(x)/M; M = max(abs(x)) over the complete tensor; M = 0 => f(x) = 0",
+    "scope": "Tensor",
+    "transform": "MagnitudeLinear",
+    "statistics": "Maximum",
+    "supported_dtypes": "NUMERIC",
+    "availability_note": "",
+    "dtype_refusal": ""
+  },
+  {
+    "id": "tensor_magnitude_asinh",
+    "title": "Tensor typical magnitude",
+    "formula": "min(1, asinh(abs(x)/s)/asinh(D/s)); s = median nonzero |x| (all-zero fallback 1); D = Q99 including zeros (zero-Q99 fallback 1)",
+    "scope": "Tensor",
+    "transform": "MagnitudeAsinh",
+    "statistics": "Quantile99AndMedian",
+    "supported_dtypes": "NUMERIC",
+    "availability_note": "",
+    "dtype_refusal": ""
+  },
+  {
+    "id": "tensor_robust99",
+    "title": "Tensor robust 99%",
+    "formula": "clip(x/D, -1, 1); Q99 = linear-interpolated 99th percentile of all original |x|; D = Q99 if Q99 != 0, else 1",
+    "scope": "Tensor",
+    "transform": "SignedLinear",
+    "statistics": "Quantile99",
+    "supported_dtypes": "NUMERIC",
+    "availability_note": "",
+    "dtype_refusal": ""
+  },
+  {
+    "id": "tensor_signed_percentile",
+    "title": "Tensor signed percentile",
+    "formula": "sign(x) * (count(|X| < |x|) + count(|X| <= |x|))/(2*N); X = complete original tensor including zeros; x = 0 => 0",
+    "scope": "Tensor",
+    "transform": "SignedPercentile",
+    "statistics": "ExactHistogram",
+    "supported_dtypes": "EXACT_16_BIT",
+    "availability_note": "F32 exact absolute-value rank index is not implemented; no approximate ranks are substituted.",
+    "dtype_refusal": "Tensor signed percentile is unsupported for F32: exact absolute-value rank index is pending; no approximation is used"
+  }
+]

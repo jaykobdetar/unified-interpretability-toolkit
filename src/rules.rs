@@ -53,6 +53,7 @@ impl std::ops::Deref for Selected {
 const NUMERIC: &[Dtype] = &[Dtype::Bf16, Dtype::F16, Dtype::F32];
 const EXACT_16_BIT: &[Dtype] = &[Dtype::Bf16, Dtype::F16];
 
+// generated-rule-catalog
 static DEFINITIONS: [Definition; 8] = [
     Definition {
         id: "global_linear",
@@ -156,6 +157,7 @@ pub const IDS: [&str; 8] = [
     DEFINITIONS[7].id,
 ];
 pub(crate) const SIGNED_PERCENTILE: &Definition = &DEFINITIONS[7];
+// end-generated-rule-catalog
 
 #[derive(Serialize)]
 struct Metadata {
