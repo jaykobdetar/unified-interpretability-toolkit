@@ -766,7 +766,19 @@ function createViewer(side, view, s, id, signal) {
     stage = node("div", "canvas-stage");
   stage.id = `${side}-stage-${id}`;
   host.replaceChildren(stage);
-  const viewer = OpenSeadragon({
+  const viewer = createNativeViewer(stage);
+  state.viewers[side] = viewer;
+  viewer.setMouseNavEnabled(false);
+  const valid = () => id === state.viewEpoch && state.viewers[side] === viewer;
+  const opened = waitForViewerOpen(viewer, signal, valid);
+  bindViewerDrawing(viewer, side, valid);
+  bindViewerInspection(viewer, host, view, signal, valid);
+  viewer.open(tileSource(view.tensor, s[side], view.tile_bindings?.[side]));
+  return { viewer, stage, opened };
+}
+
+function createNativeViewer(stage) {
+  return OpenSeadragon({
     element: stage,
     drawer: "canvas",
     showNavigationControl: false,
@@ -795,10 +807,10 @@ function createViewer(side, view, s, id, signal) {
       pinchToZoom: true,
     },
   });
-  state.viewers[side] = viewer;
-  viewer.setMouseNavEnabled(false);
-  const valid = () => id === state.viewEpoch && state.viewers[side] === viewer;
-  const opened = new Promise((resolve, reject) => {
+}
+
+function waitForViewerOpen(viewer, signal, valid) {
+  return new Promise((resolve, reject) => {
     const abort = () => reject(new DOMException("Cancelled", "AbortError"));
     signal.addEventListener("abort", abort, { once: true });
     viewer.addHandler("open", () => {
@@ -814,6 +826,9 @@ function createViewer(side, view, s, id, signal) {
       reject(new Error(event.message || "Tensor image could not open."));
     });
   });
+}
+
+function bindViewerDrawing(viewer, side, valid) {
   viewer.addHandler("tile-drawn", () => {
     if (valid() && !document.body.dataset.firstTileMs) {
       document.body.dataset.firstTileMs = String(
@@ -852,6 +867,9 @@ function createViewer(side, view, s, id, signal) {
     );
     status("Tile request failed · requested view may be incomplete.");
   });
+}
+
+function bindViewerInspection(viewer, host, view, signal, valid) {
   viewer.addHandler("canvas-click", (event) => {
     if (
       !valid() ||
@@ -903,9 +921,8 @@ function createViewer(side, view, s, id, signal) {
     { signal },
   );
   host.addEventListener("pointerleave", () => cancelHover(), { signal });
-  viewer.open(tileSource(view.tensor, s[side], view.tile_bindings?.[side]));
-  return { viewer, stage, opened };
 }
+
 function drawLegend(side, l) {
   text(side + "-min", exact(l.min));
   text(side + "-max", exact(l.max));
@@ -961,6 +978,51 @@ async function loadView() {
   if (refuseUnavailableTensor()) return;
   if (refuseUnsupportedView()) return;
   if (!state.model || !state.tensor?.calibration_complete) return;
+  rememberViewContext();
+  // Carry the last active viewport through consecutive rule changes, even while
+  // an earlier recoloring request is still opening and state.current is null.
+  const remembered = state.recolor,
+    prior = remembered?.bounds;
+  deactivate(!!remembered);
+  const id = state.viewEpoch,
+    restoreInspectionEpoch = state.inspectEpoch;
+  state.viewController = new AbortController();
+  const signal = state.viewController.signal,
+    s = settings();
+  const started = performance.now();
+  drawViewLoading();
+  try {
+    assert(
+      RULE_IDS.includes(s.left) && RULE_IDS.includes(s.right),
+      "unsupported color rule.",
+    );
+    const view = await json("/api/view?" + new URLSearchParams(s), signal);
+    if (id !== state.viewEpoch) return;
+    validateView(view, s);
+    const pair = SIDES.map((side) => createViewer(side, view, s, id, signal));
+    await Promise.all(pair.map((p) => p.opened));
+    if (
+      id !== state.viewEpoch ||
+      signal.aborted ||
+      !sameSettings(s, settings())
+    )
+      return;
+    activateLoadedView(view, s, pair, prior);
+    // An explicit inspection begun after recolor invalidation owns the pin,
+    // whether its source read has completed or is still pending.
+    if (remembered?.selected && state.inspectEpoch === restoreInspectionEpoch)
+      inspectAt(...remembered.selected, true);
+    if (state.model.coverage?.all_requested) pollStatus();
+    if (!state.viewFailed)
+      status(
+        `Same tensor active · metadata and viewer setup ${(performance.now() - started).toFixed(0)} ms. Numeric tiles load separately.`,
+      );
+  } catch (e) {
+    refuseViewLoad(e, id);
+  }
+}
+
+function rememberViewContext() {
   const contextKey = tensorContextKey();
   const pendingRaw =
     state.pendingInspection?.key === contextKey
@@ -993,17 +1055,9 @@ async function loadView() {
       selected: [...(pendingRaw || state.selected)],
     };
   } else if (state.recolor?.key !== contextKey) state.recolor = null;
-  // Carry the last active viewport through consecutive rule changes, even while
-  // an earlier recoloring request is still opening and state.current is null.
-  const remembered = state.recolor,
-    prior = remembered?.bounds;
-  deactivate(!!remembered);
-  const id = state.viewEpoch,
-    restoreInspectionEpoch = state.inspectEpoch;
-  state.viewController = new AbortController();
-  const signal = state.viewController.signal,
-    s = settings();
-  const started = performance.now();
+}
+
+function drawViewLoading() {
   showError("");
   status("Loading both color rules for the same tensor…");
   describeTensor();
@@ -1020,78 +1074,58 @@ async function loadView() {
     text(side + "-parameter", "");
     text(side + "-units", "");
   }
+}
+
+function activateLoadedView(view, s, pair, prior) {
+  state.current = { ...view, settings: s };
+  state.loading = false;
+  state.syncing = true;
   try {
-    assert(
-      RULE_IDS.includes(s.left) && RULE_IDS.includes(s.right),
-      "unsupported color rule.",
-    );
-    const view = await json("/api/view?" + new URLSearchParams(s), signal);
-    if (id !== state.viewEpoch) return;
-    validateView(view, s);
-    const pair = SIDES.map((side) => createViewer(side, view, s, id, signal));
-    await Promise.all(pair.map((p) => p.opened));
-    if (
-      id !== state.viewEpoch ||
-      signal.aborted ||
-      !sameSettings(s, settings())
-    )
-      return;
-    state.current = { ...view, settings: s };
-    state.loading = false;
-    state.syncing = true;
-    try {
-      for (const p of pair) {
-        if (prior) p.viewer.viewport.fitBounds(prior, true);
-        else p.viewer.viewport.goHome(true);
-        p.stage.classList.add("active");
-        p.viewer.setMouseNavEnabled(true);
-      }
-    } finally {
-      state.syncing = false;
+    for (const p of pair) {
+      if (prior) p.viewer.viewport.fitBounds(prior, true);
+      else p.viewer.viewport.goHome(true);
+      p.stage.classList.add("active");
+      p.viewer.setMouseNavEnabled(true);
     }
-    for (const side of SIDES) drawLegend(side, view.legends[side]);
-    $("row").max = String(view.tensor.rows - 1);
-    $("col").max = String(view.tensor.cols - 1);
-    for (const key of ["row", "col"])
-      $(key).value = String(
-        Math.min(Number($(key).max), Math.max(0, Number($(key).value) || 0)),
+  } finally {
+    state.syncing = false;
+  }
+  for (const side of SIDES) drawLegend(side, view.legends[side]);
+  $("row").max = String(view.tensor.rows - 1);
+  $("col").max = String(view.tensor.cols - 1);
+  for (const key of ["row", "col"])
+    $(key).value = String(
+      Math.min(Number($(key).max), Math.max(0, Number($(key).value) || 0)),
+    );
+  $("comparison").setAttribute("aria-busy", "false");
+  setInteraction(true);
+  drawCatalog();
+  scheduleResolution();
+  globalThis.atlasWorkspace?.loaded();
+  loadOverview();
+  if (state.selected) markers();
+}
+
+function refuseViewLoad(e, id) {
+  if (e.name !== "AbortError" && id === state.viewEpoch) {
+    state.current = null;
+    state.loading = false;
+    setInteraction(false);
+    stopViews();
+    if (e.status === 503 && !e.code) {
+      text(
+        "calibration-note",
+        "Initializing: completed numeric statistics are unavailable. Refresh status to retry.",
       );
-    $("comparison").setAttribute("aria-busy", "false");
-    setInteraction(true);
-    drawCatalog();
-    scheduleResolution();
-    globalThis.atlasWorkspace?.loaded();
-    loadOverview();
-    if (state.selected) markers();
-    // An explicit inspection begun after recolor invalidation owns the pin,
-    // whether its source read has completed or is still pending.
-    if (remembered?.selected && state.inspectEpoch === restoreInspectionEpoch)
-      inspectAt(...remembered.selected, true);
-    if (state.model.coverage?.all_requested) pollStatus();
-    if (!state.viewFailed)
-      status(
-        `Same tensor active · metadata and viewer setup ${(performance.now() - started).toFixed(0)} ms. Numeric tiles load separately.`,
-      );
-  } catch (e) {
-    if (e.name !== "AbortError" && id === state.viewEpoch) {
-      state.current = null;
-      state.loading = false;
-      setInteraction(false);
-      stopViews();
-      if (e.status === 503 && !e.code) {
-        text(
-          "calibration-note",
-          "Initializing: completed numeric statistics are unavailable. Refresh status to retry.",
-        );
-        $("calibration-note").hidden = false;
-        status("Initializing · no active color view.");
-      } else {
-        showError(e.message);
-        status("View unavailable · previous images are inactive.");
-      }
+      $("calibration-note").hidden = false;
+      status("Initializing · no active color view.");
+    } else {
+      showError(e.message);
+      status("View unavailable · previous images are inactive.");
     }
   }
 }
+
 function synchronize(side) {
   if (state.syncing || state.loading || !state.current) return;
   const a = state.viewers[side],
@@ -1455,96 +1489,92 @@ function bind() {
   });
   for (const side of SIDES)
     $(side + "-canvas").addEventListener("keydown", (event) => {
-      if (event.key === "Home") {
-        event.preventDefault();
-        fitView();
-      }
-      if (
-        event.shiftKey &&
-        ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(
-          event.key,
-        ) &&
-        state.current
-      ) {
-        event.preventDefault();
-        const v = state.viewers.left,
-          b = v.viewport.getBounds(true);
-        v.viewport.panTo(
-          new OpenSeadragon.Point(
-            b.x +
-              b.width *
-                (0.5 +
-                  (event.key === "ArrowRight"
-                    ? 0.2
-                    : event.key === "ArrowLeft"
-                      ? -0.2
-                      : 0)),
-            b.y +
-              b.height *
-                (0.5 +
-                  (event.key === "ArrowDown"
-                    ? 0.2
-                    : event.key === "ArrowUp"
-                      ? -0.2
-                      : 0)),
-          ),
-          true,
-        );
-        v.viewport.applyConstraints(true);
-        synchronize("left");
-        scheduleResolution();
-        return;
-      }
-      if (
-        ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(
-          event.key,
-        ) &&
-        state.tensor &&
-        !state.loading
-      ) {
-        event.preventDefault();
-        const t = state.tensor,
-          [r, c] = state.selected || [
-            Math.floor(t.rows / 2),
-            Math.floor(t.cols / 2),
-          ];
-        inspectAt(
-          Math.max(
-            0,
-            Math.min(
-              t.rows - 1,
-              r +
-                (event.key === "ArrowDown"
-                  ? 1
-                  : event.key === "ArrowUp"
-                    ? -1
-                    : 0),
-            ),
-          ),
-          Math.max(
-            0,
-            Math.min(
-              t.cols - 1,
-              c +
-                (event.key === "ArrowRight"
-                  ? 1
-                  : event.key === "ArrowLeft"
-                    ? -1
-                    : 0),
-            ),
-          ),
-        );
-      }
-      if (event.key === "+" || event.key === "=") {
-        event.preventDefault();
-        zoomBy(2);
-      }
-      if (event.key === "-") {
-        event.preventDefault();
-        zoomBy(0.5);
-      }
+      handleViewKey(event);
     });
   if (window.innerWidth <= 760) $("tensor-browser").open = false;
+}
+
+function panViewKey(event) {
+  event.preventDefault();
+  const v = state.viewers.left,
+    b = v.viewport.getBounds(true);
+  v.viewport.panTo(
+    new OpenSeadragon.Point(
+      b.x +
+        b.width *
+          (0.5 +
+            (event.key === "ArrowRight"
+              ? 0.2
+              : event.key === "ArrowLeft"
+                ? -0.2
+                : 0)),
+      b.y +
+        b.height *
+          (0.5 +
+            (event.key === "ArrowDown"
+              ? 0.2
+              : event.key === "ArrowUp"
+                ? -0.2
+                : 0)),
+    ),
+    true,
+  );
+  v.viewport.applyConstraints(true);
+  synchronize("left");
+  scheduleResolution();
+}
+
+function inspectViewKey(event) {
+  event.preventDefault();
+  const t = state.tensor,
+    [r, c] = state.selected || [Math.floor(t.rows / 2), Math.floor(t.cols / 2)];
+  inspectAt(
+    Math.max(
+      0,
+      Math.min(
+        t.rows - 1,
+        r + (event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0),
+      ),
+    ),
+    Math.max(
+      0,
+      Math.min(
+        t.cols - 1,
+        c +
+          (event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0),
+      ),
+    ),
+  );
+}
+
+function handleViewKey(event) {
+  if (event.key === "Home") {
+    event.preventDefault();
+    fitView();
+  }
+  if (
+    event.shiftKey &&
+    ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key) &&
+    state.current
+  ) {
+    panViewKey(event);
+    return;
+  }
+  if (
+    ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key) &&
+    state.tensor &&
+    !state.loading
+  ) {
+    inspectViewKey(event);
+  }
+  if (event.key === "+" || event.key === "=") {
+    event.preventDefault();
+    zoomBy(2);
+  }
+  if (event.key === "-") {
+    event.preventDefault();
+    zoomBy(0.5);
+  }
 }
 
 function refuseUnavailableTensor() {
