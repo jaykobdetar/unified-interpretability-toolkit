@@ -123,13 +123,14 @@ EXPECTED = (
     "tools/profile_atlas.py",
     "tools/static_atlas.py",
     "tests/typing/owner_launcher_clients.py",
+    "tools/atlas_host/limits.py",
 )
 
 
 class DefaultTypeScope(unittest.TestCase):
     def test_default_declaration_keeps_all_qualified_targets(self):
         self.assertEqual(check._MYPY_FILES, EXPECTED)
-        self.assertEqual(len(EXPECTED), 114)
+        self.assertEqual(len(EXPECTED), 115)
         self.assertEqual(len(set(EXPECTED)), len(EXPECTED))
         for relative in EXPECTED:
             with self.subTest(path=relative):
