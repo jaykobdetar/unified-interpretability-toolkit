@@ -4,6 +4,7 @@ import os
 import resource
 import signal
 
+from atlas_host import limits as _limits
 from atlas_host.memory import available_bytes
 
 
@@ -20,7 +21,7 @@ def configure() -> None:
         cap = min(n for n in (ceiling, soft, hard) if n != resource.RLIM_INFINITY)
         resource.setrlimit(kind, (cap, cap))
     mem = available_bytes()
-    if mem < 3.25 * 1024**3:
+    if mem < _limits.MEMORY_RESERVE_GIB * 1024**3:
         raise ValueError("Memory reserve reached")
 
 

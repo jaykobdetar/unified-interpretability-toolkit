@@ -52,6 +52,7 @@ from atlas_host.inference_architecture import (
     head_layout_descriptor,
     bind_viewer_head_layout,
 )
+from atlas_host import limits as _limits
 from atlas_host.memory import available_bytes as available
 from atlas_host.inference_edits import (
     SOURCE_MODEL,
@@ -141,7 +142,7 @@ class OperationDeadline:
         if now - self.last_tick >= IO_TICK:
             self.session.tick()
             self.last_tick = now
-            if available() < 3.25 * GIB:
+            if available() < _limits.MEMORY_RESERVE_GIB * GIB:
                 raise BackendError(
                     503, "resource_limit", "Local memory reserve reached"
                 )
@@ -299,7 +300,7 @@ class SweepAdmissionBudget:
             raise ValueError(
                 "Total sweep CPU budget exhausted during verification; no further work"
             )
-        if available() < 3.25 * GIB:
+        if available() < _limits.MEMORY_RESERVE_GIB * GIB:
             raise ValueError("Sweep verification stopped by available-memory reserve")
 
     def remaining_cpu(self) -> int:
@@ -407,7 +408,10 @@ def verified_layout_receipt(directory: Path, *, required: bool) -> LayoutReceipt
         deadline = time.monotonic() + UPSTREAM_DEADLINE
 
         def check() -> None:
-            if time.monotonic() >= deadline or available() < 3.25 * GIB:
+            if (
+                time.monotonic() >= deadline
+                or available() < _limits.MEMORY_RESERVE_GIB * GIB
+            ):
                 raise ValueError("Configuration receipt verification budget reached")
 
     try:
@@ -679,7 +683,7 @@ class Session:
             }
         else:
             raise ValueError("Unknown inference mode")
-        if available() < 4.75 * GIB:
+        if available() < _limits.MODEL_ADMISSION_GIB * GIB:
             raise ValueError(
                 "Need 4.75 GiB available RAM before loading the inference model"
             )
@@ -854,7 +858,7 @@ class Session:
         mem = self._observe_worker_memory()
         reason = (
             "resource_limit"
-            if mem < 3.25 * GIB or self.peak_rss > 1.5 * GIB
+            if mem < _limits.MEMORY_RESERVE_GIB * GIB or self.peak_rss > 1.5 * GIB
             else (
                 "client_timeout"
                 if now - self.last_seen > 15
@@ -1215,7 +1219,7 @@ def main() -> None:
     }:
         parser.error("Use distinct fresh ports; existing viewer ports are reserved")
     os.sched_setaffinity(0, {min(os.sched_getaffinity(0))})
-    if available() < 4.75 * GIB:
+    if available() < _limits.MODEL_ADMISSION_GIB * GIB:
         raise SystemExit("Need 4.75 GiB available RAM")
     receipt = verified_layout_receipt(args.model, required=not args.analytics_only)
     session = Session(args.python, args.model.resolve())
@@ -1279,7 +1283,7 @@ def main() -> None:
         while atlas.poll() is None:
             server.handle_request()
             session.tick()
-            if available() < 3.25 * GIB:
+            if available() < _limits.MEMORY_RESERVE_GIB * GIB:
                 break
     except KeyboardInterrupt:
         pass

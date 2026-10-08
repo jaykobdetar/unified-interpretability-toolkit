@@ -10,6 +10,7 @@ import subprocess
 from typing import Any, BinaryIO, NoReturn, Protocol, Sequence, cast
 from http.server import HTTPServer
 
+from atlas_host import limits as _limits
 from atlas_host.common import canonical, require
 from atlas_host.host_assets import ASSETS as ASSETS, BUNDLE as BUNDLE
 from atlas_host.config import load_config
@@ -41,7 +42,10 @@ class Renderer:
     def __init__(
         self, entry: RegistryEntry, cache: str | Path, port: int, session: TickOwner
     ) -> None:
-        require(available() >= 4.75 * GIB, "Existing launch memory guard refused")
+        require(
+            available() >= _limits.MODEL_ADMISSION_GIB * GIB,
+            "Existing launch memory guard refused",
+        )
         binary = ROOT / "target/release/weight-atlas-rust"
         require(binary.is_file(), "Qualified Rust binary required")
         self.port, self.session = port, session
@@ -194,7 +198,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
     config = load_config(args.config)
     os.sched_setaffinity(0, {min(os.sched_getaffinity(0))})
-    if available() < 4.75 * GIB:
+    if available() < _limits.MODEL_ADMISSION_GIB * GIB:
         raise SystemExit("Need 4.75 GiB available RAM")
     host = FixtureHost(
         Registry(config["paths"]["registry"]),
@@ -215,7 +219,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     signal.signal(signal.SIGINT, shutdown)
     print(f"Fixture host: http://127.0.0.1:{server.server_port}", flush=True)
     try:
-        while available() >= 3.25 * GIB:
+        while available() >= _limits.MEMORY_RESERVE_GIB * GIB:
             server.handle_request()
             host.tick()
     except KeyboardInterrupt:

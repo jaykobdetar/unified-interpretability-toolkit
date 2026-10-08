@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any, IO, Protocol, TypedDict, TypeVar, cast
 
+from atlas_host import limits as _limits
 from .source import Catalog, Tensor
 from . import svd_summary
 from .worker import MAX_INPUT, MAX_OUTPUT, parse_json, validate_request
@@ -335,7 +336,8 @@ class AnalyticsJobs:
             pass
         reason = (
             "resource_limit"
-            if self.available() < 3.25 * GIB or self.peak_rss > 768 * 1024**2
+            if self.available() < _limits.MEMORY_RESERVE_GIB * GIB
+            or self.peak_rss > 768 * 1024**2
             else (
                 "time_limit"
                 if self.clock() - self.started > 5
