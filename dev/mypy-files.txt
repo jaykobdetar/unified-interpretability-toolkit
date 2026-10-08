@@ -98,3 +98,5 @@ tools/host_atlas.py
 tests/typing/host_launcher_clients.py
 tools/atlas_host/hosted_runtime.py
 tests/typing/hosted_runtime_clients.py
+tools/atlas_host/profile_http.py
+tests/typing/profile_http_clients.py
