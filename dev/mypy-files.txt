@@ -103,3 +103,12 @@ tests/typing/profile_http_clients.py
 tools/atlas_host/budget.py
 tools/atlas_host/profile_adapter.py
 tests/typing/profile_ledger_clients.py
+tools/atlas_host/acquisition.py
+tests/typing/acquisition_clients.py
+tools/atlas_host/cli.py
+tools/atlas_host/inference.py
+tools/atlas_host/prepare_fixture.py
+tests/typing/owner_adapter_clients.py
+tools/profile_atlas.py
+tools/static_atlas.py
+tests/typing/owner_launcher_clients.py
