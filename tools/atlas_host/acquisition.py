@@ -5,6 +5,19 @@ Tests inject streams. Importing/planning never opens a connection or creates fil
 """
 
 from contextlib import contextmanager
+from http.client import HTTPMessage
+from os import PathLike
+from typing import (
+    Any,
+    Callable,
+    ContextManager,
+    IO,
+    Iterator,
+    Protocol,
+    TypedDict,
+    TypeAlias,
+    cast,
+)
 import ctypes
 import fcntl
 import hashlib
@@ -15,20 +28,70 @@ import stat
 import tempfile
 import time
 from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, ProxyHandler, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from .common import digest, identity, integer, label, require
 from .config import LOCAL_LIMITS
-from .registry import MAX_REGISTRY_BYTES, content_digest, reservation, validate_manifest
+from .registry import (
+    MAX_REGISTRY_BYTES,
+    Registry,
+    content_digest,
+    reservation,
+    validate_manifest,
+)
 
 MAX_ACQUIRE_BYTES = 64 * 1024**3
+
+
+class PlanFields(TypedDict):
+    version: int
+    name: str
+    manifest: dict[str, Any]
+    content_digest: str
+    max_bytes: int
+    payload_bytes: int
+    cache_growth_bytes: int
+    metadata_bytes: int
+    disk_reserve_bytes: int
+    installation: str
+    deadline_enforcement: str
+    enabled_after_acquisition: bool
+    inference_ready: bool
+
+
+class AcquisitionPlan(PlanFields):
+    plan_digest: str
+
+
+class AtomicRename(Protocol):
+    argtypes: list[type[ctypes.c_int] | type[ctypes.c_char_p] | type[ctypes.c_uint]]
+    restype: type[ctypes.c_int]
+
+    def __call__(
+        self,
+        source_directory: int,
+        source: bytes,
+        destination_directory: int,
+        destination: bytes,
+        flags: int,
+        /,
+    ) -> int: ...
+
+
+class AcquisitionStream(Protocol):
+    def read(self, count: int, /) -> bytes: ...
+
+
+Fetch: TypeAlias = Callable[[str, float], ContextManager[AcquisitionStream]]
 
 
 class AcquisitionDeadline(ValueError):
     pass
 
 
-def plan(manifest, name, *, max_bytes, cache_growth=0):
+def plan(
+    manifest: dict[str, Any], name: str, *, max_bytes: int, cache_growth: int = 0
+) -> AcquisitionPlan:
     manifest = validate_manifest(manifest)
     require(
         manifest["provenance"] == "owner_expected",
@@ -39,7 +102,7 @@ def plan(manifest, name, *, max_bytes, cache_growth=0):
     integer(cache_growth, 0, 8 * 1024**3)
     total = sum(file["bytes"] for file in manifest["files"])
     require(total <= max_bytes, "Pinned files exceed explicit acquisition byte budget")
-    result = {
+    result: PlanFields = {
         "version": 1,
         "name": name,
         "manifest": manifest,
@@ -57,12 +120,12 @@ def plan(manifest, name, *, max_bytes, cache_growth=0):
     return {**result, "plan_digest": identity("weight-atlas-acquire-plan-v1", result)}
 
 
-def _url(manifest, filename):
+def _url(manifest: dict[str, Any], filename: str) -> str:
     # Both components passed the closed manifest name/full-revision allowlist.
     return f'https://huggingface.co/{manifest["repository"]}/resolve/{manifest["revision"]}/{filename}'
 
 
-def _allowed_url(url):
+def _allowed_url(url: str) -> None:
     parsed = urlsplit(url)
     host = parsed.hostname or ""
     require(
@@ -82,38 +145,56 @@ def _allowed_url(url):
 
 
 class _Redirects(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    def redirect_request(
+        self,
+        req: Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> Request | None:
         _allowed_url(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def open_public_data(url, timeout):
+def open_public_data(url: str, timeout: float) -> ContextManager[AcquisitionStream]:
     """timeout limits idle socket operations, not cumulative buffered I/O time."""
     _allowed_url(url)
     # No account credentials, environment proxy authorization, or custom TLS.
-    return build_opener(ProxyHandler({}), _Redirects()).open(url, timeout=timeout)
+    return cast(
+        ContextManager[AcquisitionStream],
+        build_opener(ProxyHandler({}), _Redirects()).open(url, timeout=timeout),
+    )
 
 
-def _install_new_directory(source, destination):
+def _install_new_directory(
+    source: str | PathLike[str], destination: str | PathLike[str]
+) -> None:
     """Linux atomic no-replace rename. Fail closed on unsupported libc/filesystem."""
     libc = ctypes.CDLL(None, use_errno=True)
     rename = getattr(libc, "renameat2", None)
     require(rename is not None, "Atomic no-replace install unavailable")
-    rename.argtypes = [
+    cast(AtomicRename, rename).argtypes = [
         ctypes.c_int,
         ctypes.c_char_p,
         ctypes.c_int,
         ctypes.c_char_p,
         ctypes.c_uint,
     ]
-    rename.restype = ctypes.c_int
-    if rename(-100, os.fsencode(source), -100, os.fsencode(destination), 1) != 0:
+    cast(AtomicRename, rename).restype = ctypes.c_int
+    if (
+        cast(AtomicRename, rename)(
+            -100, os.fsencode(source), -100, os.fsencode(destination), 1
+        )
+        != 0
+    ):
         number = ctypes.get_errno()
         raise OSError(number, "Atomic no-replace model installation failed")
 
 
 @contextmanager
-def _slot(registry):
+def _slot(registry: Registry) -> Iterator[None]:
     # All acquisitions for this registry serialize their disk reservations.
     registry._disk_guard(MAX_REGISTRY_BYTES + 65536)
     registry.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -133,20 +214,20 @@ def _slot(registry):
 
 
 def acquire(
-    registry,
-    destination,
-    manifest,
-    name,
+    registry: Registry,
+    destination: str | PathLike[str],
+    manifest: dict[str, Any],
+    name: str,
     *,
-    max_bytes,
-    plan_digest,
-    accept_license=False,
-    timeout_ms=120000,
-    cache_growth=0,
-    fetch=open_public_data,
-    clock=time.monotonic,
-    free_bytes=None,
-):
+    max_bytes: int,
+    plan_digest: str,
+    accept_license: bool = False,
+    timeout_ms: int = 120000,
+    cache_growth: int = 0,
+    fetch: Fetch = open_public_data,
+    clock: Callable[[], float] = time.monotonic,
+    free_bytes: Callable[[Path], int] | None = None,
+) -> dict[str, Any]:
     """Stream exact bounded files, verify hashes, atomically install, register off.
 
     No automatic resume/enable/eviction. If registration fails, verified installed
@@ -178,9 +259,11 @@ def acquire(
         "Registry must stay outside model source",
     )
     deadline = clock() + timeout_ms / 1000
-    disk = free_bytes or (lambda path: shutil.disk_usage(path).free)
+    disk: Callable[[Path], int] = free_bytes or (
+        lambda path: shutil.disk_usage(path).free
+    )
 
-    def check(remaining):
+    def check(remaining: int) -> dict[str, int]:
         if clock() >= deadline:
             raise AcquisitionDeadline("Owner acquisition time allowance exhausted")
         return reservation(
