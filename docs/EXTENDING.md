@@ -1,0 +1,67 @@
+# Extension recipes
+
+These recipes describe the current implementation, including the places that still require coordinated edits. They are not a claim that every extension is a one-file change or that a new model/browser configuration is qualified. [Architecture](ARCHITECTURE.md) describes the boundaries; [Development](DEVELOPMENT.md) gives exact tools, commands and guards.
+
+## Trial and acceptance procedure
+
+Start from an identified clean commit in a disposable local branch or checkout. Declare the smallest example, anticipated production files and edit locations, tests, resource needs and expected public differences before editing. Keep original IDs, formulas, formats, error text, saved data and tests unchanged. Add an independent witness for the example. Do not rewrite held observations to admit it.
+
+Record the actual changed files and distinct logical edit locations separately for production, tests and docs. A declaration and its dispatch arm are two locations even in one file. Compare with an equivalent example in the starting source, reporting an unavailable comparison instead of inventing a count. Record any required edit that this recipe omitted: that is an unfinished structure/recipe, not a successful one-place extension.
+
+Run the full project check and unchanged behaviour lock for an accepted source change. Extension trials deliberately introduce new capability and can expose expected metadata/help differences; preserve those raw failures and discard the example. They cannot be accepted as behavior-preserving quality commits. Focused toy tests establish only their stated boundary, not full application acceptance. Real browser, model, resource and performance qualifications retain their independent prerequisites and limits. Do not install/download/activate anything implicitly. Retain a patch, counts, commands, outputs and cleanup evidence, then discard the branch; never push or merge a trial.
+
+## Colour rule
+
+1. Add an ordered `Definition` in `src/rules.rs`: a new stable ID, title, exact formula, `Scope`, `Transform`, `Statistics`, supported dtypes and explicit refusal/availability text. Extend the catalog and `IDS` array together without reordering existing entries. A minimal trial can reuse `SignedLinear`/`Maximum` at tensor scope under a new ID.
+2. A genuinely new transform or statistics requirement also needs its typed variant and consumers in `src/render.rs` and, when relevant, calibration/cache handling in `src/state.rs`. Do not add name comparisons as a substitute for the typed definition. Preserve transform-before-pooling, complete original-tensor calibration, bounded reads and exact histograms. Unsupported exact ranks must refuse rather than approximate.
+3. Add numerical, metadata, dtype-admission, legend, slice and cache witnesses. Existing `tests/rule_compatibility_vectors.rs` and `tests/rule_boundary_vectors.rs` remain intact; a trial alias should produce identical mapped values/pixels to its chosen original rule while retaining its distinct new metadata ID.
+4. Audit page rule consumers in `web/app.js`, `web/atlas-tools.js` and `web/comparison.js`, and existing documentation. Native catalog success alone does not prove selector availability, old links or saved-view compatibility. Page-side special cases remain an extension seam and need actual browser qualification.
+
+## Number format
+
+1. Specify the exact storage name, width, bit interpretation, signed zero, finite/nonfinite values, exact decimal output and allowed operations. Add the typed `Dtype` variant and operations in `src/source.rs`, and its once-parsed ingress in `src/source/format.rs`. Do not normalize unknown names or change existing serialized strings.
+2. Update every exhaustive dtype consumer identified by compilation: source extent checks/offsets, calibration/statistics, histogram/rank rules, scalar inspection, rendering and comparison. Add a format to rule support only where its exact implementation exists. Cached interpretation does not make new codecs automatically supported.
+3. Add tiny byte-level fixtures and boundary vectors alongside `tests/format_ingress_vectors.rs` and the dtype/reference tests. Check original bits, extents, endianness, exact decimal/PNG results, refusal priority and cache/saved-format behavior. A new storage-name alias alone tests ingress wiring; it does not qualify a genuinely new numerical encoding.
+4. Audit page scalar formatting/availability and Python trusted-reader admission separately. The analytics reader remains BF16-only. Do not silently widen it to match native formats; reader convergence is a separate proposal.
+
+## Experiment type
+
+1. Put pure bounded schema/request/step validation in an `atlas_host` contract module and the runtime operation in its own module. Receive architecture, sources and callbacks explicitly. Keep model imports and execution behind the existing worker/architecture engine boundary.
+2. Add a `Kind`, an `Experiment` registration and a `(Context, Request)` adapter in `tools/atlas_host/inference_experiments.py`. Update both `select` and `for_coordinator` deliberately: their current fallback/priority policies differ. Preserve every existing registration and policy. A minimal wiring trial can emit one deterministic record through `Context.record` without an engine.
+3. Integrate the new request, resource budget, worker preparation and completion/cleanup in `inference_worker.py`, `live_inference.py` and `inference_services.py` as needed. The registry currently covers execution, not every schema/intake/record/completion decision. Extending only the registry is not a complete public experiment.
+4. Add inert interface/execution tests and deterministic CPU scenarios for each real runtime path, with exact record and cleanup checks. Add page validation, import/export and display support only with a browser-qualified baseline. Do not update old experiment goldens, weaken unknown-field validation or treat a model-free registration trial as inference acceptance.
+
+## Analysis
+
+1. Put pure arithmetic and bounded result types in `tools/analytics/`; receive numerical arrays/backends explicitly where possible. Define deterministic controls, independent expected values and explicit partial-coverage semantics. A minimal trial can compute a scalar summary over an already bounded supplied window without opening files.
+2. For a public analysis scope, update `tools/analytics/worker.py` request admission and dispatch. Preserve exact field sets, trusted catalog selection, geometry/source verification, seed bounds, input/output byte caps and worker setup. Use `tools/analytics/source.py` for existing bounded reads rather than a second ad hoc reader.
+3. Update `tools/analytics/service.py` only where its admission, progress or response contract actually needs the new scope. Update shared result bindings and the page consumer for new fields. Optional numerical work remains in the existing child with its original limits and deferred import boundary.
+4. Add hand-calculated arithmetic tests, worker/service request and exact-response tests, changed-source/refusal tests and an independent numerical reference where applicable. A direct pure-function trial proves the computation seam only; it does not establish a new HTTP scope or browser panel.
+
+## Command or route
+
+1. Choose one surface and enumerate its exact method/name, typed parameters, defaults, help, validation order, error/status/exit behavior and resource scope. Native command declarations live in `src/command.rs`; viewer/comparison/private route facts live in `src/api.rs`.
+2. Add the corresponding handler/dispatch arm in `src/main.rs`, `src/server.rs`, `src/comparison_http.rs` or `src/hosted_renderer.rs`. Defaults still resolve at their original callers. Private and public parameter sets differ; declaring a name does not install a handler or unknown-name validator. For a minimal command trial, add a model-free help-adjacent response before model/resource access and explicitly test its placement.
+3. Preserve authority/origin checks, bounded request parsing, local-action requirements, ownership/binding and error priority. Add exact help/intake/dispatch/response witnesses with tiny fixtures; keep all existing command/route snapshots. Update [Native interfaces](NATIVE-INTERFACES.md) and the user command/API documentation.
+4. Unknown-option/parameter rejection remains separately scoped. Do not fold it into a structural extension or assume the declarations already enforce it. If a route needs Python proxy/host or page wiring, list and test those additional consumers.
+
+## Page panel
+
+1. Define the panel's state, source/revision binding, validation, lifecycle and dependencies. Keep pure state/link/format logic importable separately from DOM code. Native modules are preferred; no bundler or new framework is required by this recipe.
+2. Add the markup/module/style and wire the actual owning page. The current app still uses classic globals and mixed module systems; replacing that boundary is separate structural work. Do not add another global to conceal a missing dependency.
+3. Register every served file in the relevant native fixed-asset table and Python `atlas_host.host_assets`/bundle path. Viewer and comparison have distinct sets. Update bundle/offline tests and docs. There is no single cross-language asset manifest yet, so enumerate each actual consumer.
+4. Add pure logic and DOM fixture tests, then run the existing real-browser harness for navigation, tensor/rule selection, hover/inspect, bookmark round trip including held links, notes/import, dark mode and comparison where affected. Respect the original browser guard. A failed baseline blocks panel acceptance; inert fixture success does not replace it.
+
+## Limit
+
+1. Define the unit, owner, exact value/type, arithmetic position, admission versus stop semantics and original refusal text. Add a named scalar `Final` to `tools/atlas_host/limits.py` for Python production policy. Independent policies keep distinct names even if values match.
+2. Bind the consumer's existing public variable to that fact and retain its local/default lookup, multiplication, comparison and observation timing. A trivial trial can introduce a new private bounded helper with its own small limit; it must not alter any existing cap. Do not alias mutable policy dictionaries without proving their reset/copy behavior.
+3. Add boundary tests below, at and above the limit, plus malformed values and cleanup where relevant. Use inert observations for resource tests. Check that consumer aliases, numeric types and old values remain exact, and that the pure leaf adds no dependency cycle or numerical import.
+4. Native limits and immutable qualification guards remain independently declared. Changing a live cap or guard is not ordinary consolidation and needs its own authorization and resource evidence. Development check time/RSS is not an application performance result.
+
+## Model family
+
+1. Separate static description from executable support. Review exact configuration fields, architecture name, shapes, Q/K/V layout, biases, head normalization, source/revision pins and correspondence evidence. Extend `tools/atlas_host/inference_model_descriptor.py` only with explicit supported rules; no unknown-family guessing.
+2. Construct/pass `inference_geometry.Architecture` and update bounded descriptor/shape/mapping witnesses. Preserve old descriptor bytes, hashes and error ordering. A synthetic configuration trial demonstrates description only and must be labelled as such; it must not register or enable a model.
+3. Executable support requires reviewed installed runtime classes/version and attention behavior through `inference_architecture.py` and injected `inference_engine.py` operations. Update explicit worker/contracts/layout consumers and complete offline CPU references with exact outputs and cleanup. The current built-in verifier remains Llama-specific; static Qwen description does not qualify Qwen execution or query-head labels.
+4. Qualification needs an already available pinned model/runtime and unchanged resource admission. Registration, activation, downloads and installation are separate actions. A missing model/backend or browser baseline is a blocker, not permission to substitute another model, weaken checks or claim the family supported.

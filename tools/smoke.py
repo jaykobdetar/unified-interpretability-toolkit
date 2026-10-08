@@ -3,6 +3,7 @@
 
 import json, os, subprocess, tempfile, struct, zlib, math, decimal
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 BIN = Path(
@@ -24,7 +25,7 @@ expected = json.loads((MODEL / "expected.json").read_text())
 with tempfile.TemporaryDirectory(prefix="weight-atlas-smoke-") as d:
     cache = Path(d) / "cache"
 
-    def run(command, *args):
+    def run(command: str, *args: object) -> Any:
         p = subprocess.run(
             [
                 str(BIN),

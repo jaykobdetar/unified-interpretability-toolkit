@@ -8,7 +8,6 @@ import types
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import inference_observations as observation
 import live_inference as live
 from inference_model_descriptor import describe_config

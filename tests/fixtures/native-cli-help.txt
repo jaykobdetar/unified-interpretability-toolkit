@@ -1,0 +1,16 @@
+Weight Atlas Rust
+Commands: metadata | serve | calibrate | verify | tile | overview | inspect | bench
+Comparison: compare-metadata | compare-calibrate | compare-tile | compare-inspect | compare-serve; explicit --model A --compare-model B; --cache outside both
+Comparison tile: --tensor ID --quantity a|b|delta|abs_delta --mapping linear|asinh|magnitude --out PREFIX; compare-calibrate requires --tensor ID
+Required: --model DIRECTORY
+Common: --cache DIRECTORY (default ./cache) --name NAME --revision REVISION
+serve: --port 8775 --verify-sha false; true hashes all bytes before listening; no remote binding
+calibrate: --tensor ID (omit for all); resumes valid calibration
+verify: full SHA-256 reads, compares local model-api.json if present
+overview: --tensor ID --slice INDICES --rules tensor_linear,tensor_asinh --max-values 16777216; explicit bounded coarse preparation
+tile: --tensor ID --rules global_linear,global_asinh --level L --x X --y Y --out PREFIX
+inspect: --tensor ID --row R --col C
+bench: --tensor ID --repeats 3; factors 1,4,16, both global rules
+Defaults: one CPU, 768 MiB address-space budget, >=3 GiB effective RAM reserve plus process budget, >=25 GiB disk reserve.
+--resources JSON selects validated standalone budgets; see docs/RESOURCES.md.
+Cache identity checks do not claim a fresh full-content hash.

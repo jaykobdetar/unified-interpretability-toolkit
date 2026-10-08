@@ -8,6 +8,7 @@ scope. It does not register a model, accept a license or perform qualification.
 import argparse
 from http.server import HTTPServer
 from pathlib import Path
+from typing import Any, Sequence, cast
 import signal
 import time
 
@@ -15,13 +16,20 @@ from atlas_host.common import digest, require
 from atlas_host.config import load_config
 from atlas_host.dense_static_admission import bind_dense_policy
 from atlas_host.hosted_runtime import HostedApplication
-from atlas_host.profile_http import HostedHandler
+from atlas_host.profile_http import HostedHandler, HostedServer
 from atlas_host.registry import Registry
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run(config, binary, expected_sha, *, policy_path=None, approved_sha=None):
+def run(
+    config: dict[str, Any],
+    binary: str | Path,
+    expected_sha: str,
+    *,
+    policy_path: str | Path | None = None,
+    approved_sha: str | None = None,
+) -> None:
     digest(expected_sha)
     require(
         (policy_path is None) == (approved_sha is None),
@@ -31,7 +39,11 @@ def run(config, binary, expected_sha, *, policy_path=None, approved_sha=None):
     registry = Registry(config["paths"]["registry"])
     policy = (
         bind_dense_policy(
-            policy_path, approved_sha, registry, config["paths"]["cache"], binary
+            policy_path,
+            cast(str, approved_sha),
+            registry,
+            config["paths"]["cache"],
+            binary,
         )
         if policy_path is not None
         else None
@@ -43,15 +55,16 @@ def run(config, binary, expected_sha, *, policy_path=None, approved_sha=None):
     app = HostedApplication(
         registry, config["paths"]["cache"], binary, expected_sha, dense_policy=policy
     )
-    server = None
+    server: HostedServer | None = None
 
-    def shutdown(*_):
+    def shutdown(*_: object) -> None:
         raise KeyboardInterrupt
 
     try:
         app.start_threads()
-        server = HTTPServer(
-            (config["bind"], config["ports"]["coordinator"]), HostedHandler
+        server = cast(
+            HostedServer,
+            HTTPServer((config["bind"], config["ports"]["coordinator"]), HostedHandler),
         )
         server.application = app
         server.host = app.host
@@ -77,7 +90,7 @@ def run(config, binary, expected_sha, *, policy_path=None, approved_sha=None):
             time.sleep(0.05)  # Ownership remains reachable until confirmed cleanup.
 
 
-def main(argv=None):
+def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument(

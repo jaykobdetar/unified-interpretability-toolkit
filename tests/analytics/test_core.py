@@ -6,7 +6,6 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from analytics.core import analyze, digest, fold, permutation, resolve_heads, statistics
 from analytics.source import Catalog, Tensor, read_layout_evidence
 from analytics.svd import run as svd_run

@@ -1,7 +1,8 @@
+mod response;
 mod reuse;
 mod reuse_transport;
 use crate::{
-    headroom, render, require,
+    api, headroom, render, require,
     slice::{parse_indices, TensorSlice},
     source::{exact_decimal_for, Dtype},
     state::State,
@@ -184,7 +185,11 @@ fn reply_viewer_bundle(mut socket: TcpStream) {
 // Intake never waits for output: one best-effort write, then close. Full responses
 // are owned by the bounded dispatch/numeric workers, away from header progress.
 fn reject_now(mut socket: TcpStream, status: u16, code: &str, message: &str) {
-    let body = json!({"api_version":1,"code":code,"error":message}).to_string();
+    let body = Value::from(response::CodedErrorBody {
+        code,
+        error: message,
+    })
+    .to_string();
     let wire = response_head(status, "application/json", body.len(), "") + &body;
     if socket.set_nonblocking(true).is_ok() {
         let _ = socket.write(wire.as_bytes());
@@ -194,7 +199,13 @@ pub(crate) fn json_reply(s: TcpStream, status: u16, v: Value) {
     reply(s, status, "application/json", v.to_string().as_bytes(), "")
 }
 pub(crate) fn error(s: TcpStream, status: u16, e: impl std::fmt::Display) {
-    json_reply(s, status, json!({"error":e.to_string(),"api_version":1}))
+    json_reply(
+        s,
+        status,
+        Value::from(response::ErrorBody {
+            error: e.to_string(),
+        }),
+    )
 }
 enum Job {
     Wake,
@@ -257,9 +268,25 @@ pub fn inspect(state: &State, q: &Query) -> Result<Value> {
     } else {
         "finite"
     };
-    Ok(
-        json!({"api_version":1,"source_binding":state.slice_binding(&slice),"tensor":id,"row":row,"col":col,"raw_exact":exact_decimal_for(dtype,bits),"dtype":dtype.name(),"element_bytes":dtype.bytes(),"raw_hex_le":raw_hex,"classification":classification,"bf16_hex_le":if dtype==Dtype::Bf16{Some(raw_hex)}else{None},"shard":t.shard,"byte_offset":offset,"native_indices":slice.native_indices(row,col)?,"transformed":fields,"transform_errors":transform_errors,"transforms_ready":ready}),
-    )
+    Ok(response::Inspection {
+        source_binding: state.slice_binding(&slice),
+        tensor: id,
+        row,
+        col,
+        raw_exact: exact_decimal_for(dtype, bits),
+        dtype: dtype.name(),
+        element_bytes: dtype.bytes(),
+        raw_hex_le: &raw_hex,
+        classification,
+        bf16_hex_le: (dtype == Dtype::Bf16).then_some(raw_hex.as_str()),
+        shard: &t.shard,
+        byte_offset: offset,
+        native_indices: slice.native_indices(row, col)?,
+        transformed: fields,
+        transform_errors,
+        transforms_ready: ready,
+    }
+    .into())
 }
 type Request = (String, String, Query, BTreeMap<String, String>);
 const MAX_PENDING_HEADERS: usize = 4;
@@ -360,14 +387,12 @@ fn accept_backoff(failures: u32) -> Duration {
     Duration::from_millis((10u64 << failures.min(6)).min(250))
 }
 
-pub fn serve(state: Arc<State>, port: u16) -> Result<()> {
-    let listener = TcpListener::bind(("127.0.0.1", port))?;
-    let port = listener.local_addr()?.port();
-    let reuse = reuse_transport::Runtime::new().ok();
-    let worker_reuse = reuse.clone();
-    let (sender, receiver) = sync_channel::<Job>(8);
-    let worker = state.clone();
-    std::thread::Builder::new().name("atlas-numeric-worker".into()).spawn(move || loop {
+fn numeric_worker(
+    receiver: &std::sync::mpsc::Receiver<Job>,
+    worker: &Arc<State>,
+    worker_reuse: &Option<Arc<reuse_transport::Runtime>>,
+) {
+    loop {
         let job = match receiver.try_recv() {
             Ok(job) => Some(job),
             Err(TryRecvError::Disconnected) => break,
@@ -376,17 +401,27 @@ pub fn serve(state: Arc<State>, port: u16) -> Result<()> {
         let job = job.or_else(|| {
             let all = worker.progress.lock().unwrap().all_requested;
             let next = if all {
-                worker.source.tensors.iter().find(|t| t.available && worker.stats(t.id).is_none()).map(|t| t.id)
-            } else { None };
-            if let Some(id) = next { Some(Job::Calibrate(id)) }
-            else {
-                if all { worker.progress.lock().unwrap().all_requested = false; }
+                worker
+                    .source
+                    .tensors
+                    .iter()
+                    .find(|t| t.available && worker.stats(t.id).is_none())
+                    .map(|t| t.id)
+            } else {
+                None
+            };
+            if let Some(id) = next {
+                Some(Job::Calibrate(id))
+            } else {
+                if all {
+                    worker.progress.lock().unwrap().all_requested = false;
+                }
                 // OS channel wait; explicit calibration/tile sends wake the worker.
                 receiver.recv().ok()
             }
         });
         match job {
-            Some(Job::Wake) => {},
+            Some(Job::Wake) => {}
             Some(Job::Calibrate(id)) => {
                 if let Err(error) = worker.calibrate_one(id) {
                     eprintln!("Calibration paused: {error}");
@@ -394,7 +429,9 @@ pub fn serve(state: Arc<State>, port: u16) -> Result<()> {
                 }
             }
             Some(Job::Tile(connection, q)) => {
-                if disconnected(&connection.socket) { continue; }
+                if disconnected(&connection.socket) {
+                    continue;
+                }
                 if connection.expired(Instant::now()) {
                     connection.close_error(503, "Connection reuse eligibility expired");
                     continue;
@@ -402,28 +439,54 @@ pub fn serve(state: Arc<State>, port: u16) -> Result<()> {
                 let start = Instant::now();
                 let result = (|| {
                     let binding = q.get("binding", "");
-                    worker.tile_slice_bound(q.int("tensor", "0")?, &parse_indices(q.get("slice", ""))?,
-                        q.get("rule", "global_linear"), q.int("level", "0")?.try_into()?,
-                        q.int("x", "0")?, q.int("y", "0")?, (!binding.is_empty()).then_some(binding))
+                    worker.tile_slice_bound(
+                        q.int("tensor", "0")?,
+                        &parse_indices(q.get("slice", ""))?,
+                        q.get("rule", "global_linear"),
+                        q.int("level", "0")?.try_into()?,
+                        q.int("x", "0")?,
+                        q.int("y", "0")?,
+                        (!binding.is_empty()).then_some(binding),
+                    )
                 })();
                 match result {
                     Ok((png, cached, metrics)) => {
                         let mut headers = format!("X-Atlas-Factor: {}\r\nX-Atlas-Cache: {}\r\nX-Atlas-Seconds: {:.6}\r\nX-Atlas-Source-Bytes: {}\r\n",
                             metrics.factor, if cached { "hit" } else { "miss" }, start.elapsed().as_secs_f64(), metrics.source_bytes_read);
                         if !q.get("binding", "").is_empty() {
-                            headers.push_str("Cache-Control: private, max-age=86400, immutable\r\n");
+                            headers
+                                .push_str("Cache-Control: private, max-age=86400, immutable\r\n");
                         }
-                        reuse_transport::reply_tile(connection, &png, &headers, worker_reuse.as_deref());
+                        reuse_transport::reply_tile(
+                            connection,
+                            &png,
+                            &headers,
+                            worker_reuse.as_deref(),
+                        );
                     }
                     Err(error_value) => {
-                        let code = if error_value.to_string().contains("not ready") { 503 } else { 400 };
+                        let code =
+                            crate::http_status::ReadinessStatus::from_native_error(&error_value)
+                                .code();
                         connection.close_error(code, error_value);
                     }
                 }
             }
             None => break,
         }
-    })?;
+    }
+}
+
+pub fn serve(state: Arc<State>, port: u16) -> Result<()> {
+    let listener = TcpListener::bind(("127.0.0.1", port))?;
+    let port = listener.local_addr()?.port();
+    let reuse = reuse_transport::Runtime::new().ok();
+    let worker_reuse = reuse.clone();
+    let (sender, receiver) = sync_channel::<Job>(8);
+    let worker = state.clone();
+    std::thread::Builder::new()
+        .name("atlas-numeric-worker".into())
+        .spawn(move || numeric_worker(&receiver, &worker, &worker_reuse))?;
     let (dispatch_sender, dispatch_receiver) =
         sync_channel::<reuse_transport::Completed>(DISPATCH_CAPACITY);
     let dispatch_state = state.clone();
@@ -647,7 +710,7 @@ fn dispatch(
         raw,
         &method,
         &path,
-        q.get("binding", ""),
+        q.get(api::parameter::BINDING, ""),
         headers.get("connection").map(String::as_str).unwrap_or(""),
     );
     let Connection {
@@ -655,53 +718,8 @@ fn dispatch(
         lease,
         eligible,
     } = connection;
-    if method == "POST" && path == "/api/calibrate" {
-        if headers.get("x-atlas-local").map(String::as_str) != Some("1") {
-            error(socket, 400, "Local action header required");
-            return;
-        }
-        if q.get("all", "0") == "1" {
-            let mut p = state.progress.lock().unwrap();
-            // Wake a sleeping worker without recurring polling. A full queue
-            // already wakes it; disconnected transport cannot accept work.
-            if matches!(
-                sender.try_send(Job::Wake),
-                Err(std::sync::mpsc::TrySendError::Disconnected(_))
-            ) {
-                error(socket, 503, "Numeric worker unavailable");
-                return;
-            }
-            p.all_requested = true;
-            p.error = None;
-            json_reply(
-                socket,
-                202,
-                json!({"api_version":1,"queued":if state.source.tensors.iter().all(|t|t.available){"complete checkpoint"}else{"supported tensors; global calibration unavailable"}}),
-            );
-            return;
-        }
-        match q.int("tensor", "0").and_then(|id| {
-            let t = state.source.tensor(id)?;
-            require(
-                t.available,
-                t.unavailable_reason
-                    .as_deref()
-                    .unwrap_or("Tensor unavailable"),
-            )?;
-            Ok(id)
-        }) {
-            Ok(id) => {
-                if state.stats(id).is_some() {
-                    json_reply(socket, 200, json!({"api_version":1,"complete":true}));
-                } else if sender.try_send(Job::Calibrate(id)).is_ok() {
-                    state.progress.lock().unwrap().error = None;
-                    json_reply(socket, 202, json!({"api_version":1,"queued":id}));
-                } else {
-                    error(socket, 503, "Numeric queue full; retry shortly")
-                }
-            }
-            Err(e) => error(socket, 400, e),
-        }
+    if method == "POST" && path == api::viewer::CALIBRATION {
+        reply_calibration(state, sender, socket, &q, &headers);
         return;
     }
     if method != "GET" {
@@ -712,93 +730,203 @@ fn dispatch(
         );
         return;
     }
-    if path == "/tile" {
-        match sender.try_send(Job::Tile(
+    if path == api::viewer::TILE {
+        enqueue_tile(
+            sender,
             Connection {
                 socket,
                 lease,
                 eligible,
             },
             q,
-        )) {
-            Ok(()) => {}
-            Err(e) => {
-                let (std::sync::mpsc::TrySendError::Full(job)
-                | std::sync::mpsc::TrySendError::Disconnected(job)) = e;
-                if let Job::Tile(s, _) = job {
-                    s.close_error(503, "Numeric queue full; retry shortly")
-                }
-            }
-        }
+        );
         return;
     }
-    if path == "/api/progress" || path == "/api/tensor-status" {
-        let result = (|| -> Result<Value> {
-            let selected = if path == "/api/tensor-status" || !q.get("tensor", "").is_empty() {
-                require(!q.get("tensor", "").is_empty(), "Selected tensor required")?;
-                Some(q.int("tensor", "0")?)
-            } else {
-                None
-            };
-            state.status(selected)
-        })();
-        match result {
-            Ok(value) => json_reply(socket, 200, value),
-            Err(e) => error(socket, 400, e),
-        }
+    if path == api::viewer::PROGRESS || path == api::viewer::TENSOR_STATUS {
+        reply_status(state, socket, &path, &q);
         return;
     }
-    if path == "/api/model" {
+    if path == api::viewer::MODEL {
         match state.model() {
             Ok(v) => json_reply(socket, 200, v),
             Err(e) => error(socket, 400, e),
         }
         return;
     }
-    if path == "/api/inspect" {
+    if path == api::viewer::INSPECT {
         match inspect(state, &q) {
             Ok(v) => json_reply(socket, 200, v),
             Err(e) => error(socket, 400, e),
         }
         return;
     }
-    if path == "/api/view" {
-        let result = (|| -> Result<Value> {
-            state.source.check()?;
-            let id = q.int("tensor", "0")?;
-            let slice = TensorSlice::new(&state.source, id, &parse_indices(q.get("slice", ""))?)?;
-            let t = state.source.tensor(id)?;
-            let mut selected = serde_json::to_value(t)?;
-            selected["slice"] = json!(slice.leading);
-            selected["slice_identity"] = json!(slice.identity);
-            selected["slice_count"] = json!(slice.tensor.count);
-            let l = state.legends(
-                t,
-                q.get("left", "global_linear"),
-                q.get("right", "global_asinh"),
-            )?;
-            Ok(
-                json!({"api_version":1,"tensor":selected,"source_binding":state.slice_binding(&slice),"legends":l,"tile_bindings":{"left":state.tile_binding_for(&slice,q.get("left","global_linear"),&l["left"]),"right":state.tile_binding_for(&slice,q.get("right","global_asinh"),&l["right"])},"tile_size":256,"overlap":0,"source_values_unchanged":true}),
-            )
-        })();
-        match result {
-            Ok(v) => json_reply(socket, 200, v),
-            Err(e) => {
-                let code = if e.to_string().contains("not ready") {
-                    503
-                } else {
-                    400
-                };
-                error(socket, code, e)
-            }
-        }
+    if path == api::viewer::VIEW {
+        reply_view(state, socket, &q);
         return;
     }
     if path == "/viewer.js" {
         reply_viewer_bundle(socket);
         return;
     }
-    let static_file: Option<(&str, &[u8])> = match path.as_str() {
+    reply_static(socket, &path)
+}
+
+// Queue admission and clearing the previous error share the publication lock.
+// The private callback must remain nonblocking: the worker also needs this lock.
+fn queue_calibration(state: &State, enqueue: impl FnOnce() -> bool) -> bool {
+    let mut progress = state.progress.lock().unwrap();
+    if !enqueue() {
+        return false;
+    }
+    progress.error = None;
+    true
+}
+
+fn reply_calibration(
+    state: &State,
+    sender: &SyncSender<Job>,
+    socket: TcpStream,
+    q: &Query,
+    headers: &BTreeMap<String, String>,
+) {
+    if headers.get("x-atlas-local").map(String::as_str) != Some("1") {
+        error(socket, 400, "Local action header required");
+        return;
+    }
+    if q.get("all", "0") == "1" {
+        let mut p = state.progress.lock().unwrap();
+        // Wake a sleeping worker without recurring polling. A full queue
+        // already wakes it; disconnected transport cannot accept work.
+        if matches!(
+            sender.try_send(Job::Wake),
+            Err(std::sync::mpsc::TrySendError::Disconnected(_))
+        ) {
+            error(socket, 503, "Numeric worker unavailable");
+            return;
+        }
+        p.all_requested = true;
+        p.error = None;
+        json_reply(
+            socket,
+            202,
+            Value::from(response::CalibrationReply::Checkpoint(
+                if state.source.tensors.iter().all(|t| t.available) {
+                    "complete checkpoint"
+                } else {
+                    "supported tensors; global calibration unavailable"
+                },
+            )),
+        );
+        return;
+    }
+    match q.int("tensor", "0").and_then(|id| {
+        let t = state.source.tensor(id)?;
+        require(
+            t.available,
+            t.unavailable_reason
+                .as_deref()
+                .unwrap_or("Tensor unavailable"),
+        )?;
+        Ok(id)
+    }) {
+        Ok(id) => {
+            if state.stats(id).is_some() {
+                json_reply(
+                    socket,
+                    200,
+                    Value::from(response::CalibrationReply::Complete),
+                );
+            } else if queue_calibration(state, || sender.try_send(Job::Calibrate(id)).is_ok()) {
+                json_reply(
+                    socket,
+                    202,
+                    Value::from(response::CalibrationReply::Tensor(id)),
+                );
+            } else {
+                error(socket, 503, "Numeric queue full; retry shortly")
+            }
+        }
+        Err(e) => error(socket, 400, e),
+    }
+}
+
+fn enqueue_tile(sender: &SyncSender<Job>, connection: Connection, q: Query) {
+    match sender.try_send(Job::Tile(connection, q)) {
+        Ok(()) => {}
+        Err(e) => {
+            let (std::sync::mpsc::TrySendError::Full(job)
+            | std::sync::mpsc::TrySendError::Disconnected(job)) = e;
+            if let Job::Tile(s, _) = job {
+                s.close_error(503, "Numeric queue full; retry shortly")
+            }
+        }
+    }
+}
+
+fn reply_status(state: &State, socket: TcpStream, path: &str, q: &Query) {
+    let result = (|| -> Result<Value> {
+        let selected = if path == api::viewer::TENSOR_STATUS
+            || !q.get(api::parameter::TENSOR, "").is_empty()
+        {
+            require(
+                !q.get(api::parameter::TENSOR, "").is_empty(),
+                "Selected tensor required",
+            )?;
+            Some(q.int(api::parameter::TENSOR, "0")?)
+        } else {
+            None
+        };
+        state.status(selected)
+    })();
+    match result {
+        Ok(value) => json_reply(socket, 200, value),
+        Err(e) => error(socket, 400, e),
+    }
+}
+
+fn reply_view(state: &State, socket: TcpStream, q: &Query) {
+    let result = (|| -> Result<Value> {
+        state.source.check()?;
+        let id = q.int("tensor", "0")?;
+        let slice = TensorSlice::new(&state.source, id, &parse_indices(q.get("slice", ""))?)?;
+        let t = state.source.tensor(id)?;
+        let mut selected = serde_json::to_value(t)?;
+        selected["slice"] = json!(slice.leading);
+        selected["slice_identity"] = json!(slice.identity);
+        selected["slice_count"] = json!(slice.tensor.count);
+        let l = state.legends(
+            t,
+            q.get("left", "global_linear"),
+            q.get("right", "global_asinh"),
+        )?;
+        Ok(response::View {
+            tensor: selected,
+            source_binding: state.slice_binding(&slice),
+            left_binding: state.tile_binding_for(
+                &slice,
+                q.get("left", "global_linear"),
+                &l["left"],
+            ),
+            right_binding: state.tile_binding_for(
+                &slice,
+                q.get("right", "global_asinh"),
+                &l["right"],
+            ),
+            legends: l,
+        }
+        .into())
+    })();
+    match result {
+        Ok(v) => json_reply(socket, 200, v),
+        Err(e) => {
+            let code = crate::http_status::ReadinessStatus::from_native_error(&e).code();
+            error(socket, code, e)
+        }
+    }
+}
+
+fn reply_static(socket: TcpStream, path: &str) {
+    let static_file: Option<(&str, &[u8])> = match path {
         "/" | "/index.html" => Some((
             "text/html; charset=utf-8",
             include_bytes!("../web/index.html"),
@@ -1133,3 +1261,260 @@ mod query_tests {
         assert_eq!(parse_request(&raw, 8797).unwrap().1, "/api/model");
     }
 }
+
+#[cfg(test)]
+mod dispatch_vectors {
+    //! Tiny direct-dispatch vectors: no listener loop, numeric worker or inference.
+    use super::*;
+    use std::{
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    struct Fixture {
+        state: Arc<State>,
+        root: PathBuf,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let root = std::env::temp_dir().join(format!(
+                "atlas-dispatch-vectors-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let model = root.join("model");
+            std::fs::create_dir_all(&model).unwrap();
+            let header = br#"{"weights":{"dtype":"BF16","shape":[1,2],"data_offsets":[0,4]}}"#;
+            let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+            bytes.extend_from_slice(header);
+            bytes.extend_from_slice(&[0x80, 0x3f, 0x80, 0xbf]);
+            std::fs::write(model.join("tiny.safetensors"), bytes).unwrap();
+            let state = Arc::new(
+                State::open(
+                    &model,
+                    &root.join("cache"),
+                    Some("dispatch fixture".into()),
+                    Some("fixture-v1".into()),
+                )
+                .unwrap(),
+            );
+            Self { state, root }
+        }
+
+        fn request(&self, path: &str) -> (String, Value) {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let address = listener.local_addr().unwrap();
+            let mut client = TcpStream::connect_timeout(&address, Duration::from_secs(3)).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let (socket, _) = listener.accept().unwrap();
+            let (sender, _receiver) = sync_channel(8);
+            let raw = format!("GET {path} HTTP/1.1\r\nHost: {address}\r\n\r\n");
+            dispatch(
+                &self.state,
+                &sender,
+                Connection {
+                    socket,
+                    lease: None,
+                    eligible: false,
+                },
+                raw.as_bytes(),
+                address.port(),
+            );
+            let mut bytes = Vec::new();
+            client.read_to_end(&mut bytes).unwrap();
+            assert!(bytes.len() < 64 * 1024, "tiny dispatch response bound");
+            let response = String::from_utf8(bytes).unwrap();
+            let (head, body) = response.split_once("\r\n\r\n").unwrap();
+            let status = head.lines().next().unwrap().to_owned();
+            (status, serde_json::from_str(body).unwrap())
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.root).unwrap();
+        }
+    }
+
+    #[test]
+    fn model_route_keeps_catalog_status_and_fields() {
+        let _isolation = crate::resources::test_workspace_guard();
+        let fixture = Fixture::new();
+        let (status, body) = fixture.request("/api/model");
+        assert_eq!(status, "HTTP/1.1 200 OK", "viewer model route status");
+        assert_eq!(body["api_version"], 1);
+        assert_eq!(body["name"], "dispatch fixture");
+        assert_eq!(body["revision"], "fixture-v1");
+        assert_eq!(body["parameter_count"], 2);
+        assert_eq!(body["catalog"][0]["name"], "weights");
+        assert_eq!(body["catalog"][0]["dtype"], "BF16");
+        assert_eq!(body["calibration_complete"], false);
+    }
+
+    #[test]
+    fn inspect_route_keeps_selected_native_cell_and_raw_bytes() {
+        let _isolation = crate::resources::test_workspace_guard();
+        let fixture = Fixture::new();
+        let (status, body) = fixture.request("/api/inspect?tensor=0&row=0&col=1");
+        assert_eq!(status, "HTTP/1.1 200 OK", "viewer inspect route status");
+        assert_eq!(body["row"], 0);
+        assert_eq!(body["col"], 1);
+        assert_eq!(body["native_indices"], json!([0, 1]));
+        assert_eq!(body["raw_exact"], "-1");
+        assert_eq!(body["raw_hex_le"], "80bf");
+        assert_eq!(body["classification"], "finite");
+        assert_eq!(body["transforms_ready"], false);
+    }
+
+    #[test]
+    fn unknown_asset_keeps_exact_not_found_response() {
+        let _isolation = crate::resources::test_workspace_guard();
+        let fixture = Fixture::new();
+        let (status, body) = fixture.request("/missing-fixture-asset");
+        assert_eq!(
+            status, "HTTP/1.1 404 Not Found",
+            "viewer missing asset status"
+        );
+        assert_eq!(
+            body,
+            json!({"api_version":1,"error":"Not found"}),
+            "viewer missing asset body"
+        );
+    }
+
+    impl Fixture {
+        // One owned socket pair, no listener loop or numeric worker. The closed
+        // receiver holds queue refusals without leaving an enqueued socket open.
+        fn declaration_request(&self, method: &str, path: &str, header: &str) -> (String, Value) {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let address = listener.local_addr().unwrap();
+            let mut client = TcpStream::connect_timeout(&address, Duration::from_secs(3)).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let (socket, _) = listener.accept().unwrap();
+            let (sender, receiver) = sync_channel(1);
+            drop(receiver);
+            let raw = format!("{method} {path} HTTP/1.1\r\nHost: {address}\r\n{header}\r\n");
+            dispatch(
+                &self.state,
+                &sender,
+                Connection {
+                    socket,
+                    lease: None,
+                    eligible: false,
+                },
+                raw.as_bytes(),
+                address.port(),
+            );
+            let mut bytes = Vec::new();
+            client.read_to_end(&mut bytes).unwrap();
+            assert!(bytes.len() < 64 * 1024, "bounded declaration response");
+            let response = String::from_utf8(bytes).unwrap();
+            let (head, body) = response.split_once("\r\n\r\n").unwrap();
+            (
+                head.lines().next().unwrap().into(),
+                serde_json::from_str(body).unwrap(),
+            )
+        }
+    }
+
+    #[test]
+    fn declaration_routes_keep_status_method_and_local_action_refusals() {
+        let _isolation = crate::resources::test_workspace_guard();
+        let fixture = Fixture::new();
+        for (method, path, header, status, message) in [
+            (
+                "GET",
+                "/api/tensor-status",
+                "",
+                "HTTP/1.1 400 Bad Request",
+                "Selected tensor required",
+            ),
+            (
+                "GET",
+                "/api/progress?tensor=bad",
+                "",
+                "HTTP/1.1 400 Bad Request",
+                "invalid digit found in string",
+            ),
+            (
+                "POST",
+                "/api/model",
+                "",
+                "HTTP/1.1 400 Bad Request",
+                "Only GET and local calibration POST are supported",
+            ),
+            (
+                "POST",
+                "/api/calibrate?tensor=0",
+                "",
+                "HTTP/1.1 400 Bad Request",
+                "Local action header required",
+            ),
+            (
+                "POST",
+                "/api/calibrate?tensor=0",
+                "X-Atlas-Local: 1\r\n",
+                "HTTP/1.1 503 Service Unavailable",
+                "Numeric queue full; retry shortly",
+            ),
+            (
+                "GET",
+                "/tile?tensor=0",
+                "",
+                "HTTP/1.1 503 Service Unavailable",
+                "Numeric queue full; retry shortly",
+            ),
+            (
+                "GET",
+                "/api/view?tensor=bad",
+                "",
+                "HTTP/1.1 400 Bad Request",
+                "invalid digit found in string",
+            ),
+        ] {
+            let (observed, body) = fixture.declaration_request(method, path, header);
+            assert_eq!(observed, status, "viewer declaration status: {path}");
+            assert_eq!(
+                body,
+                json!({"api_version":1,"error":message}),
+                "viewer declaration refusal: {path}"
+            );
+        }
+        for path in [
+            "/api/progress",
+            "/api/progress?tensor=0",
+            "/api/tensor-status?tensor=0",
+        ] {
+            let (status, body) = fixture.request(path);
+            assert_eq!(
+                status, "HTTP/1.1 200 OK",
+                "viewer declaration status success: {path}"
+            );
+            assert_eq!(body["api_version"], 1);
+        }
+        let (status, body) = fixture.request("/api/model?retained-extra=value");
+        assert_eq!(
+            status, "HTTP/1.1 200 OK",
+            "viewer existing extra query behavior"
+        );
+        assert_eq!(body["name"], "dispatch fixture");
+    }
+}
+
+#[cfg(test)]
+#[path = "../tests/support/native_error_boundary.rs"]
+mod error_boundary_vectors;
+
+#[cfg(test)]
+#[path = "../tests/support/native_view_response.rs"]
+mod view_response_vectors;
+
+#[cfg(test)]
+#[path = "../tests/support/native_calibration_admission.rs"]
+mod calibration_admission_vectors;

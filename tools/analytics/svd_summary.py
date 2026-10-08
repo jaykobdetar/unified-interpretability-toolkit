@@ -1,28 +1,113 @@
 """Versioned, bounded window SVD summaries. NumPy is supplied only by the owned worker."""
 
+from atlas_host import limits as _limits
+
 import hashlib
 import json
 import math
 import struct
+from collections.abc import Mapping, Sequence
+from typing import Any, NotRequired, TypedDict, TypeVar
 
 from .core import checked_values, geometry, permutation
 
 SCHEMA = "weight-atlas.svd-window-summary.v2"
 ALGORITHM = "uncentered-independent-svd-xorshift32-v1"
-MAX_AXIS = 128
-MAX_VALUES = 16384
-MAX_BODY = 63488
-PREVIEW_AXIS = 16
+MAX_AXIS = _limits.SVD_SUMMARY_MAX_AXIS
+MAX_VALUES = _limits.SVD_SUMMARY_MAX_VALUES
+MAX_BODY = _limits.SVD_SUMMARY_MAX_BODY
+PREVIEW_AXIS = _limits.SVD_SUMMARY_PREVIEW_AXIS
 MAX_BF16 = 3.3895313892515355e38
 
 
-def encoded(value):
+class DisplaySlice(TypedDict):
+    leading_indices: list[int]
+    display_axes: list[int]
+
+
+class SourceBinding(TypedDict):
+    version: int
+    model_identity: str
+    source_identity: str
+    tensor: int
+    name: str
+    dtype: str
+    shape: Sequence[int]
+    rows: int
+    cols: int
+    slice: DisplaySlice
+
+
+class Fit(TypedDict):
+    singular_values: list[float]
+    energy_fractions: list[float | None]
+    frobenius_energy: float
+    rank_one_residual_energy: float
+    rank_one_residual_energy_fraction: float | None
+    zero_energy: bool
+    rank_one_residual_preview: list[float]
+
+
+class SummaryBinding(TypedDict):
+    results: NotRequired[dict[str, Fit]]
+    schema: str
+    algorithm: str
+    source_binding: SourceBinding
+    source_identity: str
+    model_identity: str
+    tensor_id: int
+    tensor: str
+    dtype: str
+    shape: Sequence[int]
+    region: Mapping[str, int]
+    seed: int
+
+
+class Coverage(TypedDict):
+    visited_values: int
+    total_tensor_values: int
+    tensor_fraction: float
+    full_tensor: bool
+    full_model: bool
+
+
+class Preview(TypedDict):
+    origin: list[int]
+    shape: list[int]
+    displayed_values: int
+    omitted_values: int
+    positions: list[int]
+
+
+class Control(TypedDict):
+    kind: str
+    seed: int
+    effective_seed: int
+    permutation_sha256: str
+    digest_encoding: str
+    preview_position_to_source: list[int]
+    omitted_mapping_entries: int
+
+
+class Summary(SummaryBinding):
+    cache_key: str
+    centered: bool
+    source_validation: str
+    coverage: Coverage
+    preview: Preview
+    control: Control
+
+
+_Report = TypeVar("_Report", bound=Mapping[str, Any])
+
+
+def encoded(value: object) -> bytes:
     return json.dumps(
         value, allow_nan=False, sort_keys=True, separators=(",", ":")
     ).encode()
 
 
-def digest(value):
+def digest(value: object) -> str:
     return hashlib.sha256(
         json.dumps(
             value, allow_nan=False, ensure_ascii=False, separators=(",", ":")
@@ -30,7 +115,7 @@ def digest(value):
     ).hexdigest()
 
 
-def check_window(shape, region):
+def check_window(shape: Sequence[int], region: Mapping[str, int]) -> None:
     geometry(shape, region)
     if (
         region["rows"] > MAX_AXIS
@@ -42,7 +127,12 @@ def check_window(shape, region):
         )
 
 
-def binding(model, tensor, region, seed):
+def binding(
+    model: Mapping[str, Any],
+    tensor: Mapping[str, Any],
+    region: Mapping[str, int],
+    seed: int,
+) -> SummaryBinding:
     check_window(tensor["shape"], region)
     for key in ("source_identity", "model_identity"):
         value = model.get(key)
@@ -68,7 +158,7 @@ def binding(model, tensor, region, seed):
     ):
         raise ValueError("SVD summary requires a bounded native BF16 tensor name")
     shape = tensor["shape"]
-    source_binding = {
+    source_binding: SourceBinding = {
         "version": 2,
         "model_identity": model["model_identity"],
         "source_identity": model["source_identity"],
@@ -98,7 +188,12 @@ def binding(model, tensor, region, seed):
     }
 
 
-def skeleton(model, tensor, region, seed):
+def skeleton(
+    model: Mapping[str, Any],
+    tensor: Mapping[str, Any],
+    region: Mapping[str, int],
+    seed: int,
+) -> Summary:
     bound = binding(model, tensor, region, seed)
     rows, cols = region["rows"], region["cols"]
     count, total = rows * cols, math.prod(tensor["shape"])
@@ -138,11 +233,19 @@ def skeleton(model, tensor, region, seed):
     }
 
 
-def compute_with_numpy(np, values, *, model, tensor, region, seed):
+def compute_with_numpy(
+    np: Any,
+    values: Sequence[float],
+    *,
+    model: Mapping[str, Any],
+    tensor: Mapping[str, Any],
+    region: Mapping[str, int],
+    seed: int,
+) -> Summary:
     checked_values(values, tensor["shape"], region)
     report = skeleton(model, tensor, region, seed)
     order = permutation(len(values), seed)
-    results = {}
+    results: dict[str, Fit] = {}
     for label, data in (("original", values), ("shuffled", [values[i] for i in order])):
         matrix = np.asarray(data, dtype=np.float64).reshape(
             region["rows"], region["cols"]
@@ -170,7 +273,14 @@ def compute_with_numpy(np, values, *, model, tensor, region, seed):
     return report
 
 
-def validate(report, *, model, tensor, region, seed):
+def validate(
+    report: _Report,
+    *,
+    model: Mapping[str, Any],
+    tensor: Mapping[str, Any],
+    region: Mapping[str, int],
+    seed: int,
+) -> _Report:
     """Coordinator verifies exact binding, deterministic map, closed shape and body budget."""
     if len(json.dumps(report, allow_nan=False).encode()) > MAX_BODY:
         raise ValueError("SVD summary exceeds 63488-byte body cap")
@@ -200,7 +310,7 @@ def validate(report, *, model, tensor, region, seed):
     max_energy = expected["coverage"]["visited_values"] * MAX_BF16**2
     max_singular = math.sqrt(max_energy)
 
-    def finite(x):
+    def finite(x: Any) -> bool:
         try:
             return type(x) in (int, float) and math.isfinite(x)
         except OverflowError:

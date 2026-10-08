@@ -1,6 +1,6 @@
 //! Inactive hosted renderer: one inherited Unix channel, no listener or work queue.
 use crate::{
-    require, server,
+    api, require, server,
     slice::{parse_indices, TensorSlice},
     state::State,
     Result,
@@ -34,16 +34,7 @@ struct Command {
 
 fn execute(state: &State, request: &Request) -> Result<(String, Vec<u8>)> {
     state.source.check()?;
-    let allowed: &[&str] = match request.route.as_str() {
-        "model" => &[],
-        "progress" | "tensor-status" => &["tensor"],
-        "binding" => &["tensor", "slice"],
-        "view" => &["tensor", "slice", "left", "right"],
-        "inspect" => &["tensor", "slice", "row", "col", "left", "right"],
-        "tile" => &["tensor", "slice", "rule", "level", "x", "y"],
-        "calibration" => &["tensor"],
-        _ => return Err("Unknown hosted route".into()),
-    };
+    let allowed = api::hosted::parameters(&request.route).ok_or("Unknown hosted route")?;
     require(
         request.query.keys().all(|k| allowed.contains(&k.as_str())),
         "Unknown hosted field",
@@ -56,17 +47,23 @@ fn execute(state: &State, request: &Request) -> Result<(String, Vec<u8>)> {
             .collect::<Vec<_>>(),
     );
     let body = match request.route.as_str() {
-        "model" => state.model()?,
-        "progress" | "tensor-status" => state.status(if request.query.contains_key("tensor") {
-            Some(q.int("tensor", "0")?)
-        } else {
-            None
-        })?,
-        "inspect" => server::inspect(state, &q)?,
-        "binding" | "view" => {
-            let id = q.int("tensor", "0")?;
-            let slice = TensorSlice::new(&state.source, id, &parse_indices(q.get("slice", ""))?)?;
-            if request.route == "binding" {
+        api::hosted::MODEL => state.model()?,
+        api::hosted::PROGRESS | api::hosted::TENSOR_STATUS => {
+            state.status(if request.query.contains_key(api::parameter::TENSOR) {
+                Some(q.int(api::parameter::TENSOR, "0")?)
+            } else {
+                None
+            })?
+        }
+        api::hosted::INSPECT => server::inspect(state, &q)?,
+        api::hosted::BINDING | api::hosted::VIEW => {
+            let id = q.int(api::parameter::TENSOR, "0")?;
+            let slice = TensorSlice::new(
+                &state.source,
+                id,
+                &parse_indices(q.get(api::parameter::SLICE, ""))?,
+            )?;
+            if request.route == api::hosted::BINDING {
                 json!({"api_version":1,"source_binding":state.slice_binding(&slice)})
             } else {
                 let t = state.source.tensor(id)?;
@@ -75,26 +72,26 @@ fn execute(state: &State, request: &Request) -> Result<(String, Vec<u8>)> {
                 selected["slice_identity"] = json!(slice.identity);
                 selected["slice_count"] = json!(slice.tensor.count);
                 json!({"api_version":1,"tensor":selected,"source_binding":state.slice_binding(&slice),
-                    "legends":state.legends(t,q.get("left","global_linear"),q.get("right","global_asinh"))?,
+                    "legends":state.legends(t,q.get(api::parameter::LEFT,"global_linear"),q.get(api::parameter::RIGHT,"global_asinh"))?,
                     "tile_size":256,"overlap":0,"source_values_unchanged":true})
             }
         }
-        "calibration" => {
+        api::hosted::CALIBRATION => {
             require(
-                request.query.contains_key("tensor"),
+                request.query.contains_key(api::parameter::TENSOR),
                 "One explicit tensor required",
             )?;
-            state.calibrate_one(q.int("tensor", "0")?)?;
+            state.calibrate_one(q.int(api::parameter::TENSOR, "0")?)?;
             json!({"api_version":1,"complete":true})
         }
-        "tile" => {
+        api::hosted::TILE => {
             let (png, _, _) = state.tile_slice(
-                q.int("tensor", "0")?,
-                &parse_indices(q.get("slice", ""))?,
-                q.get("rule", "global_linear"),
-                q.int("level", "0")?.try_into()?,
-                q.int("x", "0")?,
-                q.int("y", "0")?,
+                q.int(api::parameter::TENSOR, "0")?,
+                &parse_indices(q.get(api::parameter::SLICE, ""))?,
+                q.get(api::parameter::RULE, "global_linear"),
+                q.int(api::parameter::LEVEL, "0")?.try_into()?,
+                q.int(api::parameter::X, "0")?,
+                q.int(api::parameter::Y, "0")?,
             )?;
             return Ok(("image/png".into(), png));
         }
@@ -220,5 +217,150 @@ mod diagnostic_tests {
             channel_io_error("peer_addr", &error),
             "Hosted channel peer_addr failed: kind=Other; errno=none"
         );
+    }
+}
+
+#[cfg(test)]
+mod declaration_vectors {
+    use super::*;
+    use serde_json::Value;
+    use std::{
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+    struct Fixture {
+        state: State,
+        root: PathBuf,
+    }
+    impl Fixture {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let root = std::env::temp_dir().join(format!(
+                "atlas-hosted-declaration-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let model = root.join("model");
+            std::fs::create_dir_all(&model).unwrap();
+            let header = br#"{"weights":{"dtype":"BF16","shape":[1,2],"data_offsets":[0,4]}}"#;
+            let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+            bytes.extend_from_slice(header);
+            bytes.extend_from_slice(&[0x80, 0x3f, 0x80, 0xbf]);
+            std::fs::write(model.join("tiny.safetensors"), bytes).unwrap();
+            let state = State::open(
+                &model,
+                &root.join("cache"),
+                Some("hosted declaration".into()),
+                Some("fixture-v1".into()),
+            )
+            .unwrap();
+            Self { state, root }
+        }
+        fn request(&self, route: &str, query: &[(&str, &str)]) -> Result<(String, Vec<u8>)> {
+            execute(
+                &self.state,
+                &Request {
+                    route: route.into(),
+                    query: query
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                },
+            )
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.root).unwrap();
+        }
+    }
+    #[test]
+    fn every_private_route_keeps_its_existing_direct_contract() {
+        let _isolation = crate::resources::test_workspace_guard();
+        let fixture = Fixture::new();
+        for (route, query) in [
+            ("model", vec![]),
+            ("progress", vec![]),
+            ("tensor-status", vec![("tensor", "0")]),
+            ("binding", vec![("tensor", "0"), ("slice", "")]),
+            ("inspect", vec![("tensor", "0"), ("row", "0"), ("col", "1")]),
+            ("calibration", vec![("tensor", "0")]),
+            (
+                "view",
+                vec![
+                    ("tensor", "0"),
+                    ("slice", ""),
+                    ("left", "tensor_linear"),
+                    ("right", "tensor_asinh"),
+                ],
+            ),
+        ] {
+            let result = fixture.request(route, &query);
+            assert!(
+                result.is_ok(),
+                "hosted declaration route: {route}: {result:?}"
+            );
+            let (mime, bytes) = result.unwrap();
+            assert_eq!(mime, "application/json", "hosted declaration mime: {route}");
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["api_version"], 1, "hosted declaration JSON: {route}");
+            if route == "model" {
+                assert_eq!(
+                    body["name"], "hosted declaration",
+                    "hosted model declaration"
+                );
+            }
+            if route == "binding" {
+                assert_eq!(
+                    body.as_object().unwrap().len(),
+                    2,
+                    "hosted binding declaration"
+                );
+            }
+            if route == "inspect" {
+                assert_eq!(body["raw_exact"], "-1", "hosted inspect declaration");
+            }
+        }
+        let (mime, png) = fixture
+            .request(
+                "tile",
+                &[
+                    ("tensor", "0"),
+                    ("rule", "tensor_linear"),
+                    ("level", "1"),
+                    ("x", "0"),
+                    ("y", "0"),
+                ],
+            )
+            .unwrap();
+        assert_eq!(mime, "image/png", "hosted tile declaration");
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert!(png.len() < 64 * 1024);
+    }
+    #[test]
+    fn private_admission_keeps_exact_unknown_missing_and_parse_order() {
+        let _isolation = crate::resources::test_workspace_guard();
+        let fixture = Fixture::new();
+        for (route, query, message) in [
+            ("Model", vec![], "Unknown hosted route"),
+            ("model", vec![("unexpected", "1")], "Unknown hosted field"),
+            (
+                "binding",
+                vec![("tensor", "bad"), ("unexpected", "1")],
+                "Unknown hosted field",
+            ),
+            ("calibration", vec![], "One explicit tensor required"),
+            (
+                "binding",
+                vec![("tensor", "bad")],
+                "invalid digit found in string",
+            ),
+        ] {
+            assert_eq!(
+                fixture.request(route, &query).unwrap_err().to_string(),
+                message,
+                "hosted declaration refusal: {route}"
+            );
+        }
     }
 }

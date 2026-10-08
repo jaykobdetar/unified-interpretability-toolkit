@@ -7,7 +7,6 @@ from pathlib import Path
 import sys, types, unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from atlas_host.profile_os import ProcessBook, ThreadMeter, proc_stat
 from atlas_host.profile_observation import SpawnObservationPending
 from atlas_host.startup_diagnostics import StartupDiagnostics, diagnose, error_chain

@@ -10,7 +10,6 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import viewer_resources
 import inference_model_descriptor as descriptor
 from atlas_host import cache, config, common

@@ -5,6 +5,8 @@ scheduled watchdog. Neither status nor HTTP polling drives work. No platform
 provider/default scheduler is installed here. See PROFILE-WORKER-INTERFACE.md.
 """
 
+from atlas_host import limits as _limits
+
 import math
 import secrets
 import threading
@@ -13,13 +15,69 @@ from copy import deepcopy
 
 from .startup_diagnostics import diagnose, diagnosed
 from .common import canonical, digest, fields, integer, require
-from .profile_snapshot import SnapshotStore
+from .profile_snapshot import SnapshotInfo, SnapshotPage, SnapshotStore
 from .profile_observation import SpawnObservationPending
+
+from collections.abc import Generator
+from typing import Any, Protocol, TypedDict, cast
+
+
+class WorkerRequest(TypedDict):
+    binding: dict[str, Any]
+    seed: int
+    values: int
+    wall_ms: int
+    cpu_ms: int
+
+
+class AcceptedProgress(TypedDict):
+    revision: str
+    visited_values: int
+    total_values: int
+    complete: bool
+
+
+class WorkerStatus(TypedDict):
+    state: str
+    error: str | None
+    accepted: AcceptedProgress | None
+    cleanup_pending: bool
+    resume_available: bool
+
+
+class WorkerToken(Protocol):
+    def current(self) -> bool: ...
+    def release(self) -> object: ...
+    def poison(self) -> object: ...
+
+
+class WorkerChild(Protocol):
+    def initialize(self) -> object: ...
+    def sample(self) -> dict[str, Any]: ...
+    def stop(self) -> object: ...
+
+
+class WorkerWatchdog(Protocol):
+    def close(self) -> object: ...
+
+
+class WorkerPlatform(Protocol):
+    def clock(self) -> float: ...
+    def owner_cpu(self) -> float: ...
+    def acquire(self) -> WorkerToken | None: ...
+    def source_check(self) -> object: ...
+    def start_gate(self) -> object: ...
+    def resources_ok(self, memfd_bytes: int, /) -> bool: ...
+    def spawn(
+        self, request: WorkerRequest, output_fd: int, input_fd: int | None, /
+    ) -> WorkerChild | None: ...
+    def arm_watchdog(self, job: "ProfileJob", /) -> WorkerWatchdog | None: ...
+
 
 WALL_MAX = 5.0
 CPU_MAX = 4.0
-FINALIZE_RESERVE = 0.8
-POLL_SLICE = 0.002
+FINALIZE_RESERVE = _limits.PROFILE_FINALIZE_RESERVE_SECONDS
+POLL_SLICE = _limits.PROFILE_POLL_SLICE_SECONDS
 
 
 class ProfileJob:
@@ -33,7 +91,14 @@ class ProfileJob:
     including final wait4 rusage after reap. Ownership is held before initialize.
     """
 
-    def __init__(self, selected, seed, tab_capability, context_id, platform):
+    def __init__(
+        self,
+        selected: dict[str, Any],
+        seed: int,
+        tab_capability: str,
+        context_id: str,
+        platform: WorkerPlatform,
+    ) -> None:
         require(
             type(tab_capability) is str and len(tab_capability) >= 32,
             "Private tab capability required",
@@ -46,14 +111,18 @@ class ProfileJob:
         self.platform = platform
         self.job_capability = secrets.token_hex(32)
         self.state = "idle"
-        self.error = None
+        self.error: str | None = None
+        self.child: WorkerChild | None
+        self.token: WorkerToken | None
+        self.watchdog: WorkerWatchdog | None
+        self.validation: Generator[None, None, SnapshotInfo] | None
         self.child = self.token = self.watchdog = self.validation = None
         self.cancel_event = threading.Event()
-        self.owner_thread = None
+        self.owner_thread: int | None = None
         self.cpu_child = 0.0
-        self.receipt = None
-        self.accepted = None
-        self._accepted_snapshot = (
+        self.receipt: dict[str, Any] | None = None
+        self.accepted: AcceptedProgress | None = None
+        self._accepted_snapshot: tuple[int, str] | None = (
             None  # (publication serial, revision), not store.latest.
         )
         self._publication_before = self.store.publication_serial
@@ -61,7 +130,7 @@ class ProfileJob:
         self.expired = False
         self.lease_end = platform.clock() + 15
 
-    def _owns(self, tab, job, context):
+    def _owns(self, tab: str, job: str, context: str) -> None:
         require(
             type(tab) is str
             and type(job) is str
@@ -71,20 +140,20 @@ class ProfileJob:
             "Private profile owner mismatch",
         )
 
-    def _owner_context(self):
+    def _owner_context(self) -> None:
         require(
             self.owner_thread == threading.get_ident(),
             "Wrong job-owning execution context",
         )
 
-    def _cpu(self):
+    def _cpu(self) -> float:
         elapsed = self.platform.owner_cpu() - self.cpu_start
         require(
             math.isfinite(elapsed) and elapsed >= 0, "Invalid job-local owner CPU clock"
         )
         return elapsed + self.cpu_child
 
-    def _time_budget(self, reserve=0.0):
+    def _time_budget(self, reserve: float = 0.0) -> None:
         now = self.platform.clock()
         require(
             not self.cancel_event.is_set() and not self.expired,
@@ -97,7 +166,7 @@ class ProfileJob:
             "Total profile grant exhausted",
         )
 
-    def _budget(self, reserve=0.0):
+    def _budget(self, reserve: float = 0.0) -> None:
         self._time_budget(reserve)
         require(
             self.token is not None and self.token.current(),
@@ -105,8 +174,16 @@ class ProfileJob:
         )
 
     def start(
-        self, tab, job, context, values, *, wall_ms=5000, cpu_ms=4000, resume=False
-    ):
+        self,
+        tab: str,
+        job: str,
+        context: str,
+        values: int,
+        *,
+        wall_ms: int = 5000,
+        cpu_ms: int = 4000,
+        resume: bool = False,
+    ) -> WorkerStatus:
         """Explicit action in the dedicated owner context; no queue or renewal.
 
         Public resume is deliberately closed pending runtime qualification.
@@ -152,7 +229,7 @@ class ProfileJob:
             self._budget(FINALIZE_RESERVE)
             remaining = self.deadline - self.platform.clock() - FINALIZE_RESERVE
             cpu_remaining = self.cpu_budget - self._cpu()
-            request = {
+            request: WorkerRequest = {
                 "binding": deepcopy(self.store.selected),
                 "seed": self.store.seed,
                 "values": values,
@@ -166,7 +243,9 @@ class ProfileJob:
             # No HTTP/visitor paths. Platform resolves trusted registry source.
             self.child = self.platform.spawn(request, output, None)
             require(self.child is not None, "Worker spawn did not return ownership")
-            self.child.initialize()  # Failure retains self.child for cleanup.
+            cast(
+                WorkerChild, self.child
+            ).initialize()  # Failure retains self.child for cleanup.
             self.state = "running"
             self.guard()
         except BaseException as diagnostic_error:
@@ -175,7 +254,7 @@ class ProfileJob:
             raise
         return self.status(tab, job, context)
 
-    def guard(self):
+    def guard(self) -> None:
         """Independently scheduled nonblocking watchdog, not an HTTP poll hook.
 
         platform owner_cpu must query the job owner's clock even when called
@@ -221,7 +300,7 @@ class ProfileJob:
             if self.child is not None:
                 self.child.stop()  # Signal only; never wait in watchdog/cancel.
 
-    def _sample(self, sample):
+    def _sample(self, sample: dict[str, Any]) -> None:
         fields(sample, ("cpu_seconds", "reaped", "exit_code", "receipt"))
         cpu = sample["cpu_seconds"]
         require(
@@ -230,16 +309,16 @@ class ProfileJob:
         )
         require(type(sample["reaped"]) is bool, "Invalid reap evidence")
         self.cpu_child = cpu
-        self.sampled = sample
+        self.sampled: dict[str, Any] = sample
 
-    def cancel(self, tab, job, context):
+    def cancel(self, tab: str, job: str, context: str) -> None:
         self._owns(tab, job, context)
         self.cancel_event.set()
         # Owner context performs handle cleanup. No synchronous wait or scan.
         if self.child is not None:
             self.child.stop()
 
-    def heartbeat(self, tab, job, context):
+    def heartbeat(self, tab: str, job: str, context: str) -> None:
         self._owns(tab, job, context)
         now = self.platform.clock()
         require(
@@ -248,17 +327,30 @@ class ProfileJob:
         )
         self.lease_end = now + 15  # Never changes deadline, CPU budget or values.
 
-    def status(self, tab, job, context):
+    def status(self, tab: str, job: str, context: str) -> WorkerStatus:
         self._owns(tab, job, context)
         return {
             "state": self.state,
             "error": self.error,
-            "accepted": None if self.accepted is None else dict(self.accepted),
+            "accepted": (
+                None
+                if self.accepted is None
+                else cast(AcceptedProgress, dict(self.accepted))
+            ),
             "cleanup_pending": self.state == "stopping",
             "resume_available": False,
         }
 
-    def page(self, tab, job, context, revision, axis, start, count):
+    def page(
+        self,
+        tab: str,
+        job: str,
+        context: str,
+        revision: str,
+        axis: str,
+        start: int,
+        count: int,
+    ) -> SnapshotPage:
         self._owns(tab, job, context)
         require(
             not self.cancel_event.is_set() and self.platform.clock() < self.lease_end,
@@ -275,10 +367,10 @@ class ProfileJob:
             start,
             count,
             source_check=self.platform.source_check,
-            expected_publication=accepted[0],
+            expected_publication=cast(tuple[int, str], accepted)[0],
         )
 
-    def _fail(self, code):
+    def _fail(self, code: str) -> None:
         if self.store.publication_serial != self._publication_before:
             # Detect the swap even if old-close raised before the generator
             # returned, or the first post-swap budget check failed.
@@ -292,7 +384,7 @@ class ProfileJob:
         if self.child is not None:
             self.child.stop()
 
-    def _finish_cleanup(self):
+    def _finish_cleanup(self) -> bool:
         # Owner-context only. A lost/unreapable child keeps token poisoned/held.
         if self.child is not None:
             sample = self.child.sample()
@@ -318,7 +410,7 @@ class ProfileJob:
         )
         return True
 
-    def tick(self):
+    def tick(self) -> bool:
         """Owner scheduler calls independently of HTTP, bounded validation step.
 
         Platform callbacks must be nonblocking/bounded. Hard watchdog remains
@@ -348,7 +440,7 @@ class ProfileJob:
             self.guard()
             self._budget()
             if self.state == "running":
-                sample = self.child.sample()
+                sample = cast(WorkerChild, self.child).sample()
                 self._sample(sample)
                 if not sample["reaped"]:
                     return False
@@ -400,16 +492,16 @@ class ProfileJob:
                     break
                 self._budget()
                 try:
-                    next(self.validation)
+                    next(cast(Generator[None, None, SnapshotInfo], self.validation))
                 except StopIteration as done:
                     self.validation = None
-                    info = done.value
+                    info = cast(SnapshotInfo, done.value)
                     self._budget()  # Includes publication and old-handle close.
                     self.state = "finishing"
-                    self.watchdog.close()
+                    cast(WorkerWatchdog, self.watchdog).close()
                     self.watchdog = None
                     self._time_budget()
-                    self.token.release()
+                    cast(WorkerToken, self.token).release()
                     self.token = None
                     self._time_budget()
                     # Terminal progress only after reap, validation and cleanup.

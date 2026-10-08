@@ -1,7 +1,9 @@
 """Owner machine configuration. Validation never applies limits or starts work."""
 
 from copy import deepcopy
+from os import PathLike
 from pathlib import Path
+from typing import Any
 
 from .common import fields, integer, label, read_json, require
 
@@ -48,7 +50,7 @@ LOCAL_LIMITS = {
 }
 
 
-def validate_config(value, base):
+def validate_config(value: dict[str, Any], base: str | PathLike[str]) -> dict[str, Any]:
     fields(value, ("version", "profile", "bind", "ports", "paths"), ("limits",))
     integer(value["version"], 1, 1)
     require(value["profile"] == "local-v1", "Only unchanged local-v1 is enabled")
@@ -60,7 +62,7 @@ def validate_config(value, base):
     require(not set(ports) & {8774, 8775, 8785}, "Port reserved by current viewer")
     fields(value["paths"], ("registry", "cache"))
     base = Path(base).resolve()
-    paths = {}
+    paths: dict[str, str] = {}
     for name, raw in value["paths"].items():
         label(raw, 4096)
         path = Path(raw).expanduser()
@@ -74,12 +76,12 @@ def validate_config(value, base):
     return {**deepcopy(value), "paths": paths, "limits": deepcopy(LOCAL_LIMITS)}
 
 
-def load_config(path):
+def load_config(path: str | PathLike[str]) -> dict[str, Any]:
     path = Path(path)
     return validate_config(read_json(path, 16384), path.parent)
 
 
-def capabilities(config):
+def capabilities(config: dict[str, Any]) -> dict[str, Any]:
     """Sanitized informational projection, not enforcement or authorization."""
     return {
         "version": 1,

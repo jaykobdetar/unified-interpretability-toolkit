@@ -8,7 +8,9 @@ use std::{
     time::Instant,
 };
 use weight_atlas_rust::{
-    atomic_write, configure, configure_standalone, headroom, peak_rss_mib, render, require, server,
+    atomic_write,
+    command::{defaults, parse_options, Command, COMPARISON_PREFIX, HELP},
+    configure, configure_standalone, headroom, peak_rss_mib, render, require, server,
     slice::{parse_indices, TensorSlice},
     source::{Dtype, Source},
     state::State,
@@ -32,29 +34,13 @@ fn run_args(
     configure: impl FnOnce(weight_atlas_rust::resources::StartupScope) -> Result<usize>,
 ) -> Result<()> {
     if args.is_empty() || args[0] == "--help" {
-        println!("Weight Atlas Rust\nCommands: metadata | serve | calibrate | verify | tile | overview | inspect | bench\nComparison: compare-metadata | compare-calibrate | compare-tile | compare-inspect | compare-serve; explicit --model A --compare-model B; --cache outside both\nComparison tile: --tensor ID --quantity a|b|delta|abs_delta --mapping linear|asinh|magnitude --out PREFIX; compare-calibrate requires --tensor ID\nRequired: --model DIRECTORY\nCommon: --cache DIRECTORY (default ./cache) --name NAME --revision REVISION\nserve: --port 8775 --verify-sha false; true hashes all bytes before listening; no remote binding\ncalibrate: --tensor ID (omit for all); resumes valid calibration\nverify: full SHA-256 reads, compares local model-api.json if present\noverview: --tensor ID --slice INDICES --rules tensor_linear,tensor_asinh --max-values 16777216; explicit bounded coarse preparation\ntile: --tensor ID --rules global_linear,global_asinh --level L --x X --y Y --out PREFIX\ninspect: --tensor ID --row R --col C\nbench: --tensor ID --repeats 3; factors 1,4,16, both global rules\nDefaults: one CPU, 768 MiB address-space budget, >=3 GiB effective RAM reserve plus process budget, >=25 GiB disk reserve.\n--resources JSON selects validated standalone budgets; see docs/RESOURCES.md.\nCache identity checks do not claim a fresh full-content hash.");
+        println!("{HELP}");
         return Ok(());
     }
     let command = &args[0];
-    let mut opts = BTreeMap::new();
-    require((args.len() - 1).is_multiple_of(2), "Options require values")?;
-    for p in args[1..].chunks_exact(2) {
-        require(p[0].starts_with("--"), "Expected --option value")?;
-        require(
-            opts.insert(p[0][2..].to_owned(), p[1].clone()).is_none(),
-            "Duplicate CLI option",
-        )?
-    }
-    if let Some(raw) = opts.get("resources") {
-        require(
-            weight_atlas_rust::resources::StartupScope::for_command(command)
-                == weight_atlas_rust::resources::StartupScope::Standalone,
-            "Custom resources apply only to the standalone viewer/reader",
-        )?;
-        require(raw.len() <= 4096, "Resource configuration exceeds limit")?;
-        weight_atlas_rust::resources::initialize(serde_json::from_str(raw)?)?;
-    }
-    if command == "profile-worker" {
+    let opts = parse_options(&args)?;
+    initialize_resources(command, &opts)?;
+    if Command::lookup(command) == Some(Command::ProfileWorker) {
         return weight_atlas_rust::profile_worker::run(&opts);
     }
     let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
@@ -63,59 +49,45 @@ fn run_args(
         command,
     ))?;
     let start = Instant::now();
-    if command == "metadata" {
-        let s = Source::open(&model)?;
-        println!(
-            "{}",
-            json!({"source_directory":s.root,"source_identity":s.identity,"header_bytes":s.header_bytes,"source_bytes":s.bytes,"tensor_count":s.tensors.len(),"parameter_count":s.tensors.iter().map(|t|t.count).sum::<usize>(),"catalog":s.tensors,"shards":s.shards,"elapsed_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"cpu":cpu,"full_sha_recomputed":false})
-        );
-        return Ok(());
+    if Command::lookup(command) == Some(Command::Metadata) {
+        return print_metadata(&model, cpu, start);
     }
-    if command.starts_with("compare-") {
+    if command.starts_with(COMPARISON_PREFIX) {
         return run_comparison(command, &opts, &model, cpu);
     }
     let state = Arc::new(State::open(
         &model,
-        Path::new(&get("cache", "cache")),
+        Path::new(&get("cache", defaults::INTAKE_CACHE)),
         opts.get("name").cloned(),
         opts.get("revision").cloned(),
     )?);
-    if command == "serve" && get("verify-sha", "false") == "true" {
+    if Command::lookup(command) == Some(Command::Serve)
+        && get("verify-sha", defaults::INTAKE_VERIFY_SHA) == "true"
+    {
         verify_source(&state, cpu, Instant::now())?;
     }
-    match command.as_str() {
-        "serve" => server::serve(state, get("port", "8775").parse()?)?,
-        "hosted-renderer" => weight_atlas_rust::hosted_renderer::run(
+    dispatch_command(command, &opts, state, cpu, start)
+}
+
+fn dispatch_command(
+    command: &str,
+    opts: &BTreeMap<String, String>,
+    state: Arc<State>,
+    cpu: usize,
+    start: Instant,
+) -> Result<()> {
+    let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
+    match Command::lookup(command) {
+        Some(Command::Serve) => server::serve(state, get("port", defaults::SERVE_PORT).parse()?)?,
+        Some(Command::HostedRenderer) => weight_atlas_rust::hosted_renderer::run(
             state,
             opts.get("channel-fd")
                 .ok_or("Private channel required")?
                 .parse()?,
         )?,
-        "calibrate" => {
-            let ids = if let Some(id) = opts.get("tensor") {
-                vec![id.parse()?]
-            } else {
-                state
-                    .source
-                    .tensors
-                    .iter()
-                    .filter(|t| t.available)
-                    .map(|t| t.id)
-                    .collect()
-            };
-            let mut minimum = headroom()?;
-            for id in ids {
-                minimum = minimum.min(headroom()?);
-                state.calibrate_one(id)?
-            }
-            let model = state.model()?;
-            println!(
-                "{}",
-                json!({"model":model,"wall_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"minimum_available_gib":minimum as f64/1024f64.powi(3),"cpu":cpu})
-            );
-        }
-        "verify" => println!("{}", verify_source(&state, cpu, Instant::now())?),
-        "inspect" => println!(
+        Some(Command::Calibrate) => run_calibration(&state, opts, cpu, start)?,
+        Some(Command::Verify) => println!("{}", verify_source(&state, cpu, Instant::now())?),
+        Some(Command::Inspect) => println!(
             "{}",
             server::inspect(
                 &state,
@@ -127,102 +99,175 @@ fn run_args(
                 )
             )?
         ),
-        "overview" => {
-            let id = opts
-                .get("tensor")
-                .ok_or("Overview requires explicit --tensor ID")?
-                .parse()?;
-            let leading = parse_indices(&get("slice", ""))?;
-            let rules = get("rules", "tensor_linear,tensor_asinh");
-            let rules = rules.split(',').collect::<Vec<_>>();
-            let report = state.prepare_overview(
-                id,
-                &leading,
-                &rules,
-                get("max-values", "16777216").parse()?,
-            )?;
-            println!("{}", report);
+        Some(Command::Overview) => run_overview(&state, opts)?,
+        Some(Command::Tile) => run_tile(&state, opts, start)?,
+        Some(Command::Bench) => run_benchmark(&state, opts, cpu, start)?,
+        _ => return Err("Unknown command; use --help".into()),
+    };
+    Ok(())
+}
+
+fn run_calibration(
+    state: &State,
+    opts: &BTreeMap<String, String>,
+    cpu: usize,
+    start: Instant,
+) -> Result<()> {
+    let ids = if let Some(id) = opts.get("tensor") {
+        vec![id.parse()?]
+    } else {
+        state
+            .source
+            .tensors
+            .iter()
+            .filter(|t| t.available)
+            .map(|t| t.id)
+            .collect()
+    };
+    let mut minimum = headroom()?;
+    for id in ids {
+        minimum = minimum.min(headroom()?);
+        state.calibrate_one(id)?
+    }
+    let model = state.model()?;
+    println!(
+        "{}",
+        json!({"model":model,"wall_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"minimum_available_gib":minimum as f64/1024f64.powi(3),"cpu":cpu})
+    );
+    Ok(())
+}
+
+fn run_overview(state: &State, opts: &BTreeMap<String, String>) -> Result<()> {
+    let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
+    let id = opts
+        .get("tensor")
+        .ok_or("Overview requires explicit --tensor ID")?
+        .parse()?;
+    let leading = parse_indices(&get("slice", defaults::OVERVIEW_SLICE))?;
+    let rules = get("rules", defaults::OVERVIEW_RULES);
+    let rules = rules.split(',').collect::<Vec<_>>();
+    let report = state.prepare_overview(
+        id,
+        &leading,
+        &rules,
+        get("max-values", defaults::OVERVIEW_MAX_VALUES).parse()?,
+    )?;
+    println!("{}", report);
+    Ok(())
+}
+
+fn run_tile(state: &State, opts: &BTreeMap<String, String>, start: Instant) -> Result<()> {
+    let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
+    let id: usize = get("tensor", defaults::TILE_TENSOR).parse()?;
+    let slice = TensorSlice::new(
+        &state.source,
+        id,
+        &parse_indices(&get("slice", defaults::TILE_SLICE))?,
+    )?;
+    let t = &slice.tensor;
+    let level: u32 = get("level", &t.max_level.to_string()).parse()?;
+    let rules = get("rules", defaults::TILE_RULES);
+    let rules = rules.split(',').collect::<Vec<_>>();
+    let luts = rules
+        .iter()
+        .map(|r| {
+            render::validate_rule_dtype(r, Dtype::parse(&t.dtype)?)?;
+            render::legend(r, state.stats(id).as_ref(), state.global())
+                .and_then(|l| state.tensor_mapping(t, r, &l))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let refs = luts.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+    let (fields, m) = render::tile_fields(
+        &state.source,
+        t,
+        &refs,
+        level,
+        get("x", defaults::TILE_X).parse()?,
+        get("y", defaults::TILE_Y).parse()?,
+    )?;
+    let out = get("out", defaults::TILE_OUT);
+    for (rule, field) in rules.iter().zip(&fields) {
+        std::fs::write(
+            format!("{out}-{rule}.png"),
+            render::png_for_rule(rule, field, m.width, m.height)?,
+        )?;
+        let mut f = std::fs::File::create(format!("{out}-{rule}.f64le"))?;
+        for x in field {
+            f.write_all(&x.to_le_bytes())?
         }
-        "tile" => {
-            let id: usize = get("tensor", "0").parse()?;
-            let slice = TensorSlice::new(&state.source, id, &parse_indices(&get("slice", ""))?)?;
-            let t = &slice.tensor;
-            let level: u32 = get("level", &t.max_level.to_string()).parse()?;
-            let rules = get("rules", "global_linear,global_asinh");
-            let rules = rules.split(',').collect::<Vec<_>>();
-            let luts = rules
+    }
+    println!(
+        "{}",
+        json!({"metrics":m,"seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib()})
+    );
+    Ok(())
+}
+
+fn run_benchmark(
+    state: &State,
+    opts: &BTreeMap<String, String>,
+    cpu: usize,
+    start: Instant,
+) -> Result<()> {
+    let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
+    let id = get("tensor", defaults::BENCH_TENSOR).parse()?;
+    let t = state.source.tensor(id)?;
+    let reps: usize = get("repeats", defaults::BENCH_REPEATS).parse()?;
+    require((1..=30).contains(&reps), "repeats 1–30")?;
+    let mut records = Vec::new();
+    for f in [1usize, 4, 16] {
+        if f > 1usize << t.max_level {
+            continue;
+        }
+        let level = t.max_level - f.trailing_zeros();
+        let mut times = Vec::new();
+        let mut last = None;
+        for _ in 0..reps {
+            let begin = Instant::now();
+            let luts = render::RULES[..2]
                 .iter()
                 .map(|r| {
-                    render::validate_rule_dtype(r, Dtype::parse(&t.dtype)?)?;
                     render::legend(r, state.stats(id).as_ref(), state.global())
                         .and_then(|l| state.tensor_mapping(t, r, &l))
                 })
                 .collect::<Result<Vec<_>>>()?;
             let refs = luts.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
-            let (fields, m) = render::tile_fields(
-                &state.source,
-                t,
-                &refs,
-                level,
-                get("x", "0").parse()?,
-                get("y", "0").parse()?,
-            )?;
-            let out = get("out", "tile");
-            for (rule, field) in rules.iter().zip(&fields) {
-                std::fs::write(
-                    format!("{out}-{rule}.png"),
-                    render::png_for_rule(rule, field, m.width, m.height)?,
-                )?;
-                let mut f = std::fs::File::create(format!("{out}-{rule}.f64le"))?;
-                for x in field {
-                    f.write_all(&x.to_le_bytes())?
-                }
+            let (fields, m) = render::tile_fields(&state.source, t, &refs, level, 0, 0)?;
+            let mut bytes = 0;
+            for field in fields {
+                bytes += render::png(&field, m.width, m.height)?.len()
             }
-            println!(
-                "{}",
-                json!({"metrics":m,"seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib()})
-            );
+            times.push(begin.elapsed().as_secs_f64());
+            last = Some(json!({"metrics":m,"png_bytes":bytes}));
         }
-        "bench" => {
-            let id = get("tensor", "0").parse()?;
-            let t = state.source.tensor(id)?;
-            let reps: usize = get("repeats", "3").parse()?;
-            require((1..=30).contains(&reps), "repeats 1–30")?;
-            let mut records = Vec::new();
-            for f in [1usize, 4, 16] {
-                if f > 1usize << t.max_level {
-                    continue;
-                }
-                let level = t.max_level - f.trailing_zeros();
-                let mut times = Vec::new();
-                let mut last = None;
-                for _ in 0..reps {
-                    let begin = Instant::now();
-                    let luts = render::RULES[..2]
-                        .iter()
-                        .map(|r| {
-                            render::legend(r, state.stats(id).as_ref(), state.global())
-                                .and_then(|l| state.tensor_mapping(t, r, &l))
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-                    let refs = luts.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
-                    let (fields, m) = render::tile_fields(&state.source, t, &refs, level, 0, 0)?;
-                    let mut bytes = 0;
-                    for field in fields {
-                        bytes += render::png(&field, m.width, m.height)?.len()
-                    }
-                    times.push(begin.elapsed().as_secs_f64());
-                    last = Some(json!({"metrics":m,"png_bytes":bytes}));
-                }
-                records.push(json!({"tensor":t.name,"shape":t.shape,"factor":f,"level":level,"runs_seconds":times,"last":last}));
-            }
-            println!(
-                "{}",
-                json!({"records":records,"wall_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"cpu":cpu})
-            );
-        }
-        _ => return Err("Unknown command; use --help".into()),
-    };
+        records.push(json!({"tensor":t.name,"shape":t.shape,"factor":f,"level":level,"runs_seconds":times,"last":last}));
+    }
+    println!(
+        "{}",
+        json!({"records":records,"wall_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"cpu":cpu})
+    );
+    Ok(())
+}
+
+fn initialize_resources(command: &str, opts: &BTreeMap<String, String>) -> Result<()> {
+    if let Some(raw) = opts.get("resources") {
+        require(
+            weight_atlas_rust::resources::StartupScope::for_command(command)
+                == weight_atlas_rust::resources::StartupScope::Standalone,
+            "Custom resources apply only to the standalone viewer/reader",
+        )?;
+        require(raw.len() <= 4096, "Resource configuration exceeds limit")?;
+        weight_atlas_rust::resources::initialize(serde_json::from_str(raw)?)?;
+    }
+    Ok(())
+}
+
+fn print_metadata(model: &Path, cpu: usize, start: Instant) -> Result<()> {
+    let s = Source::open(model)?;
+    println!(
+        "{}",
+        json!({"source_directory":s.root,"source_identity":s.identity,"header_bytes":s.header_bytes,"source_bytes":s.bytes,"tensor_count":s.tensors.len(),"parameter_count":s.tensors.iter().map(|t|t.count).sum::<usize>(),"catalog":s.tensors,"shards":s.shards,"elapsed_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"cpu":cpu,"full_sha_recomputed":false})
+    );
     Ok(())
 }
 
@@ -324,12 +369,12 @@ fn run_comparison(
     let pair = Arc::new(Comparison::open(
         model,
         &b,
-        Path::new(&get("cache", "cache-comparison")),
+        Path::new(&get("cache", defaults::COMPARISON_CACHE)),
     )?);
-    let id = get("tensor", "0").parse()?;
-    let output = match command {
-        "compare-metadata" => pair.model()?,
-        "compare-calibrate" => {
+    let id = get("tensor", defaults::COMPARISON_TENSOR).parse()?;
+    let output = match Command::lookup(command) {
+        Some(Command::CompareMetadata) => pair.model()?,
+        Some(Command::CompareCalibrate) => {
             require(
                 opts.contains_key("tensor"),
                 "Comparison calibration requires an explicit --tensor ID",
@@ -337,15 +382,17 @@ fn run_comparison(
             pair.calibrate_one(id)?;
             pair.model()?
         }
-        "compare-inspect" => {
-            pair.inspect(id, get("row", "0").parse()?, get("col", "0").parse()?)?
-        }
-        "compare-tile" => {
-            let quantity = get("quantity", "delta");
-            let mapping = get("mapping", "linear");
+        Some(Command::CompareInspect) => pair.inspect(
+            id,
+            get("row", defaults::COMPARISON_ROW).parse()?,
+            get("col", defaults::COMPARISON_COL).parse()?,
+        )?,
+        Some(Command::CompareTile) => {
+            let quantity = get("quantity", defaults::COMPARISON_QUANTITY);
+            let mapping = get("mapping", defaults::COMPARISON_MAPPING);
             let level = get("level", &pair.pair(id)?.max_level.to_string()).parse()?;
-            let x = get("x", "0").parse()?;
-            let y = get("y", "0").parse()?;
+            let x = get("x", defaults::COMPARISON_X).parse()?;
+            let y = get("y", defaults::COMPARISON_Y).parse()?;
             let prefix =
                 pair.output_prefix(Path::new(opts.get("out").ok_or("--out PREFIX required")?))?;
             let (field, metrics) = pair.fields(id, &quantity, &mapping, level, x, y)?;
@@ -378,8 +425,8 @@ fn run_comparison(
             result["cpu"] = json!(cpu);
             result
         }
-        "compare-serve" => {
-            comparison_http::serve(pair, get("port", "8776").parse()?)?;
+        Some(Command::CompareServe) => {
+            comparison_http::serve(pair, get("port", defaults::COMPARISON_PORT).parse()?)?;
             return Ok(());
         }
         _ => return Err("Unknown comparison command".into()),
@@ -508,3 +555,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/native_command_definition.rs"]
+mod native_command_definition_tests;

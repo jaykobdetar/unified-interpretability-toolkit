@@ -1,7 +1,7 @@
 //! Read-only, explicitly paired checkpoints. Comparison coordinates are never edit targets.
 use crate::{
     atomic_write, disk_guard, headroom, render, require, sha,
-    source::{element_offset, exact_decimal_for, Dtype, Source, Tensor},
+    source::{element_offset, exact_decimal_for, Dtype, Format, Source, Tensor},
     state::{intended_cache_path, TileCache},
     Result,
 };
@@ -15,6 +15,8 @@ use std::{
     sync::Mutex,
 };
 
+mod response;
+
 pub const VERSION: &str = "checkpoint-comparison-v1";
 const RENDERER: &str = "comparison-v2-exact-json-transform-before-mean";
 const BAND: usize = 2 * 1024 * 1024;
@@ -27,8 +29,8 @@ pub struct Pair {
     pub cols: usize,
     pub count: usize,
     pub max_level: u32,
-    pub dtype_a: String,
-    pub dtype_b: String,
+    pub dtype_a: Format,
+    pub dtype_b: Format,
     a: usize,
     b: usize,
 }
@@ -235,13 +237,20 @@ impl Comparison {
         self.calibration.lock().unwrap().tensors.get(&id).cloned()
     }
     pub fn identity_metadata(&self) -> Value {
-        json!({"api_version":1,"extension":VERSION,"comparison_identity":self.identity,"coordinate_space":VERSION,"inference_editable":false,"sources":{"a":{"source_identity":self.a.identity,"source_directory":self.a.root},"b":{"source_identity":self.b.identity,"source_directory":self.b.root}},"identity_validation":"Both canonical paths, complete headers/index and shard fingerprints; not fresh full-content hashes","full_sha_recomputed":false})
+        Value::from(response::Identity {
+            version: VERSION,
+            comparison_identity: &self.identity,
+            source_a_identity: &self.a.identity,
+            source_a_directory: &self.a.root,
+            source_b_identity: &self.b.identity,
+            source_b_directory: &self.b.root,
+        })
     }
     pub fn model(&self) -> Result<Value> {
         self.check()?;
-        let mut v = self.identity_metadata();
+        let v = self.identity_metadata();
         let saved = self.calibration.lock().unwrap();
-        v["catalog"] = json!(self
+        let catalog = self
             .pairs
             .iter()
             .map(|p| {
@@ -250,12 +259,13 @@ impl Comparison {
                 t["scales"] = json!(saved.tensors.get(&p.id));
                 t
             })
-            .collect::<Vec<_>>());
-        v["compatibility"] = json!({"complete":true,"policy":"identical complete named tensor sets and native shapes; BF16/F16/F32 mixed pairs permitted","tensor_count":self.pairs.len()});
-        v["mappings"] = json!(["linear", "asinh", "magnitude"]);
-        v["unsupported_mappings"] = json!({"robust99":"Exact paired-distribution calibration pending","signed_percentile":"Exact paired rank index pending","global":"Comparison scales are tensor-scoped"});
-        v["quantities"] = json!(["a", "b", "delta", "abs_delta"]);
-        v["calibration_note"] = json!(self.calibration_note);
+            .collect::<Vec<_>>();
+        let mut v = Value::from(response::Model {
+            identity: v,
+            catalog,
+            tensor_count: self.pairs.len(),
+            calibration_note: &self.calibration_note,
+        });
         v["progress"] = json!(*self.progress.lock().unwrap());
         Ok(v)
     }
@@ -347,7 +357,7 @@ impl Comparison {
         self.pair(id)?;
         let s = self
             .scales(id)
-            .ok_or("Complete paired-tensor calibration is not ready")?;
+            .ok_or_else(|| crate::error::Readiness::Pair.error())?;
         let derived = quantity == "delta" || quantity == "abs_delta";
         let bound = if derived {
             s.difference_max
@@ -356,18 +366,55 @@ impl Comparison {
         };
         let unsigned = quantity == "abs_delta" || mapping == "magnitude";
         Ok(
-            json!({"quantity":quantity,"mapping":mapping,"original_source_values":!derived,"derived":derived,"difference_direction":"B-A","min":if unsigned{0.}else{-bound},"max":bound,"bound":bound,"s":if mapping=="asinh"{Some(if bound==0.{1.}else{bound/100.})}else{None},"scope":if derived{"complete paired tensor; shared derived B-A scale"}else{"complete paired tensor; shared original A+B scale"},"calibration_domain":if derived{"difference"}else{"shared_raw"},"palette":if unsigned{"sequential-purple-v1"}else{"signed-blue-red"},"formula":match mapping{"linear"=>"v/bound; bound=0 => 0","asinh"=>"asinh(v/s)/asinh(bound/s); s=bound/100; bound=0 => 0",_=>"abs(v)/bound; bound=0 => 0"},"value_definition":match quantity{"a"=>"original source A weight","b"=>"original source B weight","delta"=>"derived F64 arithmetic B-A; not an original weight",_=>"derived abs(F64 B-A); not an original weight"},"units":"native: selected quantity on labeled scale; pooled: mean of pointwise transformed quantity, not transform of a pooled weight","rounding":"A/B decode exactly to F64; derived subtraction and field arithmetic may round"}),
+            Value::from(response::Legend {
+                quantity,
+                mapping,
+                original_source_values: !derived,
+                derived,
+                difference_direction: "B-A",
+                min: if unsigned { 0. } else { -bound },
+                max: bound,
+                bound,
+                s: if mapping == "asinh" {
+                    Some(if bound == 0. { 1. } else { bound / 100. })
+                } else {
+                    None
+                },
+                scope: if derived {
+                    "complete paired tensor; shared derived B-A scale"
+                } else {
+                    "complete paired tensor; shared original A+B scale"
+                },
+                calibration_domain: if derived { "difference" } else { "shared_raw" },
+                palette: if unsigned { "sequential-purple-v1" } else { "signed-blue-red" },
+                formula: match mapping {
+                    "linear" => "v/bound; bound=0 => 0",
+                    "asinh" => "asinh(v/s)/asinh(bound/s); s=bound/100; bound=0 => 0",
+                    _ => "abs(v)/bound; bound=0 => 0",
+                },
+                value_definition: match quantity {
+                    "a" => "original source A weight",
+                    "b" => "original source B weight",
+                    "delta" => "derived F64 arithmetic B-A; not an original weight",
+                    _ => "derived abs(F64 B-A); not an original weight",
+                },
+                units: "native: selected quantity on labeled scale; pooled: mean of pointwise transformed quantity, not transform of a pooled weight",
+                rounding: "A/B decode exactly to F64; derived subtraction and field arithmetic may round",
+            }),
         )
     }
     pub fn view(&self, id: usize, left: &str, right: &str, mapping: &str) -> Result<Value> {
         self.check()?;
         let p = self.pair(id)?;
-        let mut v = self.identity_metadata();
-        v["pair"] = json!(p);
-        v["tile_size"] = json!(256);
-        v["legends"] =
+        let v = self.identity_metadata();
+        let pair = json!(p);
+        let legends =
             json!({"left":self.legend(id,left,mapping)?,"right":self.legend(id,right,mapping)?});
-        Ok(v)
+        Ok(Value::from(response::View {
+            identity: v,
+            pair,
+            legends,
+        }))
     }
     pub fn inspect(&self, id: usize, row: usize, col: usize) -> Result<Value> {
         self.check()?;
@@ -377,19 +424,23 @@ impl Comparison {
         self.check()?;
         let finite = av.is_finite() && bv.is_finite();
         let delta = finite.then_some(bv - av);
-        let mut v = self.identity_metadata();
-        v["pair_id"] = json!(id);
-        v["name"] = json!(p.name);
-        v["row"] = json!(row);
-        v["col"] = json!(col);
-        v["native_indices"] = json!(if p.shape.len() == 1 {
-            vec![col]
-        } else {
-            vec![row, col]
-        });
-        v["originals"] = json!({"a":a,"b":b});
-        v["difference"] = json!({"value":delta,"decimal_f64":delta.map(|d|d.to_string()),"direction":"B-A","arithmetic":"F64 subtraction of exactly decoded originals; not exact symbolic subtraction","derived":true,"original_source_value":false,"unavailable_reason":if finite{None}else{Some("Nonfinite original; difference unavailable")}});
-        Ok(v)
+        let v = self.identity_metadata();
+        Ok(Value::from(response::Inspection {
+            identity: v,
+            pair_id: id,
+            name: &p.name,
+            row,
+            col,
+            native_indices: if p.shape.len() == 1 {
+                vec![col]
+            } else {
+                vec![row, col]
+            },
+            original_a: a,
+            original_b: b,
+            delta,
+            finite,
+        }))
     }
     pub fn fields(
         &self,

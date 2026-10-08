@@ -2,10 +2,10 @@
 
 from pathlib import Path
 import json
-from .core import analyze, digest
+from .core import AnalyticsReport, analyze, digest
 
 
-def examples():
+def examples() -> dict[str, AnalyticsReport]:
     config = {
         "hidden_size": 4,
         "num_attention_heads": 2,

@@ -48,6 +48,9 @@ jobs:
             sudo rm -rf -- '/usr/share/dotnet'
           fi
           df -h .
+      - name: Prepare release test compilation under existing build limits
+        timeout-minutes: 10
+        run: python3 -B tools/prepare_release_tests.py
       - name: Unified pinned development and CI checks
         run: python3 tools/check.py all
   behaviour-lock:

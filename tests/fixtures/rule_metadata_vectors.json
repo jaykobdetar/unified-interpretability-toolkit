@@ -1,0 +1,89 @@
+[
+  {
+    "availability_note": "",
+    "formula": "clip(x/G, -1, 1)",
+    "id": "global_linear",
+    "supported_dtypes": [
+      "BF16",
+      "F16",
+      "F32"
+    ],
+    "title": "Global linear"
+  },
+  {
+    "availability_note": "",
+    "formula": "clip(asinh(x/s)/asinh(G/s), -1, 1); s = G/100 (all-zero fallback 1)",
+    "id": "global_asinh",
+    "supported_dtypes": [
+      "BF16",
+      "F16",
+      "F32"
+    ],
+    "title": "Global asinh"
+  },
+  {
+    "availability_note": "",
+    "formula": "clip(x/M, -1, 1)",
+    "id": "tensor_linear",
+    "supported_dtypes": [
+      "BF16",
+      "F16",
+      "F32"
+    ],
+    "title": "Tensor linear"
+  },
+  {
+    "availability_note": "",
+    "formula": "clip(asinh(x/s)/asinh(M/s), -1, 1); s = median nonzero |x| (all-zero fallback 1)",
+    "id": "tensor_asinh",
+    "supported_dtypes": [
+      "BF16",
+      "F16",
+      "F32"
+    ],
+    "title": "Tensor asinh"
+  },
+  {
+    "availability_note": "",
+    "formula": "f(x) = abs(x)/M; M = max(abs(x)) over the complete tensor; M = 0 => f(x) = 0",
+    "id": "tensor_magnitude",
+    "supported_dtypes": [
+      "BF16",
+      "F16",
+      "F32"
+    ],
+    "title": "Tensor magnitude"
+  },
+  {
+    "availability_note": "",
+    "formula": "min(1, asinh(abs(x)/s)/asinh(D/s)); s = median nonzero |x| (all-zero fallback 1); D = Q99 including zeros (zero-Q99 fallback 1)",
+    "id": "tensor_magnitude_asinh",
+    "supported_dtypes": [
+      "BF16",
+      "F16",
+      "F32"
+    ],
+    "title": "Tensor typical magnitude"
+  },
+  {
+    "availability_note": "",
+    "formula": "clip(x/D, -1, 1); Q99 = linear-interpolated 99th percentile of all original |x|; D = Q99 if Q99 != 0, else 1",
+    "id": "tensor_robust99",
+    "supported_dtypes": [
+      "BF16",
+      "F16",
+      "F32"
+    ],
+    "title": "Tensor robust 99%"
+  },
+  {
+    "availability_note": "F32 exact absolute-value rank index is not implemented; no approximate ranks are substituted.",
+    "formula": "sign(x) * (count(|X| < |x|) + count(|X| <= |x|))/(2*N); X = complete original tensor including zeros; x = 0 => 0",
+    "id": "tensor_signed_percentile",
+    "supported_dtypes": [
+      "BF16",
+      "F16"
+    ],
+    "title": "Tensor signed percentile"
+  }
+]

@@ -5,6 +5,8 @@ readiness additionally requires a complete trusted Rust catalog and live reader
 attestation from the parent-owned host. Nothing grants inference permission.
 """
 
+from atlas_host import limits as _limits
+
 from copy import deepcopy
 import hashlib
 import json
@@ -14,13 +16,96 @@ from pathlib import Path
 import struct
 
 from .common import canonical, digest, fields, identity, integer, require
-from .registry import fingerprint
-from inference_model_descriptor import MAX_CONFIG_BYTES, pinned_descriptor
+from .registry import Registry, RegistryEntry, fingerprint
+from .inference_model_descriptor import (
+    MAX_CONFIG_BYTES,
+    PinnedDescriptor,
+    pinned_descriptor,
+)
 
-MAX_HEADER_BYTES = 2 * 1024**2
-MAX_ACTIVATION_METADATA = 8 * 1024**2
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any, NotRequired, TypedDict, cast
+
+
+class NativeFingerprint(TypedDict):
+    size: int
+    dev: int
+    inode: int
+    mtime: int
+    mtime_ns: int
+    ctime: int
+    ctime_ns: int
+
+
+class NativeShard(TypedDict):
+    name: str
+    fingerprint: NativeFingerprint
+    header_sha256: str
+    data_start: int
+
+
+class StaticTensor(TypedDict):
+    name: str
+    shape: list[int]
+    rows: int
+    cols: int
+    count: int
+    dtype: str
+    element_bytes: int
+    shard: str
+    shard_id: int
+    byte_offset: int
+    available: bool
+    unavailable_reason: None
+    min_level: int
+    max_level: int
+    slice_required: bool
+    display_axes: list[int]
+    id: NotRequired[int]
+
+
+class StaticBinding(TypedDict):
+    schema: str
+    model_id: str
+    content_digest: str
+    descriptor_digest: str
+    source_identity: str
+    model_identity: str
+    evidence: str
+    fresh_payload_hashes_recomputed: bool
+    inference_ready: bool
+    fit_verified: bool
+
+
+class StaticCatalogModel(TypedDict):
+    model_id: str
+    name: str
+    repository: str
+    revision: str
+    license: str
+    source_bytes: int
+    state: str
+    verification: str
+    hash_provenance: str
+    static_view_candidate: bool
+    static_view_ready: bool
+    view_ready: bool
+    inference_ready: bool
+    fit_verified: bool
+
+
+class StaticCatalog(TypedDict):
+    version: int
+    registry_revision: int
+    models: list[StaticCatalogModel]
+    inference_enabled: bool
+    downloads_enabled: bool
+
+
+MAX_HEADER_BYTES = _limits.STATIC_MAX_HEADER_BYTES
+MAX_ACTIVATION_METADATA = _limits.STATIC_MAX_ACTIVATION_METADATA
 DENSE_BYTES = {"BF16": 2, "F16": 2, "F32": 4}
-DISPLAY_AXIS_LIMIT = 200000
+DISPLAY_AXIS_LIMIT = _limits.STATIC_DISPLAY_AXIS_LIMIT
 PUBLIC_MODEL_KEYS = {
     "api_version",
     "extensions",
@@ -71,9 +156,9 @@ PUBLIC_TENSOR_KEYS = {
 }
 
 
-def _json(raw):
-    def unique(pairs):
-        value = {}
+def _json(raw: str | bytes | bytearray) -> Any:
+    def unique(pairs: Iterable[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
         for key, item in pairs:
             require(key not in value, "Duplicate static metadata field")
             value[key] = item
@@ -91,7 +176,7 @@ def _json(raw):
         raise ValueError("Invalid bounded static metadata") from error
 
 
-def _inventory(entry):
+def _inventory(entry: RegistryEntry) -> bool:
     """Bounded names only; no source file contents or recursive traversal."""
     expected = {item["name"] for item in entry["manifest"]["files"]}
     try:
@@ -111,7 +196,7 @@ def _inventory(entry):
         return False
 
 
-def _current(registry, entry):
+def _current(registry: Registry, entry: RegistryEntry) -> None:
     require(
         entry["enabled"]
         and registry.owner_receipt(entry["model_id"]) == entry
@@ -121,7 +206,14 @@ def _current(registry, entry):
     )
 
 
-def _read(entry, name, maximum, budget, *, header=False):
+def _read(
+    entry: RegistryEntry,
+    name: str,
+    maximum: int,
+    budget: list[int],
+    *,
+    header: bool = False,
+) -> bytes:
     """Header/auxiliary bytes only, under saved receipt and current fingerprints."""
     fd = os.open(
         Path(entry["root"]) / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
@@ -144,7 +236,7 @@ def _read(entry, name, maximum, budget, *, header=False):
             "Static activation metadata budget exceeded",
         )
         budget[0] += size + (8 if header else 0)
-        raw = source.read(size)
+        raw: bytes = source.read(size)
         require(
             len(raw) == size and fingerprint(os.fstat(source.fileno())) == saved,
             "Static metadata changed while reading",
@@ -156,7 +248,7 @@ def _read(entry, name, maximum, budget, *, header=False):
     return raw
 
 
-def _native_fingerprint(saved):
+def _native_fingerprint(saved: Mapping[str, int]) -> NativeFingerprint:
     return {
         "size": saved["bytes"],
         "dev": saved["device"],
@@ -168,7 +260,12 @@ def _native_fingerprint(saved):
     }
 
 
-def native_source_identity(root, shards, index, index_stat):
+def native_source_identity(
+    root: str,
+    shards: Sequence[Mapping[str, object]],
+    index: Mapping[str, object] | None,
+    index_stat: Mapping[str, object] | None,
+) -> str:
     """Exact serde_json sorted-map identity in accepted src/source.rs.
 
     Index metadata is restricted to flat JSON scalar values without floats to
@@ -192,8 +289,14 @@ class PreparedStatic:
     """Private host object, never accepted from a browser or deserialized."""
 
     def __init__(
-        self, registry, entry, descriptor, tensors, source_identity, header_bytes
-    ):
+        self,
+        registry: Registry,
+        entry: RegistryEntry,
+        descriptor: PinnedDescriptor,
+        tensors: dict[str, StaticTensor],
+        source_identity: str,
+        header_bytes: int,
+    ) -> None:
         self.registry, self.entry = registry, deepcopy(entry)
         self.descriptor, self.tensors = deepcopy(descriptor), deepcopy(tensors)
         self.source_identity = source_identity
@@ -211,17 +314,17 @@ class PreparedStatic:
             "weight-atlas-static-descriptor-v1", descriptor
         )
 
-    def check(self):
+    def check(self) -> None:
         _current(self.registry, self.entry)
 
 
 class BoundStatic:
     """Internal correspondence proof; host must still own a live ready reader."""
 
-    def __init__(self, prepared):
+    def __init__(self, prepared: PreparedStatic) -> None:
         self.prepared = prepared
 
-    def public_binding(self):
+    def public_binding(self) -> StaticBinding:
         value = self.prepared
         return {
             "schema": "weight-atlas-static-binding-v1",
@@ -238,17 +341,19 @@ class BoundStatic:
 
 
 class StaticPolicy:
-    def __init__(self, registry):
+    def __init__(self, registry: Registry) -> None:
         self.registry = registry
 
-    def catalog(self, *, active_binding=None, reader_ready=False):
+    def catalog(
+        self, *, active_binding: BoundStatic | None = None, reader_ready: bool = False
+    ) -> StaticCatalog:
         require(type(reader_ready) is bool, "Trusted reader readiness must be boolean")
         require(
             active_binding is None or type(active_binding) is BoundStatic,
             "Only internal static binding accepted",
         )
         data = self.registry._load()  # one bounded registry metadata snapshot
-        models = []
+        models: list[StaticCatalogModel] = []
         for entry in data["models"]:
             if not entry["enabled"]:
                 continue
@@ -298,7 +403,7 @@ class StaticPolicy:
             "downloads_enabled": False,
         }
 
-    def prepare(self, identifier):
+    def prepare(self, identifier: str) -> PreparedStatic:
         """Explicit activation only: <=8MiB metadata, no weight payload read."""
         entry = self.registry.owner_receipt(identifier)
         _current(self.registry, entry)
@@ -311,6 +416,9 @@ class StaticPolicy:
         budget = [0]
         raw = _read(entry, "config.json", MAX_CONFIG_BYTES, budget)
         descriptor = pinned_descriptor(raw, manifest)
+        shards: list[NativeShard]
+        tensors: dict[str, StaticTensor]
+        shard_for: dict[str, str]
         shards, tensors, shard_for = [], {}, {}
         names = sorted(name for name in files if name.endswith(".safetensors"))
         for shard_id, name in enumerate(names):
@@ -334,7 +442,7 @@ class StaticPolicy:
                 "Invalid static safetensors metadata",
             )
             payload = files[name]["bytes"] - 8 - len(raw)
-            spans = []
+            spans: list[tuple[int, int]] = []
             for tensor_name, item in header.items():
                 require(
                     tensor_name in descriptor["parameter_shapes"]
@@ -413,8 +521,8 @@ class StaticPolicy:
         )
         for tensor_id, name in enumerate(sorted(tensors)):
             tensors[name]["id"] = tensor_id
-        index = None
-        index_stat = None
+        index: Any = None
+        index_stat: NativeFingerprint | None = None
         if "model.safetensors.index.json" in files:
             name = "model.safetensors.index.json"
             raw = _read(entry, name, MAX_HEADER_BYTES, budget)
@@ -457,7 +565,13 @@ class StaticPolicy:
             sum(shard["data_start"] for shard in shards),
         )
 
-    def bind(self, prepared, model, *, reader_ready=False):
+    def bind(
+        self,
+        prepared: PreparedStatic,
+        model: dict[str, Any],
+        *,
+        reader_ready: bool = False,
+    ) -> BoundStatic:
         """Parent calls only after its exact owned renderer is alive and ready."""
         require(
             type(prepared) is PreparedStatic and prepared.registry is self.registry,
@@ -504,8 +618,8 @@ class StaticPolicy:
             type(catalog) is list and len(catalog) == len(prepared.tensors),
             "Static renderer catalog incomplete",
         )
-        observed = {}
-        for position, tensor in enumerate(catalog):
+        observed: dict[str, dict[str, Any]] = {}
+        for position, tensor in enumerate(cast(list[dict[str, Any]], catalog)):
             require(
                 type(tensor) is dict
                 and type(tensor.get("name")) is str
@@ -514,7 +628,7 @@ class StaticPolicy:
             )
             expected = prepared.tensors.get(tensor["name"])
             require(expected is not None, "Unexpected renderer tensor")
-            for key, value in expected.items():
+            for key, value in cast(StaticTensor, expected).items():
                 require(
                     tensor.get(key) == value and type(tensor.get(key)) is type(value),
                     "Static renderer tensor correspondence differs",
@@ -530,7 +644,9 @@ class StaticPolicy:
         prepared.check()
         return BoundStatic(prepared)
 
-    def project_model(self, binding, model, *, reader_ready=False):
+    def project_model(
+        self, binding: BoundStatic, model: dict[str, Any], *, reader_ready: bool = False
+    ) -> dict[str, Any]:
         """Public model metadata after host-owned correspondence/lease checks."""
         require(type(binding) is BoundStatic, "Internal static binding required")
         self.bind(binding.prepared, model, reader_ready=reader_ready)

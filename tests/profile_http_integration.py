@@ -8,7 +8,6 @@ from pathlib import Path
 import sys, threading, types, unittest
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from atlas_host.profile_http import HostedHandler
 from atlas_host.profile_api import production_capabilities
 import profile_atlas

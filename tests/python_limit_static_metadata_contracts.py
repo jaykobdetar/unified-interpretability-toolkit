@@ -8,7 +8,6 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import static_model_contracts as fixture
 from atlas_host import dense_static_admission as dense, static_models as static
 from atlas_host.common import canonical

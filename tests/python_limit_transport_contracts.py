@@ -11,7 +11,6 @@ import unittest
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
 import profile_runtime_doubles as runtime
 import static_host_contracts as static_fixture
 from atlas_host import profile_platform, static_models, validation_policy

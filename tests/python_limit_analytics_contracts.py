@@ -15,7 +15,6 @@ import unittest
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
 from analytics import core, service, source, svd_summary, worker
 
 spec = importlib.util.spec_from_file_location(

@@ -7,14 +7,19 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+from typing import Any, BinaryIO, NoReturn, Protocol, Sequence, cast
 from http.server import HTTPServer
 
+from atlas_host import limits as _limits
 from atlas_host.common import canonical, require
+from atlas_host.host_assets import ASSETS as ASSETS, BUNDLE as BUNDLE
 from atlas_host.config import load_config
-from atlas_host.registry import Registry
-from atlas_host.runtime_adapter import FixtureHost, HostError, dispatch
+from atlas_host.registry import Registry, RegistryEntry
+from atlas_host.runtime_adapter import FixtureHost, HostError, NativeResponse, dispatch
 from live_inference import (
     Handler as GuardedHandler,
+    BackendError,
+    TickOwner,
     proxy_request,
     signal_and_reap,
     available,
@@ -22,27 +27,25 @@ from live_inference import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-ASSETS = {
-    "/style.css": ("style.css", "text/css"),
-    "/atlas-tools.js": ("atlas-tools.js", "text/javascript"),
-    "/workspace-tools.js": ("workspace-tools.js", "text/javascript"),
-    "/inference.js": ("inference.js", "text/javascript"),
-    "/app.js": ("app.js", "text/javascript"),
-    "/host-client.js": ("host-client.js", "text/javascript"),
-}
-BUNDLE = [
-    "vendor/openseadragon.min.js",
-    "atlas-tools.js",
-    "host-client.js",
-    "app.js",
-    "workspace-tools.js",
-    "inference.js",
-]
+
+
+class FixtureServer(Protocol):
+    host: FixtureHost
+    server_port: int
+    timeout: float | None
+
+    def handle_request(self) -> None: ...
+    def server_close(self) -> None: ...
 
 
 class Renderer:
-    def __init__(self, entry, cache, port, session):
-        require(available() >= 4.75 * GIB, "Existing launch memory guard refused")
+    def __init__(
+        self, entry: RegistryEntry, cache: str | Path, port: int, session: TickOwner
+    ) -> None:
+        require(
+            available() >= _limits.MODEL_ADMISSION_GIB * GIB,
+            "Existing launch memory guard refused",
+        )
         binary = ROOT / "target/release/weight-atlas-rust"
         require(binary.is_file(), "Qualified Rust binary required")
         self.port, self.session = port, session
@@ -70,17 +73,19 @@ class Renderer:
             stderr=subprocess.DEVNULL,
         )
 
-    def initialize(self):
-        os.set_blocking(self.process.stdout.fileno(), False)
+    def initialize(self) -> None:
+        os.set_blocking(cast(BinaryIO, self.process.stdout).fileno(), False)
 
-    def alive(self):
+    def alive(self) -> bool:
         return self.process.poll() is None
 
-    def ready(self):
+    def ready(self) -> bool:
         if self.announced:
             return self.alive()
         try:
-            data = os.read(self.process.stdout.fileno(), 8193 - len(self.raw))
+            data = os.read(
+                cast(BinaryIO, self.process.stdout).fileno(), 8193 - len(self.raw)
+            )
         except BlockingIOError:
             return False
         self.raw.extend(data)
@@ -95,25 +100,27 @@ class Renderer:
         self.announced = True
         return self.alive()
 
-    def read(self, path):
+    def read(self, path: str) -> NativeResponse:
         require(self.ready(), "Renderer startup not acknowledged")
         return proxy_request(self.port, "GET", path, self.session)
 
-    def stop(self):
+    def stop(self) -> bool:
         done = signal_and_reap(self.process, terminate=not self.stopping, timeout=0.2)
         self.stopping = True
         if done:
-            self.process.stdout.close()
+            cast(BinaryIO, self.process.stdout).close()
         return done
 
 
 class HostHandler(GuardedHandler):
     """Inherit existing absolute receive/Host/Origin/body bounds and no-store send."""
 
-    def dispatch_host(self, method, raw_path, data=None):
-        return dispatch(self.server.host, method, raw_path, data)
+    def dispatch_host(
+        self, method: str, raw_path: str, data: dict[str, Any] | None = None
+    ) -> NativeResponse:
+        return dispatch(cast(FixtureServer, self.server).host, method, raw_path, data)
 
-    def handle_action(self):
+    def handle_action(self) -> None:
         try:
             path, length = self.validated()
             if self.command == "POST" and self.headers.get("X-Atlas-Local") != "1":
@@ -160,8 +167,6 @@ class HostHandler(GuardedHandler):
             )
         except Exception as error:
             # Public errors never include owner paths, raw backend payloads or credentials.
-            from live_inference import BackendError
-
             if isinstance(error, BackendError):
                 self.send(
                     error.status,
@@ -187,31 +192,34 @@ class HostHandler(GuardedHandler):
     do_POST = handle_action
 
 
-def main(argv=None):
+def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
     args = parser.parse_args(argv)
     config = load_config(args.config)
     os.sched_setaffinity(0, {min(os.sched_getaffinity(0))})
-    if available() < 4.75 * GIB:
+    if available() < _limits.MODEL_ADMISSION_GIB * GIB:
         raise SystemExit("Need 4.75 GiB available RAM")
     host = FixtureHost(
         Registry(config["paths"]["registry"]),
         config["paths"]["cache"],
         lambda entry, cache: Renderer(entry, cache, config["ports"]["renderer"], host),
     )
-    server = HTTPServer((config["bind"], config["ports"]["coordinator"]), HostHandler)
+    server = cast(
+        FixtureServer,
+        HTTPServer((config["bind"], config["ports"]["coordinator"]), HostHandler),
+    )
     server.host = host
     server.timeout = 0.1
 
-    def shutdown(*_):
+    def shutdown(*_: object) -> NoReturn:
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
     print(f"Fixture host: http://127.0.0.1:{server.server_port}", flush=True)
     try:
-        while available() >= 3.25 * GIB:
+        while available() >= _limits.MEMORY_RESERVE_GIB * GIB:
             server.handle_request()
             host.tick()
     except KeyboardInterrupt:

@@ -3,9 +3,17 @@
 import math
 import secrets
 from copy import deepcopy
+from typing import Any, TypedDict, cast
 
 from .cache import binding
-from .common import canonical, fields, integer, require
+from .common import canonical, digest, fields, integer, require
+
+
+class ProgressEntry(TypedDict):
+    record: dict[str, Any]
+    owner: str | None
+    revision: int
+
 
 STATES = {"queued", "running", "partial", "complete", "cancelled", "error"}
 ERRORS = {
@@ -19,15 +27,13 @@ ERRORS = {
 }
 
 
-def model_id(value):
-    from .common import digest
-
+def model_id(value: str) -> str:
     require(type(value) is str and value.startswith("m_"), "Invalid model ID")
     digest(value[2:])
     return value
 
 
-def validate_progress(value):
+def validate_progress(value: dict[str, Any]) -> dict[str, Any]:
     fields(
         value,
         (
@@ -88,13 +94,15 @@ class ProgressStore:
     MAX_PAGE = 16
     MAX_BYTES = 16384
 
-    def __init__(self, selected_model):
+    def __init__(self, selected_model: str) -> None:
         self.model_id = model_id(selected_model)
         self.epoch = secrets.token_hex(16)
         self.revision = self.floor = 0
-        self._records = {}
+        self._records: dict[str, ProgressEntry] = {}
 
-    def publish(self, key, value, *, owner=None):
+    def publish(
+        self, key: str, value: dict[str, Any], *, owner: str | None = None
+    ) -> int:
         """Trusted coordinator API. Owner is a separately generated job capability.
 
         Returns revision; HTTP adapters must never let clients publish progress.
@@ -159,7 +167,13 @@ class ProgressStore:
         }
         return self.revision
 
-    def snapshot(self, cursor=None, *, job=None, capability=None):
+    def snapshot(
+        self,
+        cursor: dict[str, Any] | None = None,
+        *,
+        job: str | None = None,
+        capability: str | None = None,
+    ) -> dict[str, Any]:
         scope = "public"
         if job is not None:
             entry = self._records.get(job)
@@ -183,7 +197,7 @@ class ProgressStore:
             and type(cursor["revision"]) is int
             and self.floor <= cursor["revision"] <= self.revision
         )
-        since = cursor["revision"] if valid else 0
+        since: int = cast(dict[str, Any], cursor)["revision"] if valid else 0
         entries = sorted(
             (
                 (key, entry)
@@ -193,7 +207,7 @@ class ProgressStore:
             ),
             key=lambda pair: pair[1]["revision"],
         )
-        response = {
+        response: dict[str, Any] = {
             "version": 1,
             "model_id": self.model_id,
             "reset": not valid,

@@ -9,7 +9,6 @@ import unittest
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
 import profile_worker_primitives as primitive
 import profile_runtime_doubles as runtime
 from atlas_host import profile_os, profile_service, profile_snapshot as snapshot

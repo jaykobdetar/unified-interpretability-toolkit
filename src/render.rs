@@ -1,22 +1,14 @@
+pub use crate::rules::IDS as RULES;
 use crate::{
     headroom, require,
-    source::{element_offset, Dtype, Source, Tensor},
+    rules::{self, Definition, Scope, Transform},
+    source::{element_offset, Dtype, Format, Source, Tensor},
     Result,
 };
 use flate2::{write::ZlibEncoder, Compression};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, io::Write, os::unix::fs::FileExt, time::Instant};
-pub const RULES: [&str; 8] = [
-    "global_linear",
-    "global_asinh",
-    "tensor_linear",
-    "tensor_asinh",
-    "tensor_magnitude",
-    "tensor_magnitude_asinh",
-    "tensor_robust99",
-    "tensor_signed_percentile",
-];
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Stats {
     pub count: usize,
@@ -27,7 +19,7 @@ pub struct Stats {
     pub histogram_sha256: Option<String>,
     pub exact_zero_count: u64,
     pub unique_bit_patterns: Option<usize>,
-    pub dtype: String,
+    pub dtype: Format,
     pub calibration_method: String,
     pub seconds: f64,
 }
@@ -232,60 +224,38 @@ fn quantile_for(abs: &[u64], q: f64, exclude_zero: bool, dtype: Dtype) -> f64 {
     a + (b - a) * (p - lo as f64)
 }
 pub fn rule_info(rule: &str) -> Result<Value> {
-    let (title, formula) = match rule {
-        "global_linear" => ("Global linear", "clip(x/G, -1, 1)"),
-        "global_asinh" => (
-            "Global asinh",
-            "clip(asinh(x/s)/asinh(G/s), -1, 1); s = G/100 (all-zero fallback 1)",
-        ),
-        "tensor_linear" => ("Tensor linear", "clip(x/M, -1, 1)"),
-        "tensor_asinh" => (
-            "Tensor asinh",
-            "clip(asinh(x/s)/asinh(M/s), -1, 1); s = median nonzero |x| (all-zero fallback 1)",
-        ),
-        "tensor_magnitude" => (
-            "Tensor magnitude",
-            "f(x) = abs(x)/M; M = max(abs(x)) over the complete tensor; M = 0 => f(x) = 0",
-        ),
-        "tensor_magnitude_asinh" => ("Tensor typical magnitude", "min(1, asinh(abs(x)/s)/asinh(D/s)); s = median nonzero |x| (all-zero fallback 1); D = Q99 including zeros (zero-Q99 fallback 1)"),
-        "tensor_robust99" => ("Tensor robust 99%", "clip(x/D, -1, 1); Q99 = linear-interpolated 99th percentile of all original |x|; D = Q99 if Q99 != 0, else 1"),
-        "tensor_signed_percentile" => ("Tensor signed percentile", "sign(x) * (count(|X| < |x|) + count(|X| <= |x|))/(2*N); X = complete original tensor including zeros; x = 0 => 0"),
-        _ => return Err("Unknown color rule".into()),
-    };
-    Ok(
-        json!({"id":rule,"title":title,"formula":formula,"supported_dtypes":if rule=="tensor_signed_percentile"{vec!["BF16","F16"]}else{vec!["BF16","F16","F32"]},"availability_note":if rule=="tensor_signed_percentile"{"F32 exact absolute-value rank index is not implemented; no approximate ranks are substituted."}else{""}}),
-    )
+    rules::definition(rule)?.metadata()
 }
 pub fn validate_rule_dtype(rule: &str, dtype: Dtype) -> Result<()> {
-    rule_info(rule)?;
-    require(!(rule == "tensor_signed_percentile" && dtype == Dtype::F32), "Tensor signed percentile is unsupported for F32: exact absolute-value rank index is pending; no approximation is used")
+    rules::definition(rule)?.validate_dtype(dtype)
 }
 pub fn legend(rule: &str, stats: Option<&Stats>, global: Option<f64>) -> Result<Value> {
-    let mut l = rule_info(rule)?;
+    let definition = rules::definition(rule)?;
+    let mut l = definition.metadata()?;
     if let Some(stats) = stats {
         validate_rule_dtype(rule, Dtype::parse(&stats.dtype)?)?;
     }
-    let g = rule.starts_with("global");
+    let g = definition.scope == Scope::Checkpoint;
     let bound = if g {
-        global.ok_or("Full checkpoint calibration is not ready")?
+        global.ok_or_else(|| crate::error::Readiness::Checkpoint.error())?
     } else {
         stats
-            .ok_or("Complete selected-tensor calibration is not ready")?
+            .ok_or_else(|| crate::error::Readiness::Tensor.error())?
             .max_abs
     };
-    let bound = if matches!(rule, "tensor_robust99" | "tensor_magnitude_asinh") {
+    let bound = if definition.quantile_bound() {
         let q = stats.unwrap().q99;
         if q == 0. {
             1.
         } else {
             q
         }
-    } else if rule == "tensor_signed_percentile" {
+    } else if definition.requires_histogram() {
         1.
     } else {
         bound
     };
-    let s = if rule.ends_with("asinh") {
+    let s = if definition.asinh() {
         Some(if g {
             if bound > 0. {
                 bound / 100.
@@ -305,7 +275,7 @@ pub fn legend(rule: &str, stats: Option<&Stats>, global: Option<f64>) -> Result<
     };
     let m = l.as_object_mut().unwrap();
     for(k,v)in json!({"min":-bound,"zero":0.,"max":bound,"s":s,"scope":if g{"complete checkpoint"}else{"complete original tensor"},"units":if s.is_some(){"raw weight on nonlinear scale"}else{"raw weight"},"clipped_fraction":0.,"color_warning":"Finite 8-bit colors merge nearby weights; neutral does not prove exact zero."}).as_object().unwrap(){m.insert(k.clone(),v.clone());}
-    if matches!(rule, "tensor_magnitude" | "tensor_magnitude_asinh") {
+    if definition.unsigned() {
         m.insert("min".into(), json!(0.));
         m.insert("units".into(), json!("native: absolute raw weight |x|; pooled: mean absolute raw weight mean(|x|); normalized field = mean(|x|)/M"));
         m.insert("palette".into(), json!("sequential-purple-v1"));
@@ -313,7 +283,7 @@ pub fn legend(rule: &str, stats: Option<&Stats>, global: Option<f64>) -> Result<
         m.insert("field_max".into(), json!(if bound == 0. { 0. } else { 1. }));
         m.insert("color_warning".into(), json!("Unsigned magnitude discards sign only for color; original values stay signed. Finite 8-bit colors merge nearby magnitudes; light color does not prove exact zero."));
     }
-    if matches!(rule, "tensor_robust99" | "tensor_magnitude_asinh") {
+    if definition.quantile_bound() {
         let stats = stats.unwrap();
         m.insert("q99".into(), json!(stats.q99));
         m.insert("quantile_order_statistics".into(), json!("exact"));
@@ -330,11 +300,11 @@ pub fn legend(rule: &str, stats: Option<&Stats>, global: Option<f64>) -> Result<
         m.insert("clipped_count".into(), json!(stats.robust_clipped_count));
         m.insert("units".into(), json!("native: raw weight clipped at effective divisor D; pooled: mean of clipped x/D (not a raw weight mean)"));
     }
-    if rule == "tensor_magnitude_asinh" {
+    if definition.transform == Transform::MagnitudeAsinh {
         m.insert("units".into(), json!("native: transformed absolute weight on median-nonzero asinh scale; pooled: mean of transformed magnitudes, not mean raw magnitude"));
         m.insert("control_semantics".into(), json!("Pointwise permutation-equivariant rule; use identical original-tensor calibration for a matched shuffled field"));
     }
-    if rule == "tensor_signed_percentile" {
+    if definition.requires_histogram() {
         m.insert(
             "rank_method".into(),
             json!("exact absolute-value mid-CDF including zeros in N"),
@@ -352,29 +322,29 @@ pub fn legend(rule: &str, stats: Option<&Stats>, global: Option<f64>) -> Result<
 pub struct Mapping {
     pub dtype: Dtype,
     table: Option<Vec<f64>>,
-    rule: String,
+    rule: rules::Selected,
     bound: f64,
     scale: f64,
 }
-fn transformed(rule: &str, v: f64, bound: f64, s: f64) -> f64 {
-    if (rule == "tensor_magnitude" && bound == 0.) || !v.is_finite() {
+fn transformed(rule: &Definition, v: f64, bound: f64, s: f64) -> f64 {
+    if (rule.transform == Transform::MagnitudeLinear && bound == 0.) || !v.is_finite() {
         return 0.;
     }
-    let divisor = if rule.ends_with("asinh") {
+    let divisor = if rule.asinh() {
         (bound / s).asinh()
     } else {
         bound
     };
     let divisor = if divisor == 0. { 1. } else { divisor };
-    (if rule.ends_with("asinh") {
-        (if rule == "tensor_magnitude_asinh" {
+    (if rule.asinh() {
+        (if rule.transform == Transform::MagnitudeAsinh {
             v.abs()
         } else {
             v
         } / s)
             .asinh()
             / divisor
-    } else if matches!(rule, "tensor_magnitude" | "tensor_magnitude_asinh") {
+    } else if rule.unsigned() {
         v.abs() / divisor
     } else {
         v / divisor
@@ -386,14 +356,15 @@ impl Mapping {
         if let Some(table) = &self.table {
             table[bits as usize]
         } else {
-            transformed(&self.rule, self.dtype.value(bits), self.bound, self.scale)
+            transformed(self.rule.0, self.dtype.value(bits), self.bound, self.scale)
         }
     }
 }
 pub fn mapping(rule: &str, l: &Value, dtype: Dtype) -> Result<Mapping> {
-    validate_rule_dtype(rule, dtype)?;
+    let definition = rules::definition(rule)?;
+    definition.validate_dtype(dtype)?;
     require(
-        rule != "tensor_signed_percentile",
+        !definition.requires_histogram(),
         "Percentile mapping requires an exact histogram",
     )?;
     let bound = l["max"].as_f64().unwrap();
@@ -405,17 +376,17 @@ pub fn mapping(rule: &str, l: &Value, dtype: Dtype) -> Result<Mapping> {
         } else {
             Some(
                 (0..65536)
-                    .map(|bits| transformed(rule, dtype.value(bits), bound, scale))
+                    .map(|bits| transformed(definition, dtype.value(bits), bound, scale))
                     .collect(),
             )
         },
-        rule: rule.into(),
+        rule: rules::Selected(definition),
         bound,
         scale,
     })
 }
 pub fn percentile_mapping(dtype: Dtype, hist: &[u64], count: usize) -> Result<Mapping> {
-    validate_rule_dtype("tensor_signed_percentile", dtype)?;
+    rules::SIGNED_PERCENTILE.validate_dtype(dtype)?;
     require(
         hist.len() == 65536 && count > 0,
         "Invalid percentile histogram",
@@ -446,7 +417,7 @@ pub fn percentile_mapping(dtype: Dtype, hist: &[u64], count: usize) -> Result<Ma
     Ok(Mapping {
         dtype,
         table: Some(table),
-        rule: "tensor_signed_percentile".into(),
+        rule: rules::Selected(rules::SIGNED_PERCENTILE),
         bound: 1.,
         scale: 1.,
     })
@@ -699,7 +670,7 @@ pub fn rgba(field: &[f64]) -> Vec<u8> {
 }
 /// Sequential unsigned palette. Legacy signed palette remains byte-for-byte unchanged.
 pub fn rgba_for_rule(rule: &str, field: &[f64]) -> Vec<u8> {
-    if !matches!(rule, "tensor_magnitude" | "tensor_magnitude_asinh") {
+    if !rules::find(rule).is_some_and(Definition::unsigned) {
         return rgba(field);
     }
     let mut out = Vec::with_capacity(field.len() * 4);

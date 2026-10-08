@@ -1,39 +1,90 @@
 # Architecture
 
-Unified Interpretability Toolkit has independent local entrypoints. The viewer is the default; optional coordinators add separate ownership and compute lifetimes.
+Unified Interpretability Toolkit reads local model files and serves local viewers. Native rendering, inference, analytics and profile scans have separate ownership and compute lifetimes. The current entrypoints remain independent; the consolidation proposal below is design only.
 
-| Layer | Location | Responsibility |
+## Layers and dependencies
+
+| Layer | Location | Calls and responsibilities |
 | --- | --- | --- |
-| Native reader and renderer | `src/` | Validate safetensors structure; stream bounded source bands; calibrate exact statistics; transform/pool/render tiles; inspect original bytes. |
-| Loopback transport | `src/server.rs` | Fixed embedded assets and bounded HTTP queues/deadlines, Host/Origin checks, one numeric worker. |
-| Browser viewer | `web/app.js`, `web/atlas-tools.js` | Source-bound selection, synchronized OpenSeadragon panels, legends, exact inspection, exports and navigation state. |
-| Checkpoint comparison | `src/comparison.rs`, `web/comparison.js` | Ordered A/B identity, shared original scales, separately labeled differences; no inference edit targets. |
-| Optional inference | `tools/live_inference.py`, `tools/inference_worker.py` | Loopback coordinator and one disposable pinned CPU model worker; explicit owner lease, admission, cancellation and cleanup. |
-| Optional regional analytics | `tools/analytics/` | Bounded BF16 windows, seeded controls, explicit small SVD; serialized against inference. |
-| Experimental local host/profile | `tools/atlas_host/`, `tools/profile_atlas.py` | Owner registry, fixture selection, bounded whole-slice profiles, sealed snapshots, source leases and worker ownership. |
+| Native source and values | `src/source.rs`, `src/source/format.rs`, `src/slice.rs` | Bounded safetensors/index reads, format interpretation, source identities and slice bindings. No HTTP dependency. |
+| Native numerical work | `src/state.rs`, `src/render.rs`, `src/rules.rs`, `src/comparison.rs` | Exact calibration, typed rule facts, transform-before-pooling rendering and ordered A/B comparison. Calls source/value and resource helpers. |
+| Native transport | `src/server.rs`, `src/comparison_http.rs`, `src/hosted_renderer.rs`, `src/profile_worker.rs` | Request admission, bounded queues, worker ownership and response presentation. Calls numerical work; it does not define new identities or numerical formulas. |
+| Python dependency leaves | `tools/atlas_host/limits.py`, `memory.py`, `inference_geometry.py`, contract modules | Scalar policies, observed memory, architecture values and bounded validation. They do not import service implementations or start work. |
+| Python adapters and owners | `tools/atlas_host/` | Registry, acquisition, leases, supervision, static preparation, native channels, inference coordination and profile service. Explicit callbacks/protocols connect owners to their operations. |
+| Disposable compute | `tools/atlas_host/inference_worker.py`, `tools/analytics/` | Verified offline CPU inference and bounded regional analytics. Numerical imports remain deferred until their existing setup boundary. |
+| Browser presentation | `web/` | Selection, native geometry, inspection, links, notes, exports, inference and comparison presentation. Consumes the existing HTTP contracts. |
+| Compatibility entrypoints | `tools/*.py`, `run-atlas.sh` | Preserve documented commands and legacy imports while delegating to package implementations. |
 
-## Source and cache boundary
+Dependency leaves must not import their service callers. Native source/error/rule declarations must not depend on HTTP. Python protocols describe the existing implementations; they are not new runtime adapters or alternate owners. Keep the scoped host graph acyclic and test concrete implementations against its typed clients. The browser still combines classic scripts and native modules; explicit imports throughout the page are an unfinished outcome.
 
-Model files are opened read-only. Safetensors headers/indexes establish supported extents before payload access. Source identity and explicit slice binding travel with results; stale responses cannot replace a newer selection. Unsupported dtypes/shapes remain unavailable catalog entries. Original scalar bytes stay distinct from derived transforms and differences.
+## Native source, rules and responses
 
-Calibration scans complete original tensors. Opening a checkpoint reads headers, not all payloads. Tensor rules become ready after that tensor's calibration; global rules need the whole supported checkpoint. Source changes invalidate cached results. Cache paths must be outside model trees; cache locking prevents concurrent mutation. Local checksums detect inconsistent cache content but are not authentication. Explicit full hashing is available through the native `verify` command.
+Model files are opened read-only. Bounded header/index checks establish extents before payload access. `Source::open` delegates shard collection, header reads, entry validation and catalog validation to private steps while retaining validation order and the original identity expression. Unsupported encodings and shapes remain unavailable catalog entries. Opening a checkpoint reads headers, not every payload.
+
+`source::Format` retains the exact original format string and its once-parsed optional `Dtype`. Cloning preserves that interpretation; serialization/debug output preserve the string, including unknown catalog encodings. String parser inputs remain supported. Original scalar bytes stay distinct from derived transforms and comparison differences.
+
+The ordered catalog in `src/rules.rs` defines eight rule IDs, titles, formulas, scopes, transforms, statistics needs and supported numerical formats. Native metadata, legends, mapping, admission and palettes consume those facts. Public order and IDs are stable. Transformation precedes pooling, and a slice uses complete original-tensor calibration. Exact percentile ranks remain limited to BF16/F16; F32 retains its explicit refusal. Page-side rule facts are not fully consolidated with this catalog.
+
+Calibration scans complete original tensors. Tensor rules become ready after that tensor's calibration; global rules require the supported checkpoint. Source changes invalidate results, and a stale response cannot replace a newer source-bound selection. Cache paths stay outside model trees; locks prevent concurrent mutation. Cache checksums detect inconsistent contents but provide no authentication. The native `verify` command supports explicit full hashing.
+
+Typed presentation records in `src/slice/response.rs`, `src/state/response.rs`, `src/comparison/response.rs` and `src/server/response.rs` convert to the existing JSON value interfaces. They preserve fields, nulls, field construction order and exact public bytes. Identity derivation, readiness calculations, error priority and numerical work remain at their callers. These records cover selected boundaries; they do not replace every inline JSON construction.
+
+`src/command.rs` declares command IDs, startup classes, audited option names, help and static fallback facts. `src/api.rs` declares viewer/comparison routes and private renderer IDs/parameters. Callers retain dynamic defaults, guard order and dispatch. Ordinary native CLI/HTTP intake still ignores unknown names; the separately scoped unknown-name rejection is not implemented. See [Native interface declarations](NATIVE-INTERFACES.md) for exact current sets and caller coverage.
+
+`error::Error` is the shared typed carrier for owned refusals and standard error families. Boxed payloads retain their Display, Debug and source-chain behavior. Four private readiness reasons describe checkpoint, tensor, histogram and pair refusals. `src/http_status.rs` selects 400/503 for the three readiness-sensitive HTTP consumers: explicit readiness maps by kind; untagged errors retain the original case-sensitive `not ready` fallback and single formatting call. Other HTTP routes and CLI exits retain their contextual policies. A universal kind-only status/exit mapping would change current behavior and remains unfinished.
+
+Entrypoint, source, dispatch and numeric-worker functions have private natural stages. Viewer and comparison worker loops keep queue behavior, deadlines and closure-owned state lifetimes. Single-tensor calibration holds the publication lock across its nonblocking queue attempt and error clearing; failed admission retains the previous error. [Native invariants](NATIVE-INVARIANTS.md) records explicit panic sites and poison policies. That source audit is not proof against every malformed input, implicit panic, poisoned lock or deadlock, and does not establish unused-code deletion safety.
+
+The native plain-error and coded intake-rejection bodies use private typed records in `server::response`. They convert through the existing sorted JSON value map, preserving field names, escaping and wire bytes. Callers still choose status and code; the bounded full-response and best-effort intake write paths retain their original behavior.
+
+Calibration acknowledgements use the private `server::response::CalibrationReply` variants for checkpoint scope, queued tensor and already-complete results. Their sorted JSON conversion preserves the existing fields and types. The caller retains all request validation, queue admission, lock lifetimes, progress publication and status selection.
+
+Comparison legends use a private typed presentation record in `comparison::response`. The original caller still selects quantities, bounds, signedness, scales, formulas and provenance; conversion retains the same sorted JSON keys and value types. Comparison identities, tile keys and arithmetic remain in their existing paths.
+
+## Python package, architecture and engine boundary
+
+Canonical implementations live in the ordinary `atlas_host` and `analytics` packages under `tools`. Compatibility modules alias the same canonical module objects, mutable defaults and callbacks. The script directory supplies normal imports for documented `python3 tools/...` commands; no package installation is required. Late helper lookup is retained where callers/tests replace module state. Portable tests use the import environment supplied by the existing checker. Some standalone tests, qualification guards and the oracle retain explicit search-path setup; some imports remain deferred for numerical initialization, compatibility cycles or platform-specific use.
+
+`inference_geometry.Architecture` carries the held model dimensions and capture descriptions. `inference_model_descriptor` performs bounded, explicit configuration/shape/receipt description; it does not guess an unknown family. `inference_architecture` retains the pinned compatibility defaults and lazy runtime verification. These are distinct responsibilities, with compatibility builders still reading legacy default values.
+
+`inference_services.InferenceContracts` passes one held architecture through edit, observation, prompt-pair and sweep bindings. Pure contract modules receive source/shape facts and callbacks explicitly. Default facade calls preserve exported constants, omitted-argument defaults and late binding; explicit architecture calls preserve the supplied object's identity.
+
+`inference_engine` receives opaque installed runtime modules/classes through `AttentionRuntime` and `LoaderRuntime`. It imports no numerical library. Actual imports remain in the worker and architecture boundary. Verification retains exact installed-class/version, eager-attention, shape and source checks. Loading retains one-thread settings, seeds, deterministic execution, offline safetensors loading and verification order. This interface permits a future reviewed engine adapter; no second engine is implemented or qualified. Do not move numerical imports ahead of admission/setup or interpret opaque `Any` boundaries as validated inputs.
+
+`inference_experiments` holds five closed registrations behind the common `(Context, Request)` execution interface: preview, sweep, prompt pair, edits comparison and generation. Their numerical/runtime bodies and pure contracts occupy separate modules. The coordinator retains closed mode admission; the worker retains its historical unknown-mode generation fallback and edits priority. Preview occurs after verification/tokenization and before engine loading. Request schemas, validation and coordinator completion still have mode-specific branches, so this is not yet a single plug-in interface for all experiment behavior.
+
+Generation preserves input validation, prefill, greedy decoding, capture hooks and `finally` removal. Pair capture and sweep restoration preserve exact token coordinates, FP32 arithmetic, original/control ordering and total-job deadlines. Coordinator intake separates sweep, prompt-pair and generation request preparation into typed Session methods. Validation, normalized request order and callback lookup remain unchanged; resource admission, verification budgets, worker ownership, startup and cleanup stay in `start`. The coordinator tick loop delegates memory observation, step validation and mode completion while retaining bounded reads, JSON parsing, ownership, terminal returns and EOF cleanup. Acquisition separates bounded streaming from disabled installed-data publication. Host acquisition separates receipt/static/reader stages while assigning child ownership before fallible initialization. These helper boundaries do not transfer cleanup responsibility.
+
+Public and moved service signatures are checked with strict mypy over the qualified roots in `dev/mypy-files.txt`. Concrete record types and protocols describe owned state; external JSON, model/tensor objects and legacy open envelopes remain explicit boundaries. Identity casts express existing checks or ownership guarantees and add no runtime validation. Qualification scripts outside that scope are not all typed.
 
 ## Resource and ownership boundary
 
-Native operations use one CPU, a 768 MiB address-space limit, bounded source bands, bounded output/cache budgets, and memory/disk admission checks. Coordinators preserve their own lower work budgets and stop reserves. A caller never acquires another session's worker; unknown cleanup remains blocking. Only owned children are terminated/reaped. Logging/export requires explicit user actions.
+Native work retains one CPU, a 768 MiB address-space cap, bounded bands, output/cache budgets and memory/disk admission. Python model workers and browser qualification have separate existing policies; they must not be combined under the core browser's aggregate cap. Callers preserve their own lower budgets and stop reserves.
 
-The services bind only to loopback. There is no hosted authentication/deployment architecture or general remote model browser. See [API semantics](API-PROGRESSIVE.md), [data/slice binding](DATA-VIEWER-CONTRACT.md), and [profile worker interface](profile-worker/PROFILE-WORKER-INTERFACE.md).
+`atlas_host.memory.available_bytes` reads the first exact `MemAvailable` field and converts KiB to bytes. Missing/malformed fields and file errors keep their original exceptions. Production consumers share this observation, while immutable qualification guards keep their independently held implementation. `atlas_host.limits` declares the shared 3.25-GiB reserve and 4.75-GiB model admission factors plus fifty named scalar bounds for analytics, acquisition, inference, snapshots, registry, diagnostics and static models. Consumers keep their original variables, numeric types, expressions and late local lookups. Equal numbers for independent policies have separate names. The hosted owner policy retains its five public byte-valued aliases and exact integer arithmetic; its receipt checks, seal, source inventory and admission/stop decisions are unchanged. Snapshot accounting, profile finalization/poll timing and bounded SVD preview size also retain their original local aliases. Mutable resource-policy dictionaries, representation bounds and other inline limits remain separate; consolidation is incomplete.
 
-## Experimental owner fixture workflow
+The supervisor owns grants, cumulative CPU accounting, snapshot charges and busy/cleanup decisions. Profile platform/OS adapters observe and operate on owned descriptors/processes. HTTP adapters validate requests before dispatch and preserve bounded writes, status/code/body fields and error text. A caller never acquires another session's worker. Uncertain cleanup remains blocking; only owned children are terminated/reaped, and completion follows verified cleanup.
 
-The owner registry uses `config/atlas-host.example.json`; its paths resolve relative to that config. `tools/atlas-model.py` supports local validation, registration, enabling/disabling, and owner receipts. It does not download models. Owner receipts include source paths and should stay local. The HTTP visitor catalog exposes opaque model identities instead.
+Analytics reads bounded BF16 windows, labels partial coverage, uses deterministic controls and optionally runs a small SVD child. Its runtime setup precedes input/numerical work; affinity, nice value, alarm where applicable, inherited resource caps and admission order remain unchanged. Optional NumPy is loaded only in its existing child path. Numerical oracle tests and inert worker tests qualify different boundaries.
 
-```bash
-python3 tools/atlas-model.py --config config/atlas-host.example.json validate-config
-python3 tools/atlas-model.py --config config/atlas-host.example.json plan \
-  --manifest fixtures/tiny-bf16/host-manifest.json
-```
+## Browser and owner workflows
 
-Registration and owner preparation are explicit operations. `tools/host_atlas.py` serves the fixture picker; `tools/profile_atlas.py --help` describes the profile entrypoint requiring the exact native binary SHA-256. Neither automatically makes arbitrary local models eligible. Default resource gates remain in force. Profile scans are explicit and bounded; partial coverage is labeled and not treated as representative sampling or full completion.
+The viewer presents source-bound selections, synchronized OpenSeadragon panels, legends, exact inspection, navigation, notes and exports. Comparison uses ordered A/B identity and shared original scales; it does not expose inference edit targets. Stale settings/results must not replace a newer revision. Bookmarks, old links, notes and experiment records retain their existing formats.
 
-Current regression tests cover the source/ownership contracts using tiny fixtures and doubles. Prior bounded workflows are not proof of long-session, arbitrary-model, physical-mobile, fault-injection, or GPU behavior.
+The Python host's asset paths and bundle order live in `atlas_host.host_assets`; native viewer/comparison embedding still declares its own sets. The page retains shared globals, mixed module systems, DOM/logic coupling and separately implemented record validation. A universal asset catalog, shared Python/page record schema, page rule/layout consolidation and larger page-function decomposition remain unfinished. Portable DOM/OSD doubles establish deterministic contracts but do not qualify actual browser navigation, rendering, panel memory or model inference.
+
+Owner registry configuration is relative to `config/atlas-host.example.json`. `tools/atlas-model.py` exposes explicit validation, planning, registration and owner operations. Acquisition is an explicit separate operation; opening a viewer does not download or enable models. Owner receipts include local source paths and stay private. HTTP visitor catalogs expose opaque identities. `tools/host_atlas.py`, `tools/profile_atlas.py` and the static launcher retain their existing capabilities and gates. Profile scans are explicit and bounded; partial coverage is never presented as full or representative sampling.
+
+Services bind to loopback. There is no remote hosted authentication/deployment design or general remote model browser. See [API semantics](API-PROGRESSIVE.md), [data and slice binding](DATA-VIEWER-CONTRACT.md), the [profile worker interface](profile-worker/PROFILE-WORKER-INTERFACE.md), [Development](DEVELOPMENT.md) and [extension recipes](EXTENDING.md). Exact CPU records, portable service snapshots, real browsers and application benchmarks are separate evidence; a passing portable check does not imply the optional qualifications passed.
+
+## Design only: one entrypoint and API
+
+A future entrypoint could compose the existing viewer, comparison, inference, host and profile capabilities around one explicit owner context. A route table would bind each existing method/path to its original validator, response presenter and operation. Native rendering and model execution would remain disposable workers with independent budgets. One lifecycle owner would arbitrate grants, cancellation and verified cleanup; status reads would remain observational.
+
+Before implementation, inventory every current route, request field, error priority, status/code/body, source binding and legacy command. Preserve adapters for old entrypoints and URLs. Prove byte-compatible requests/responses and ownership transitions, then qualify real browser navigation, CPU records and resource behavior. Do not infer a global error policy from one route or merge resource caps merely because the listener is shared. This proposal adds no listener, framework, dependency or new API.
+
+## Design only: model-reader convergence
+
+The Rust reader supports BF16/F16/F32, checked indexes/extents, original scalar bits, slice binding and streamed rendering. Python analytics has a deliberately bounded trusted BF16 reader tied to its catalog/evidence and regional APIs. Replacing either today would change format admission, identity/error behavior or process/resource ownership without an equivalence proof.
+
+Keep both implementations for now. First specify their common bounded window request and exact source/shape/dtype/coordinate/byte response, including every refusal and changed-source check. Compare both on tiny valid and malformed fixtures without broadening the Python format set. If equivalence holds, consider routing analytics reads through the existing owned native channel; charge transport buffers and preserve lease/source checks. Do not add an FFI/runtime dependency or a new server. Reader merging remains a proposal, not an accepted implementation or performance result.

@@ -8,7 +8,6 @@ import sys
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from inference_architecture import ARCH, CONFIG, MANIFEST, describe, shapes
 import inference_sweep as sweep
 from inference_edits import SOURCE_MODEL

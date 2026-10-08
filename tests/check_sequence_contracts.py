@@ -9,7 +9,6 @@ import tomllib
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import check
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -180,6 +179,7 @@ class Sequence(unittest.TestCase):
         commands = []
         python, ruff = Path("/synthetic-development-python"), Path("/synthetic-ruff")
         with (
+            patch.object(check, "_MYPY_FILES", ("tools/check.py",), create=True),
             patch.object(Path, "is_file", return_value=True),
             patch.object(check, "require_version"),
             patch.object(check, "formatter_files", return_value=FILES),

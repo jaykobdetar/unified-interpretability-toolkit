@@ -3,11 +3,12 @@
 import hashlib
 import math
 from copy import deepcopy
+from typing import Any
 
 from .common import canonical, digest, fields, identity, integer, label, require
 
 
-def binding(value):
+def binding(value: dict[str, Any]) -> dict[str, Any]:
     """Task15 SOURCE-BINDING-V2, including canonical vector/matrix slices."""
     fields(
         value,
@@ -63,7 +64,7 @@ def binding(value):
     return deepcopy(value)
 
 
-def derivation_identity(value):
+def derivation_identity(value: dict[str, Any]) -> str:
     fields(
         value,
         (
@@ -116,11 +117,13 @@ def derivation_identity(value):
     return identity("weight-atlas-derived-v1", portable)
 
 
-def no_store_headers():
+def no_store_headers() -> dict[str, str]:
     return {"Cache-Control": "no-store"}
 
 
-def immutable_headers(requested_digest, payload, mime, artifact_kind):
+def immutable_headers(
+    requested_digest: str, payload: bytes, mime: str, artifact_kind: str
+) -> dict[str, str]:
     """Call only for a completed artifact after route ownership/access checks.
 
     No header helper authenticates a request or validates renderer correctness.

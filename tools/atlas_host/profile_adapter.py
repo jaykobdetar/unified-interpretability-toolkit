@@ -7,13 +7,19 @@ never authorizes a native grant or interprets partial results as resumable.
 
 import math
 from copy import deepcopy
+from typing import Any, Mapping, cast
 
 from .cache import binding
 from .common import canonical, digest, fields, integer, require
 from .progress import validate_progress
 
 
-def native_progress(model_id, selected, native, remaining):
+def native_progress(
+    model_id: str,
+    selected: dict[str, Any],
+    native: dict[str, Any],
+    remaining: Mapping[str, Any],
+) -> dict[str, Any]:
     selected = binding(selected)
     require(
         type(native) is dict and len(canonical(native)) <= 16384,
@@ -21,15 +27,17 @@ def native_progress(model_id, selected, native, remaining):
     )
     require(
         native.get("schema") == "weight-atlas.strength.v1"
-        and binding(native.get("binding")) == selected,
+        and binding(cast(dict[str, Any], native.get("binding"))) == selected,
         "Native profile source mismatch",
     )
     digest(native.get("identity"))
     total = math.prod(selected["shape"][-2:])
-    integer(native.get("total_values"), total, total)
-    visited = integer(native.get("visited_values"), 0, total)
-    available = integer(native.get("authorized_remaining_values"), 0, total - visited)
-    integer(native.get("allocated_state_bytes"), 0, 32 * 1024**2)
+    integer(cast(int, native.get("total_values")), total, total)
+    visited = integer(cast(int, native.get("visited_values")), 0, total)
+    available = integer(
+        cast(int, native.get("authorized_remaining_values")), 0, total - visited
+    )
+    integer(cast(int, native.get("allocated_state_bytes")), 0, 32 * 1024**2)
     state = native.get("state")
     require(state in ("ready", "paused", "complete", "invalid"), "Unknown native state")
     require(
@@ -54,7 +62,7 @@ def native_progress(model_id, selected, native, remaining):
         type(control) is dict and control.get("algorithm") == "swap-or-not-8-v1",
         "Unknown paired control",
     )
-    integer(control.get("seed"), 0, 2**32 - 1)
+    integer(cast(int, cast(dict[str, Any], control).get("seed")), 0, 2**32 - 1)
     fields(remaining, ("values", "wall_ms", "cpu_ms"))
     host = {key: integer(value) for key, value in remaining.items()}
     require(

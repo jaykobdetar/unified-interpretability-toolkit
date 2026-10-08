@@ -5,13 +5,21 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, Mapping, Sequence, TypedDict
 
+from . import acquisition as _acquisition
+from . import prepare_fixture as _prepare_fixture
 from .common import read_json
 from .config import capabilities, load_config
 from .registry import Registry, content_digest, validate_manifest, MAX_MANIFEST_BYTES
 
 
-def main(argv=None):
+class AcquisitionOptions(TypedDict):
+    max_bytes: int
+    cache_growth: int
+
+
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -46,6 +54,7 @@ def main(argv=None):
             item.add_argument("--plan-digest", required=True)
             item.add_argument("--accept-license", action="store_true")
             item.add_argument("--timeout-ms", type=int, default=120000)
+    result: Mapping[str, Any]
     args = parser.parse_args(argv)
     try:
         config = load_config(args.config)
@@ -57,10 +66,10 @@ def main(argv=None):
                 "Downloads are disabled; no acquisition authorized by this local stage"
             )
         elif args.command in ("acquire-plan", "acquire"):
-            from .acquisition import plan, acquire
+            plan, acquire = _acquisition.plan, _acquisition.acquire
 
             manifest = read_json(args.manifest, MAX_MANIFEST_BYTES)
-            options = {
+            options: AcquisitionOptions = {
                 "max_bytes": args.max_bytes,
                 "cache_growth": args.cache_growth_bytes,
             }
@@ -106,7 +115,7 @@ def main(argv=None):
         elif args.command == "receipt":
             result = registry.owner_receipt(args.model_id)
         elif args.command == "prepare-fixture":
-            from .prepare_fixture import prepare
+            prepare = _prepare_fixture.prepare
 
             result = prepare(config, args.model_id)
         else:

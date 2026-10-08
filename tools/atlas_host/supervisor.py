@@ -10,6 +10,55 @@ import threading
 
 from .common import fields, integer, require
 
+from collections.abc import Callable, Mapping
+from typing import Protocol, TypedDict
+
+
+class CpuClock(Protocol):
+    def total(self) -> float: ...
+
+
+class SnapshotStorage(Protocol):
+    @property
+    def owned_storage_bytes(self) -> int: ...
+
+
+class ProfileJobOwner(Protocol):
+    @property
+    def store(self) -> SnapshotStorage: ...
+
+
+class ProfileOwner(Protocol):
+    @property
+    def job(self) -> ProfileJobOwner: ...
+
+
+class InferenceLane(Protocol):
+    @property
+    def process(self) -> object | None: ...
+
+    @property
+    def status(self) -> str: ...
+
+
+class AnalyticsLane(Protocol):
+    @property
+    def busy(self) -> bool: ...
+
+
+class RemainingGrant(TypedDict):
+    wall_ms: int
+    cpu_ms: int
+
+
+class NativeCommand(TypedDict):
+    version: int
+    operation_id: str
+    kind: str
+    remaining_ms: int
+    request: object
+
+
 KINDS = {
     "profile",
     "inference",
@@ -30,16 +79,16 @@ class CpuLedger:
     Child user+system cumulative CPU is a separate series, replaced at reap.
     """
 
-    def __init__(self, meters):
+    def __init__(self, meters: dict[str, Callable[[], float]]) -> None:
         require(
             type(meters) is dict and set(meters) == {"admission", "owner", "watchdog"},
             "All job execution contexts require CPU meters",
         )
         self.meters = dict(meters)
-        self.last = {}
+        self.last: dict[str, float] = {}
         self.lock = threading.Lock()
 
-    def total(self):
+    def total(self) -> float:
         with self.lock:
             total = 0.0
             for name, read in self.meters.items():
@@ -58,7 +107,14 @@ class CpuLedger:
 class AdmissionGrant:
     """Construct at HTTP admission BEFORE parsing, binding and job construction."""
 
-    def __init__(self, clock, cpu, *, wall_ms=5000, cpu_ms=4000):
+    def __init__(
+        self,
+        clock: Callable[[], float],
+        cpu: CpuClock,
+        *,
+        wall_ms: int = 5000,
+        cpu_ms: int = 4000,
+    ) -> None:
         self.clock, self.cpu = clock, cpu
         self.started = clock()
         self.cpu_start = cpu.total()
@@ -70,7 +126,7 @@ class AdmissionGrant:
         self.cancelled = False
         self.lock = threading.RLock()
 
-    def sample_child(self, cumulative):
+    def sample_child(self, cumulative: float) -> None:
         with self.lock:
             require(
                 type(cumulative) in (int, float)
@@ -80,7 +136,7 @@ class AdmissionGrant:
             )
             self.child_cpu = cumulative
 
-    def remaining(self, reserve_ms=0):
+    def remaining(self, reserve_ms: int = 0) -> RemainingGrant:
         with self.lock:
             require(not self.cancelled, "Original admission cancelled")
             wall = self.deadline - self.clock() - reserve_ms / 1000
@@ -91,28 +147,30 @@ class AdmissionGrant:
                 "cpu_ms": math.floor(cpu * 1000),
             }
 
-    def cancel(self):
+    def cancel(self) -> None:
         with self.lock:
             self.cancelled = True
 
 
 class ComputeToken:
-    def __init__(self, supervisor, operation, kind, context):
+    def __init__(
+        self, supervisor: "Supervisor", operation: str, kind: str, context: str
+    ) -> None:
         self._supervisor = supervisor
         self.operation, self.kind, self.context = operation, kind, context
         self.poisoned = False
         self._completion = False
 
-    def current(self):
+    def current(self) -> bool:
         with self._supervisor.lock:
             return self._supervisor.active is self and not self.poisoned
 
-    def poison(self):
+    def poison(self) -> None:
         with self._supervisor.lock:
             require(self._supervisor.active is self, "Stale compute token")
             self.poisoned = True
 
-    def release(self):
+    def release(self) -> None:
         with self._supervisor.lock:
             require(
                 self._supervisor.active is self and self._completion,
@@ -128,20 +186,20 @@ class Supervisor:
     Existing standalone launchers are outside this object and cannot use profiles.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.lock = threading.RLock()
-        self.active = None
-        self.profile_session = None
+        self.active: ComputeToken | None = None
+        self.profile_session: ProfileOwner | None = None
         self.snapshot_reservation = 0
         self.stopping = False
 
-    def prevent_admission(self):
+    def prevent_admission(self) -> None:
         with self.lock:
             self.stopping = True
             if self.active is not None:
                 self.active.poisoned = True  # Retain exact ownership until cleanup.
 
-    def charged_snapshot_bytes(self):
+    def charged_snapshot_bytes(self) -> int:
         with self.lock:
             integer(self.snapshot_reservation)
             if self.profile_session is None:
@@ -151,7 +209,7 @@ class Supervisor:
             integer(actual)
             return max(actual, self.snapshot_reservation)
 
-    def retain_profile(self, owner, frame_bytes):
+    def retain_profile(self, owner: ProfileOwner, frame_bytes: int) -> None:
         with self.lock:
             require(not self.stopping, "Hosted provider is stopping")
             require(
@@ -163,7 +221,7 @@ class Supervisor:
             # Conservatively reserve BOTH old/new frames through retiring close.
             self.snapshot_reservation = 2 * frame_bytes
 
-    def close_profile(self, owner, *, all_handles_closed):
+    def close_profile(self, owner: object, *, all_handles_closed: bool) -> None:
         with self.lock:
             require(
                 self.profile_session is owner and all_handles_closed is True,
@@ -172,7 +230,13 @@ class Supervisor:
             self.profile_session = None
             self.snapshot_reservation = 0
 
-    def acquire(self, kind, context, *, legacy_busy=lambda: False):
+    def acquire(
+        self,
+        kind: str,
+        context: str,
+        *,
+        legacy_busy: Callable[[], bool] = lambda: False,
+    ) -> ComputeToken:
         require(
             kind in KINDS and type(context) is str and bool(context),
             "Invalid hosted operation",
@@ -188,10 +252,17 @@ class Supervisor:
             self.active = token
             return token
 
-    def _owns(self, token):
+    def _owns(self, token: ComputeToken) -> None:
         require(self.active is token, "Stale compute operation")
 
-    def child_finished(self, token, *, reaped, descendants_clear, finalized):
+    def child_finished(
+        self,
+        token: ComputeToken,
+        *,
+        reaped: bool,
+        descendants_clear: bool,
+        finalized: bool,
+    ) -> None:
         with self.lock:
             self._owns(token)
             require(
@@ -204,13 +275,15 @@ class Supervisor:
             )
             token._completion = True
 
-    def admission_aborted(self, token, *, no_child_created):
+    def admission_aborted(self, token: ComputeToken, *, no_child_created: bool) -> None:
         with self.lock:
             self._owns(token)
             require(no_child_created is True, "Admission cleanup is uncertain")
             token._completion = True
 
-    def native_command(self, token, payload, remaining_ms):
+    def native_command(
+        self, token: ComputeToken, payload: object, remaining_ms: int
+    ) -> NativeCommand:
         with self.lock:
             self._owns(token)
             require(
@@ -227,7 +300,9 @@ class Supervisor:
                 "request": payload,
             }
 
-    def native_ack(self, token, acknowledgment):
+    def native_ack(
+        self, token: ComputeToken, acknowledgment: Mapping[str, object]
+    ) -> None:
         with self.lock:
             self._owns(token)
             fields(
@@ -244,7 +319,9 @@ class Supervisor:
             )
             token._completion = True
 
-    def renderer_reaped(self, token, *, reaped, descendants_clear):
+    def renderer_reaped(
+        self, token: ComputeToken, *, reaped: bool, descendants_clear: bool
+    ) -> None:
         with self.lock:
             self._owns(token)
             require(
@@ -255,11 +332,11 @@ class Supervisor:
             )
             token._completion = True
 
-    def transport_lost(self, token):
+    def transport_lost(self, token: ComputeToken) -> None:
         # Neither a response timeout nor disconnected client proves native idle.
         token.poison()
 
-    def busy(self):
+    def busy(self) -> bool:
         with self.lock:
             return self.active is not None
 
@@ -271,25 +348,34 @@ class HostedLegacyLane:
     completion path before activation; this wrapper is not process-global proof.
     """
 
-    def __init__(self, supervisor, inference, analytics):
+    def __init__(
+        self, supervisor: Supervisor, inference: InferenceLane, analytics: AnalyticsLane
+    ) -> None:
         self.supervisor, self.inference, self.analytics = (
             supervisor,
             inference,
             analytics,
         )
 
-    def busy(self):
+    def busy(self) -> bool:
         return (
             self.inference.process is not None
             or self.inference.status in ("loading", "running", "stopping")
             or self.analytics.busy
         )
 
-    def reserve(self, kind, context):
+    def reserve(self, kind: str, context: str) -> ComputeToken:
         require(kind in ("inference", "analytics"), "Wrong hosted legacy lane")
         return self.supervisor.acquire(kind, context, legacy_busy=self.busy)
 
-    def finish(self, token, *, reaped, descendants_clear, finalized):
+    def finish(
+        self,
+        token: ComputeToken,
+        *,
+        reaped: bool,
+        descendants_clear: bool,
+        finalized: bool,
+    ) -> None:
         require(not self.busy(), "Inference/analytics cleanup remains pending")
         self.supervisor.child_finished(
             token,

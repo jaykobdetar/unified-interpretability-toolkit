@@ -4,6 +4,8 @@ Integration must own the heavy slot. A separate interpreter with an existing
 NumPy installation is required. No installs, downloads, models, or source access.
 """
 
+from atlas_host import limits as _limits
+
 import json
 import math
 import os
@@ -12,17 +14,41 @@ import resource
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
+from typing import Any, Literal, TYPE_CHECKING, TypedDict
 
-from .core import checked_values, permutation
+from .core import Unavailable, checked_values, integer, permutation
+from atlas_host.memory import available_bytes as _available_bytes
+from .runtime import configure_svd_worker as _configure_worker
 
-MAX_SVD_AXIS = 64
-MAX_SVD_VALUES = 4096
-TIMEOUT_SECONDS = 5
+MAX_SVD_AXIS = _limits.SVD_MAX_AXIS
+MAX_SVD_VALUES = _limits.SVD_MAX_VALUES
+TIMEOUT_SECONDS = _limits.SVD_TIMEOUT_SECONDS
 
 
-def compute_with_numpy(np, values, rows, cols, seed):
+class Fit(TypedDict):
+    singular_values: list[float]
+    energy_fractions: list[float | None]
+    rank_one_residual_energy_fraction: float | None
+    rank_one_residual: list[float]
+    zero_energy: bool
+
+
+class Available(TypedDict):
+    available: Literal[True]
+    scope: str
+    region: Mapping[str, int]
+    seed: int
+    control: str
+    centered: bool
+    results: Any
+
+
+def compute_with_numpy(
+    np: Any, values: Sequence[float], rows: int, cols: int, seed: int
+) -> dict[str, Fit]:
     """Called only inside a resource-limited child; separately fits both matrices."""
-    results = {}
+    results: dict[str, Fit] = {}
     order = permutation(len(values), seed)
     for label, data in [("original", values), ("shuffled", [values[i] for i in order])]:
         matrix = np.asarray(data, dtype=np.float64).reshape(rows, cols)
@@ -43,7 +69,13 @@ def compute_with_numpy(np, values, rows, cols, seed):
     return results
 
 
-def run(values, shape, region, seed=1, python=sys.executable):
+def run(
+    values: Sequence[float],
+    shape: Sequence[int],
+    region: Mapping[str, int],
+    seed: int = 1,
+    python: str | os.PathLike[str] = sys.executable,
+) -> Available | Unavailable:
     checked_values(values, shape, region)
     h, w = region["rows"], region["cols"]
     if h > MAX_SVD_AXIS or w > MAX_SVD_AXIS or len(values) > MAX_SVD_VALUES:
@@ -52,16 +84,7 @@ def run(values, shape, region, seed=1, python=sys.executable):
             "reason": "Excluded: SVD cap is 64 by 64 / 4096 values; select a bounded native window",
         }
     permutation(0, seed)  # Validate before spawning.
-    mem = (
-        int(
-            next(
-                x
-                for x in Path("/proc/meminfo").read_text().splitlines()
-                if x.startswith("MemAvailable:")
-            ).split()[1]
-        )
-        * 1024
-    )
+    mem = _available_bytes()
     if mem < 3 * 1024**3 + 768 * 1024**2 or shutil.disk_usage(".").free < 25 * 1024**3:
         return {
             "available": False,
@@ -120,30 +143,23 @@ def run(values, shape, region, seed=1, python=sys.executable):
     }
 
 
-def worker():
-    os.sched_setaffinity(0, {min(os.sched_getaffinity(0))})
-    os.nice(10)
-    # Do not raise inherited caps.
-    for kind, ceiling in (
-        (resource.RLIMIT_AS, 768 * 1024**2),
-        (resource.RLIMIT_CPU, 4),
-    ):
-        soft, hard = resource.getrlimit(kind)
-        cap = min(x for x in (ceiling, soft, hard) if x != resource.RLIM_INFINITY)
-        resource.setrlimit(kind, (cap, cap))
+def worker() -> None:
+    _configure_worker()
     raw = sys.stdin.read(200001)
     if len(raw) > 200000:
         raise ValueError("Worker input cap exceeded")
     data = json.loads(raw)
     rows, cols = data["rows"], data["cols"]
-    from .core import integer
-
     integer(rows, 1, MAX_SVD_AXIS, "rows")
     integer(cols, 1, MAX_SVD_AXIS, "cols")
     checked_values(
         data["values"], [rows, cols], {"row": 0, "col": 0, "rows": rows, "cols": cols}
     )
-    import numpy as np
+    if TYPE_CHECKING:
+        # The actual optional numerical module remains an opaque external boundary.
+        np: Any
+    else:
+        import numpy as np
 
     print(
         json.dumps(

@@ -10,12 +10,32 @@ from copy import deepcopy
 from .cache import binding
 from .common import canonical, digest, fields, integer, require
 
+from collections.abc import Callable
+from typing import Any, Protocol, TypedDict, cast
+
+from .supervisor import AdmissionGrant
+
+
+class ProfileCapabilities(TypedDict):
+    profiles_enabled: bool
+    resume_available: bool
+
+
+class ProfileService(Protocol):
+    def start(self, data: dict[str, Any], admission: AdmissionGrant, /) -> object: ...
+    def reconcile(self, data: dict[str, Any], /) -> object: ...
+    def status(self, data: dict[str, Any], /) -> object: ...
+    def page(self, data: dict[str, Any], /) -> object: ...
+    def cancel(self, data: dict[str, Any], /) -> object: ...
+    def heartbeat(self, data: dict[str, Any], /) -> object: ...
+
+
 ROUTES = {"start", "status", "page", "cancel", "heartbeat", "reconcile"}
 BASE = ("version", "model_id", "context_id", "tab_capability")
 OWNER = BASE + ("job_id", "job_capability")
 
 
-def production_capabilities():
+def production_capabilities() -> ProfileCapabilities:
     # Only a separately reviewed activation change may alter this value.
     return {"profiles_enabled": False, "resume_available": False}
 
@@ -29,11 +49,19 @@ class PrivateProfileAPI:
     before exposing even terminal records and bind each job to model/context.
     """
 
-    def __init__(self, service, authorize_tab):
+    def __init__(
+        self, service: ProfileService, authorize_tab: Callable[[str, str, str], object]
+    ) -> None:
         self.service = service
         self.authorize_tab = authorize_tab
 
-    def handle(self, action, data, *, admission=None):
+    def handle(
+        self,
+        action: str,
+        data: dict[str, Any],
+        *,
+        admission: AdmissionGrant | None = None,
+    ) -> tuple[int, object, dict[str, str]]:
         require(action in ROUTES, "Profile route unavailable")
         require(len(canonical(data)) <= 8192, "Profile request exceeds body limit")
         extra = ("binding", "seed", "values", "restart") if action == "start" else ()
@@ -56,13 +84,13 @@ class PrivateProfileAPI:
         self.authorize_tab(data["model_id"], data["context_id"], data["tab_capability"])
         if action == "start":
             require(admission is not None, "HTTP-anchored admission required")
-            admission.remaining()
+            cast(AdmissionGrant, admission).remaining()
             selected = binding(data["binding"])
             integer(data["seed"], 0, 2**32 - 1)
             integer(data["values"], 1, selected["rows"] * selected["cols"])
             require(type(data["restart"]) is bool, "Explicit Restart intent required")
             # Owner service compares selected to renderer/registry correspondence.
-            result = self.service.start(deepcopy(data), admission)
+            result = self.service.start(deepcopy(data), cast(AdmissionGrant, admission))
             status = 202
         elif action == "reconcile":
             require(admission is None, "Reconciliation cannot grant work")

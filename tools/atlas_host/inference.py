@@ -2,13 +2,41 @@
 
 from copy import deepcopy
 import re
+from typing import Any, TypedDict, cast
 
 from .cache import binding
 from .common import digest, fields, integer, require
 from .registry import content_digest, validate_manifest
 
 
-def configuration_evidence(manifest, descriptor, source_binding):
+class ConfigurationEvidence(TypedDict):
+    content_digest: str
+    adapter_id: str
+    adapter_version: int
+    evidence: str
+    source_correspondence: bool
+    runtime_verified: bool
+    fit_verified: bool
+    inference_ready: bool
+    reason: str
+
+
+class HeadLayoutBinding(TypedDict):
+    source_identity: str
+    model_identity: str
+    weights_sha256: str
+    config_sha256: str
+
+
+class HeadLayoutMetadata(TypedDict):
+    head_layout: dict[str, Any]
+    head_layout_binding: HeadLayoutBinding
+    host_inference_evidence: ConfigurationEvidence
+
+
+def configuration_evidence(
+    manifest: dict[str, Any], descriptor: dict[str, Any], source_binding: dict[str, Any]
+) -> ConfigurationEvidence:
     """Bind task16's trusted descriptor to a host receipt without granting execution.
 
     The descriptor must come from the built-in adapter, never visitor input.
@@ -35,7 +63,7 @@ def configuration_evidence(manifest, descriptor, source_binding):
         len(selected["shape"]) == 2 and selected["slice"]["leading_indices"] == [],
         "Only original rank-two empty-slice weights can enter a future inference adapter",
     )
-    source = descriptor.get("source_model")
+    source = cast(dict[str, Any], descriptor.get("source_model"))
     fields(source, ("repo", "revision", "weights_sha256", "config_sha256"))
     digest(source["weights_sha256"])
     digest(source["config_sha256"])
@@ -60,7 +88,9 @@ def configuration_evidence(manifest, descriptor, source_binding):
     }
 
 
-def head_layout_metadata(manifest, descriptor, source_binding):
+def head_layout_metadata(
+    manifest: dict[str, Any], descriptor: dict[str, Any], source_binding: dict[str, Any]
+) -> HeadLayoutMetadata:
     """Trusted same-source projection for task15 labels, never a worker envelope.
 
     Caller must supply renderer-validated binding for this installed receipt. The
@@ -77,19 +107,19 @@ def head_layout_metadata(manifest, descriptor, source_binding):
         source_binding["name"],
     )
     require(match is not None, "Tensor is not a declared attention projection")
-    layer = int(match.group(1))
-    integer(descriptor.get("layers"), 1, 200000)
+    layer = int(cast(re.Match[str], match).group(1))
+    integer(cast(int, descriptor.get("layers")), 1, 200000)
     require(layer < descriptor["layers"], "Layer outside configured descriptor")
-    query = integer(descriptor.get("query_heads"), 1)
-    kv = integer(descriptor.get("kv_heads"), 1)
-    dim = integer(descriptor.get("head_dim"), 1)
-    width = integer(descriptor.get("width"), 1)
-    integer(descriptor.get("queries_per_kv"), 1)
+    query = integer(cast(int, descriptor.get("query_heads")), 1)
+    kv = integer(cast(int, descriptor.get("kv_heads")), 1)
+    dim = integer(cast(int, descriptor.get("head_dim")), 1)
+    width = integer(cast(int, descriptor.get("width")), 1)
+    integer(cast(int, descriptor.get("queries_per_kv")), 1)
     require(
         query % kv == 0 and descriptor["queries_per_kv"] == query // kv,
         "Invalid GQA descriptor",
     )
-    projection = match.group(2)
+    projection = cast(re.Match[str], match).group(2)
     mapping = descriptor.get("projection_mappings", {}).get(projection)
     expected_shape = (
         [width, query * dim]

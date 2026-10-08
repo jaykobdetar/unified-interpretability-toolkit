@@ -11,7 +11,6 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import inference_sweep as sweep
 import live_inference as live
 from inference_edits import SOURCE_MODEL

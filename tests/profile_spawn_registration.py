@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 import sys, threading, types, unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from atlas_host.profile_os import ProcessBook
 from atlas_host.profile_platform import ProfilePlatform
 from atlas_host.profile_observation import SpawnObservationPending

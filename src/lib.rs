@@ -1,16 +1,19 @@
+pub mod api;
 pub mod comparison;
 pub mod comparison_http;
 pub mod hosted_renderer;
+mod http_status;
 pub mod profile_worker;
 pub mod render;
 pub mod resources;
+mod rules;
 pub mod server;
 pub mod slice;
 pub mod source;
 pub mod state;
 pub mod strength;
 use std::{ffi::CString, path::Path};
-pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+pub type Result<T> = std::result::Result<T, Error>;
 pub fn require(ok: bool, message: &str) -> Result<()> {
     if !ok {
         Err(message.into())
@@ -337,3 +340,8 @@ mod atomic_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+pub mod error;
+pub use error::Error;
+
+pub mod command;

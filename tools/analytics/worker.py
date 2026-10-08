@@ -1,5 +1,7 @@
 """One analysis child: bounded source reads and optional NumPy, no inference."""
 
+from atlas_host import limits as _limits
+
 import json
 import math
 import os
@@ -7,16 +9,51 @@ from pathlib import Path
 import resource
 import struct
 import sys
+from collections.abc import Mapping, Sequence
+from typing import Any, NotRequired, TYPE_CHECKING, TypedDict, TypeVar, cast
 
-from .core import geometry, integer
-from .source import Catalog, Tensor, fingerprint
+from .core import (
+    Control,
+    Coverage,
+    HeadLayout,
+    Statistics,
+    Unavailable,
+    geometry,
+    integer,
+)
+from .source import Catalog, ModelOutliers, Tensor, fingerprint
+from .runtime import configure
 
-MAX_INPUT = 512 * 1024
-MAX_OUTPUT = 2 * 1024 * 1024 - 2048  # Reserve space for HTTP job envelope.
+if TYPE_CHECKING:
+    from .svd import Available
+    from .svd_summary import Summary
+
+MAX_INPUT = _limits.ANALYTICS_MAX_INPUT
+MAX_OUTPUT = _limits.ANALYTICS_MAX_OUTPUT  # Reserve space for HTTP job envelope.
 
 
-def unique(pairs):
-    result = {}
+class RegionReport(TypedDict):
+    schema: str
+    source_identity: str
+    tensor: str
+    shape: Sequence[int]
+    region: Mapping[str, int]
+    cache_key: str
+    coverage: Coverage
+    control: Control
+    original: Statistics
+    shuffled: Statistics
+    heads: HeadLayout | Unavailable
+    svd: "Available | Unavailable"
+    tensor_id: NotRequired[int]
+    host_source_identity: NotRequired[str]
+
+
+_TensorRecord = TypeVar("_TensorRecord", bound=Mapping[str, Any])
+
+
+def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
             raise ValueError("Duplicate JSON key")
@@ -24,7 +61,7 @@ def unique(pairs):
     return result
 
 
-def parse_json(raw):
+def parse_json(raw: str | bytes | bytearray) -> Any:
     return json.loads(
         raw,
         object_pairs_hook=unique,
@@ -32,7 +69,9 @@ def parse_json(raw):
     )
 
 
-def validate_request(data, catalog):
+def validate_request(
+    data: Any, catalog: Sequence[_TensorRecord]
+) -> _TensorRecord | None:
     if not isinstance(data, dict) or set(data) - {
         "scope",
         "tensor",
@@ -69,7 +108,7 @@ def validate_request(data, catalog):
     return tensor
 
 
-def catalog_from_payload(payload):
+def catalog_from_payload(payload: Mapping[str, Any]) -> Catalog:
     metadata = payload["model"]
     raw_tensors = metadata["catalog"]
     if not isinstance(raw_tensors, list) or not 1 <= len(raw_tensors) <= 512:
@@ -135,22 +174,32 @@ def catalog_from_payload(payload):
     return catalog
 
 
-def analyze_request(payload):
+def analyze_request(
+    payload: Mapping[str, Any],
+) -> "RegionReport | ModelOutliers | Summary":
+    if TYPE_CHECKING:
+        np: Any
     catalog = catalog_from_payload(payload)
     data = payload["request"]
-    chosen = validate_request(data, payload["model"]["catalog"])
+    chosen: Mapping[str, Any] | None = validate_request(
+        data, payload["model"]["catalog"]
+    )
     seed = data.get("seed", 1)
     if chosen is None:
         return catalog.model_outliers(seed=seed)
     if data.get("scope") == "svd_summary":
-        from .svd_summary import compute_with_numpy, binding
+        from .svd_summary import (
+            compute_with_numpy as compute_summary_with_numpy,
+            binding,
+        )
 
         binding(payload["model"], chosen, data["region"], seed)
         tensor = next(t for t in catalog.tensors if t.name == chosen["name"])
         values = catalog.read(tensor, data["region"])
-        import numpy as np  # Same owned worker, BLAS/process caps; no general dense report.
+        if not TYPE_CHECKING:
+            import numpy as np  # Same owned worker, BLAS/process caps; no general dense report.
 
-        result = compute_with_numpy(
+        summary_result = compute_summary_with_numpy(
             np,
             values,
             model=payload["model"],
@@ -159,7 +208,7 @@ def analyze_request(payload):
             seed=seed,
         )
         catalog.verify()
-        return result
+        return summary_result
     from .profiles import resolve_local
 
     options, unavailable = resolve_local(catalog.root)
@@ -168,19 +217,22 @@ def analyze_request(payload):
     values = catalog.read(tensor, region)
     from .core import analyze
 
-    result = analyze(
-        values,
-        source_identity=catalog.identity,
-        tensor=tensor.name,
-        shape=list(tensor.shape),
-        region=region,
-        seed=seed,
-        **options,
+    result = cast(
+        RegionReport,
+        analyze(
+            values,
+            source_identity=catalog.identity,
+            tensor=tensor.name,
+            shape=list(tensor.shape),
+            region=region,
+            seed=seed,
+            **options,
+        ),
     )
     result["tensor_id"] = chosen["id"]
     result["host_source_identity"] = payload["model"]["source_identity"]
     if unavailable:
-        result["heads"]["reason"] = unavailable
+        cast(Unavailable, result["heads"])["reason"] = unavailable
     if data.get("svd"):
         from .svd import MAX_SVD_AXIS, MAX_SVD_VALUES, compute_with_numpy
 
@@ -194,7 +246,8 @@ def analyze_request(payload):
                 "reason": "Excluded: select at most 64 × 64 / 4096 values for SVD",
             }
         else:
-            import numpy as np  # BLAS caps and process limits already established.
+            if not TYPE_CHECKING:
+                import numpy as np  # BLAS caps and process limits already established.
 
             result["svd"] = {
                 "available": True,
@@ -215,35 +268,7 @@ def analyze_request(payload):
     return result
 
 
-def configure():
-    import signal
-
-    signal.signal(signal.SIGALRM, signal.SIG_DFL)
-    signal.alarm(5)  # Kernel-enforced wall timer even while native LAPACK runs.
-    os.sched_setaffinity(0, {min(os.sched_getaffinity(0))})
-    os.nice(10)
-    for kind, ceiling in (
-        (resource.RLIMIT_AS, 768 * 1024**2),
-        (resource.RLIMIT_CPU, 4),
-    ):
-        soft, hard = resource.getrlimit(kind)
-        cap = min(n for n in (ceiling, soft, hard) if n != resource.RLIM_INFINITY)
-        resource.setrlimit(kind, (cap, cap))
-    mem = (
-        int(
-            next(
-                x
-                for x in Path("/proc/meminfo").read_text().splitlines()
-                if x.startswith("MemAvailable:")
-            ).split()[1]
-        )
-        * 1024
-    )
-    if mem < 3.25 * 1024**3:
-        raise ValueError("Memory reserve reached")
-
-
-def main():
+def main() -> None:
     configure()
     try:
         raw = sys.stdin.buffer.read(MAX_INPUT + 1)

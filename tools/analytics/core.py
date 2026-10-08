@@ -1,32 +1,151 @@
 """Pure raw-value analytics. Inputs are native row-major bounded regions."""
 
+from atlas_host import limits as _limits
+
 import hashlib
 import json
 import math
 import re
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from typing import Any, Literal, NotRequired, TypedDict, TypeVar
 
 SCHEMA = "weight-atlas.analytics.v1"
-MAX_VALUES = 65536
-MAX_AXIS = 4096
-MAX_TOP = 32
-MAX_TENSORS = 512
+MAX_VALUES = _limits.ANALYTICS_MAX_VALUES
+MAX_AXIS = _limits.ANALYTICS_MAX_AXIS
+MAX_TOP = _limits.ANALYTICS_MAX_TOP
+MAX_TENSORS = _limits.ANALYTICS_MAX_TENSORS
 
 
-def integer(value, lo, hi, label):
+class Unavailable(TypedDict):
+    available: Literal[False]
+    reason: str
+
+
+class HeadLayout(TypedDict):
+    available: Literal[True]
+    label: str
+    axis: Literal["row", "column"]
+    head_count: int
+    head_dim: int
+    boundaries: list[int]
+    evidence: Mapping[str, Any]
+    fold_statistic: str
+
+
+class AxisStatistic(TypedDict):
+    index: int
+    mean_abs: float
+    count: int
+
+
+class ValueStatistic(TypedDict):
+    index: int
+    row: int
+    col: int
+    value: float
+    abs: float
+    native_indices: NotRequired[list[int]]
+    control_position: NotRequired[list[int]]
+    source_native_indices: NotRequired[list[int]]
+
+
+class VectorValue(TypedDict):
+    index: int
+    value: float
+
+
+class OffsetStatistic(TypedDict):
+    index: int
+    mean_abs: float | None
+    count: int
+
+
+class FoldedMatrix(TypedDict):
+    available: Literal[True]
+    rows: int
+    cols: int
+    mean: list[float | None]
+    mean_abs: list[float | None]
+    counts: list[int]
+    row_axis: str
+    column_axis: str
+
+
+class Folded(TypedDict):
+    offsets: list[OffsetStatistic]
+    matrix: FoldedMatrix | Unavailable
+    covered_heads: list[int]
+    full_head_axis: bool
+    region: Mapping[str, int]
+
+
+class Statistics(TypedDict):
+    rows: list[AxisStatistic]
+    columns: list[AxisStatistic]
+    row_order: list[int]
+    column_order: list[int]
+    top_values: list[ValueStatistic]
+    top_rows: list[AxisStatistic]
+    top_columns: list[AxisStatistic]
+    vector: list[VectorValue] | None
+    folded: NotRequired[Folded | None]
+
+
+class Coverage(TypedDict):
+    visited_values: int
+    total_tensor_values: int
+    full_tensor: bool
+    full_model: bool
+    scope: str
+    coordinate_source: str
+
+
+class Control(TypedDict):
+    kind: str
+    seed: int
+    algorithm: str
+    zero_seed_alias: int
+    position_to_source: list[int]
+    statistics: str
+    calibration: str
+    caution: str
+
+
+class AnalyticsReport(TypedDict):
+    schema: str
+    source_identity: str
+    tensor: str
+    shape: Sequence[int]
+    region: Mapping[str, int]
+    cache_key: str
+    coverage: Coverage
+    control: Control
+    original: Statistics
+    shuffled: Statistics
+    heads: HeadLayout | Unavailable
+    svd: Unavailable
+
+
+_RankedItem = TypeVar("_RankedItem", bound=Mapping[str, Any])
+
+
+def integer(value: object, lo: int, hi: int, label: str) -> int:
     if type(value) is not int or not lo <= value <= hi:
         raise ValueError(f"{label} must be an integer in [{lo}, {hi}]")
     return value
 
 
-def canonical(value):
+def canonical(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
-def digest(value):
+def digest(value: object) -> str:
     return hashlib.sha256(canonical(value).encode()).hexdigest()
 
 
-def geometry(shape, region):
+def geometry(
+    shape: Sequence[int], region: Mapping[str, int]
+) -> tuple[int, int, int, int]:
     if not isinstance(shape, (list, tuple)) or len(shape) not in (1, 2):
         raise ValueError("Only native vectors and matrices are supported")
     for n in shape:
@@ -42,7 +161,9 @@ def geometry(shape, region):
     return r, c, h, w
 
 
-def checked_values(values, shape, region):
+def checked_values(
+    values: Sequence[float], shape: Sequence[int], region: Mapping[str, int]
+) -> None:
     _, _, h, w = geometry(shape, region)
     if len(values) != h * w:
         raise ValueError("Region value count mismatch")
@@ -55,7 +176,7 @@ def checked_values(values, shape, region):
         raise ValueError("Analytics require finite BF16-range raw values")
 
 
-def permutation(n, seed):
+def permutation(n: int, seed: int) -> list[int]:
     """xorshift32 + rejection-sampled Fisher–Yates; stable across runtimes."""
     integer(n, 0, MAX_VALUES, "count")
     integer(seed, 0, 2**32 - 1, "seed")
@@ -77,15 +198,22 @@ def permutation(n, seed):
     return indices
 
 
-def ranked(items, limit, score="mean_abs"):
+def ranked(
+    items: Iterable[_RankedItem], limit: int, score: str = "mean_abs"
+) -> list[_RankedItem]:
     return sorted(items, key=lambda x: (-x[score], x["index"]))[:limit]
 
 
-def statistics(values, shape, region, top=16):
+def statistics(
+    values: Sequence[float],
+    shape: Sequence[int],
+    region: Mapping[str, int],
+    top: int = 16,
+) -> Statistics:
     checked_values(values, shape, region)
     integer(top, 1, MAX_TOP, "top")
     r, c, h, w = geometry(shape, region)
-    rows = [
+    rows: list[AxisStatistic] = [
         {
             "index": r + i,
             "mean_abs": math.fsum(abs(x) for x in values[i * w : (i + 1) * w]) / w,
@@ -93,7 +221,7 @@ def statistics(values, shape, region, top=16):
         }
         for i in range(h)
     ]
-    cols = [
+    cols: list[AxisStatistic] = [
         {
             "index": c + j,
             "mean_abs": math.fsum(abs(values[i * w + j]) for i in range(h)) / h,
@@ -102,7 +230,7 @@ def statistics(values, shape, region, top=16):
         for j in range(w)
     ]
     positions = sorted(range(len(values)), key=lambda i: (-abs(values[i]), i))[:top]
-    outliers = [
+    outliers: list[ValueStatistic] = [
         {
             "index": i,
             "row": r + i // w,
@@ -129,14 +257,23 @@ def statistics(values, shape, region, top=16):
     }
 
 
-def resolve_heads(tensor, shape, config, evidence, reviewed_profiles):
+def resolve_heads(
+    tensor: str,
+    shape: Sequence[int],
+    config: Mapping[str, Any] | None,
+    evidence: Mapping[str, Any] | None,
+    reviewed_profiles: Mapping[tuple[Any, Any], str],
+) -> HeadLayout | Unavailable:
     """Profiles are trusted application data, NEVER client-supplied request data.
 
     Profile keys bind exact config + implementation digests. A reviewer must
     confirm the separate contiguous Linear [out,in] layout before adding a key.
     No production profile is guessed from a model name or dimension divisibility.
     """
-    excluded = lambda why: {"available": False, "reason": why}
+    excluded: Callable[[str], Unavailable] = lambda why: {
+        "available": False,
+        "reason": why,
+    }
     if not config or not evidence:
         return excluded("Verified configuration and implementation layout are required")
     key = (evidence.get("config_sha256"), evidence.get("implementation_sha256"))
@@ -172,7 +309,7 @@ def resolve_heads(tensor, shape, config, evidence, reviewed_profiles):
         return excluded(str(exc))
     projection = match[2]
     count = kv if projection in "kv" else q
-    axis = "column" if projection == "o" else "row"
+    axis: Literal["row", "column"] = "column" if projection == "o" else "row"
     expected = [hidden, q * dim] if projection == "o" else [count * dim, hidden]
     if list(shape) != expected:
         return excluded("Actual tensor shape does not match reviewed projection layout")
@@ -194,13 +331,15 @@ def resolve_heads(tensor, shape, config, evidence, reviewed_profiles):
     }
 
 
-def fold(values, region, heads):
+def fold(
+    values: Sequence[float], region: Mapping[str, int], heads: HeadLayout | Unavailable
+) -> Folded | None:
     if not heads["available"]:
         return None
     h, w = region["rows"], region["cols"]
     dim = heads["head_dim"]
-    groups = [[] for _ in range(dim)]
-    covered = set()
+    groups: list[list[float]] = [[] for _ in range(dim)]
+    covered: set[int] = set()
     for i, value in enumerate(values):
         coord = (
             region["row"] + i // w if heads["axis"] == "row" else region["col"] + i % w
@@ -211,12 +350,12 @@ def fold(values, region, heads):
     # Preserve the other matrix axis when folding across heads. The offset
     # profile above is a separate magnitude summary, not a folded matrix.
     folded_rows, folded_cols = (dim, w) if heads["axis"] == "row" else (h, dim)
-    matrix = {
+    matrix: FoldedMatrix | Unavailable = {
         "available": False,
         "reason": "Folded matrix exceeds 4096 output cells; offset profile remains available",
     }
     if folded_rows * folded_cols <= 4096:
-        cells = [[] for _ in range(folded_rows * folded_cols)]
+        cells: list[list[float]] = [[] for _ in range(folded_rows * folded_cols)]
         for i, value in enumerate(values):
             local_row, local_col = divmod(i, w)
             row = (
@@ -266,18 +405,18 @@ def fold(values, region, heads):
 
 
 def analyze(
-    values,
+    values: Sequence[float],
     *,
-    source_identity,
-    tensor,
-    shape,
-    region,
-    seed=1,
-    top=16,
-    config=None,
-    evidence=None,
-    reviewed_profiles=None,
-):
+    source_identity: str,
+    tensor: str,
+    shape: Sequence[int],
+    region: Mapping[str, int],
+    seed: int = 1,
+    top: int = 16,
+    config: Mapping[str, Any] | None = None,
+    evidence: Mapping[str, Any] | None = None,
+    reviewed_profiles: Mapping[tuple[Any, Any], str] | None = None,
+) -> AnalyticsReport:
     if (
         not isinstance(source_identity, str)
         or not source_identity
