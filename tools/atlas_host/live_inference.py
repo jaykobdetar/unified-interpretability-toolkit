@@ -612,6 +612,67 @@ class Session:
             self.status = reason
         return True
 
+    def _prepare_sweep_request(
+        self, data: dict[str, Any], contracts: InferenceContracts
+    ) -> tuple[dict[str, Any], dict[str, Any], None, int]:
+        sweep_plan = contracts.build_plan(data)
+        request = dict(data)
+        observation, layer = None, data["capture_layer"]
+        return sweep_plan, request, observation, layer
+
+    def _prepare_pair_request(
+        self, data: dict[str, Any], contracts: InferenceContracts
+    ) -> tuple[dict[str, Any], None, int | None]:
+        request = contracts.validate_request(data)
+        observation, layer = None, request.get("layer")
+        return request, observation, layer
+
+    def _prepare_generation_request(
+        self, data: dict[str, Any], contracts: InferenceContracts, value: Architecture
+    ) -> tuple[dict[str, Any], dict[str, Any] | None, int]:
+        prompt = data.get("prompt")
+        limit, layer = data.get("max_new_tokens", 16), data.get("layer", 0)
+        if (
+            not isinstance(prompt, str)
+            or not prompt.strip()
+            or len(prompt.encode()) > 4096
+        ):
+            raise ValueError("Enter a nonempty prompt of at most 4096 UTF-8 bytes")
+        if type(limit) is not int or not 1 <= limit <= MAX_TRACE:
+            raise ValueError("Generate 1–32 tokens")
+        if type(layer) is not int or not 0 <= layer < value.layers:
+            raise ValueError(f"Choose activation layer 0–{value.layers-1}")
+        activation_site = data.get("activation_site", "block")
+        if (
+            type(activation_site) is not str
+            or activation_site not in value.capture_sites
+        ):
+            raise ValueError("Choose activation site block, attention, or mlp")
+        observation = (
+            contracts.validate_observation(data["observation"], activation_site)
+            if "observation" in data
+            else None
+        )
+        comparison = {}
+        if "edits" in data:
+            comparison = {
+                "edits": contracts.validate_edits(
+                    data["edits"], data.get("source_model")
+                ),
+                "source_model": contracts.edits.source_model,
+            }
+        elif "source_model" in data:
+            raise ValueError("source_model requires an explicit edits list")
+        request = {
+            "prompt": prompt,
+            "max_new_tokens": limit,
+            "layer": layer,
+            "activation_site": activation_site,
+            **comparison,
+            **({"observation": observation} if observation is not None else {}),
+        }
+        return request, observation, layer
+
     def start(self, data: dict[str, Any]) -> Snapshot:
         job_started = time.monotonic()
         admission_cpu_started = time.process_time()
@@ -633,54 +694,15 @@ class Session:
         layer: int | None
         request: dict[str, Any]
         if experiment is REGISTRY[Kind.SWEEP]:
-            sweep_plan = contracts.build_plan(data)
-            request = dict(data)
-            observation, layer = None, data["capture_layer"]
-        elif experiment in (REGISTRY[Kind.PREVIEW], REGISTRY[Kind.PROMPT_PAIR]):
-            request = contracts.validate_request(data)
-            observation, layer = None, request.get("layer")
-        elif experiment in (REGISTRY[Kind.GENERATION], REGISTRY[Kind.COMPARISON]):
-            prompt = data.get("prompt")
-            limit, layer = data.get("max_new_tokens", 16), data.get("layer", 0)
-            if (
-                not isinstance(prompt, str)
-                or not prompt.strip()
-                or len(prompt.encode()) > 4096
-            ):
-                raise ValueError("Enter a nonempty prompt of at most 4096 UTF-8 bytes")
-            if type(limit) is not int or not 1 <= limit <= MAX_TRACE:
-                raise ValueError("Generate 1–32 tokens")
-            if type(layer) is not int or not 0 <= layer < value.layers:
-                raise ValueError(f"Choose activation layer 0–{value.layers-1}")
-            activation_site = data.get("activation_site", "block")
-            if (
-                type(activation_site) is not str
-                or activation_site not in value.capture_sites
-            ):
-                raise ValueError("Choose activation site block, attention, or mlp")
-            observation = (
-                contracts.validate_observation(data["observation"], activation_site)
-                if "observation" in data
-                else None
+            sweep_plan, request, observation, layer = self._prepare_sweep_request(
+                data, contracts
             )
-            comparison = {}
-            if "edits" in data:
-                comparison = {
-                    "edits": contracts.validate_edits(
-                        data["edits"], data.get("source_model")
-                    ),
-                    "source_model": contracts.edits.source_model,
-                }
-            elif "source_model" in data:
-                raise ValueError("source_model requires an explicit edits list")
-            request = {
-                "prompt": prompt,
-                "max_new_tokens": limit,
-                "layer": layer,
-                "activation_site": activation_site,
-                **comparison,
-                **({"observation": observation} if observation is not None else {}),
-            }
+        elif experiment in (REGISTRY[Kind.PREVIEW], REGISTRY[Kind.PROMPT_PAIR]):
+            request, observation, layer = self._prepare_pair_request(data, contracts)
+        elif experiment in (REGISTRY[Kind.GENERATION], REGISTRY[Kind.COMPARISON]):
+            request, observation, layer = self._prepare_generation_request(
+                data, contracts, value
+            )
         else:
             raise ValueError("Unknown inference mode")
         if available() < _limits.MODEL_ADMISSION_GIB * GIB:
