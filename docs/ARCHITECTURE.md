@@ -41,6 +41,8 @@ Calibration acknowledgements use the private `server::response::CalibrationReply
 
 Comparison legends use a private typed presentation record in `comparison::response`. The original caller still selects quantities, bounds, signedness, scales, formulas and provenance; conversion retains the same sorted JSON keys and value types. Comparison identities, tile keys and arithmetic remain in their existing paths.
 
+Viewer and comparison legend envelopes, viewer overview records and original comparison scalar provenance also use private typed presentation records in their existing response modules. Callers retain rule evaluation order, overview budgets, source checks, cache publication and exact scalar decoding. Conversion preserves the existing sorted JSON fields and numeric types; overview metrics keep their existing serializer. Independent envelope vectors cover distinct left/right rules and overview binding/coordinate forwarding.
+
 ## Python package, architecture and engine boundary
 
 Canonical implementations live in the ordinary `atlas_host` and `analytics` packages under `tools`. Compatibility modules alias the same canonical module objects, mutable defaults and callbacks. The script directory supplies normal imports for documented `python3 tools/...` commands; no package installation is required. Late helper lookup is retained where callers/tests replace module state. Portable tests use the import environment supplied by the existing checker. Some standalone tests, qualification guards and the oracle retain explicit search-path setup; some imports remain deferred for numerical initialization, compatibility cycles or platform-specific use.

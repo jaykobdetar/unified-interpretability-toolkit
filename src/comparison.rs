@@ -408,8 +408,10 @@ impl Comparison {
         let p = self.pair(id)?;
         let v = self.identity_metadata();
         let pair = json!(p);
-        let legends =
-            json!({"left":self.legend(id,left,mapping)?,"right":self.legend(id,right,mapping)?});
+        let legends = Value::from(response::Legends {
+            left: self.legend(id, left, mapping)?,
+            right: self.legend(id, right, mapping)?,
+        });
         Ok(Value::from(response::View {
             identity: v,
             pair,
@@ -571,7 +573,22 @@ fn scalar(source: &Source, t: &Tensor, row: usize, col: usize) -> Result<(Value,
         .map(|b| format!("{b:02x}"))
         .collect::<String>();
     Ok((
-        json!({"raw_exact":exact_decimal_for(dtype,bits),"raw_hex_le":raw,"dtype":dtype.name(),"element_bytes":dtype.bytes(),"shard":t.shard,"byte_offset":offset,"classification":if value.is_nan(){"nan"}else if value.is_infinite(){"infinity"}else{"finite"},"original_source_value":true}),
+        Value::from(response::Scalar {
+            raw_exact: exact_decimal_for(dtype, bits),
+            raw_hex_le: raw,
+            dtype: dtype.name(),
+            element_bytes: dtype.bytes(),
+            shard: &t.shard,
+            byte_offset: offset,
+            classification: if value.is_nan() {
+                "nan"
+            } else if value.is_infinite() {
+                "infinity"
+            } else {
+                "finite"
+            },
+            original_source_value: true,
+        }),
         value,
     ))
 }

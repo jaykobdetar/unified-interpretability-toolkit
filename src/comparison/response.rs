@@ -161,3 +161,52 @@ impl From<Legend<'_>> for Value {
         ]))
     }
 }
+
+pub(super) struct Legends {
+    pub left: Value,
+    pub right: Value,
+}
+
+impl From<Legends> for Value {
+    fn from(response: Legends) -> Self {
+        Value::Object(serde_json::Map::from_iter([
+            ("left".to_owned(), response.left),
+            ("right".to_owned(), response.right),
+        ]))
+    }
+}
+
+pub(super) struct Scalar<'a> {
+    pub raw_exact: String,
+    pub raw_hex_le: String,
+    pub dtype: &'static str,
+    pub element_bytes: usize,
+    pub shard: &'a str,
+    pub byte_offset: u64,
+    pub classification: &'static str,
+    pub original_source_value: bool,
+}
+
+impl From<Scalar<'_>> for Value {
+    fn from(response: Scalar<'_>) -> Self {
+        Value::Object(serde_json::Map::from_iter([
+            ("raw_exact".to_owned(), Value::from(response.raw_exact)),
+            ("raw_hex_le".to_owned(), Value::from(response.raw_hex_le)),
+            ("dtype".to_owned(), Value::from(response.dtype)),
+            (
+                "element_bytes".to_owned(),
+                Value::from(response.element_bytes),
+            ),
+            ("shard".to_owned(), Value::from(response.shard)),
+            ("byte_offset".to_owned(), Value::from(response.byte_offset)),
+            (
+                "classification".to_owned(),
+                Value::from(response.classification),
+            ),
+            (
+                "original_source_value".to_owned(),
+                Value::from(response.original_source_value),
+            ),
+        ]))
+    }
+}

@@ -277,3 +277,58 @@ impl From<Model<'_>> for Value {
         result
     }
 }
+
+pub(super) struct Legends {
+    pub left: Value,
+    pub right: Value,
+}
+
+impl From<Legends> for Value {
+    fn from(response: Legends) -> Self {
+        object([("left", response.left), ("right", response.right)])
+    }
+}
+
+pub(super) struct OverviewTile<'a> {
+    pub rule: &'a str,
+    pub level: u32,
+    pub x: usize,
+    pub y: usize,
+    pub binding: String,
+    pub png_bytes: usize,
+}
+
+impl From<OverviewTile<'_>> for Value {
+    fn from(response: OverviewTile<'_>) -> Self {
+        object([
+            ("rule", Value::from(response.rule)),
+            ("level", Value::from(response.level)),
+            ("x", Value::from(response.x)),
+            ("y", Value::from(response.y)),
+            ("binding", Value::from(response.binding)),
+            ("png_bytes", Value::from(response.png_bytes)),
+        ])
+    }
+}
+
+pub(super) struct Overview {
+    pub api_version: u32,
+    pub source_binding: Value,
+    pub max_values: usize,
+    pub metrics: crate::render::Metrics,
+    pub tiles: Vec<Value>,
+    pub coverage: &'static str,
+}
+
+impl From<Overview> for Value {
+    fn from(response: Overview) -> Self {
+        object([
+            ("api_version", Value::from(response.api_version)),
+            ("source_binding", response.source_binding),
+            ("max_values", Value::from(response.max_values)),
+            ("metrics", serde_json::json!(response.metrics)),
+            ("tiles", Value::from(response.tiles)),
+            ("coverage", Value::from(response.coverage)),
+        ])
+    }
+}
