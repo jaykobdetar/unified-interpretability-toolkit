@@ -130,13 +130,15 @@ EXPECTED = (
     "tools/smoke.py",
     "tools/atlas_host/experiment_schema.py",
     "tools/generate_experiment_schema.py",
+    "tools/generate_page_assets.py",
+    "tools/generate_rule_catalog.py",
 )
 
 
 class DefaultTypeScope(unittest.TestCase):
     def test_default_declaration_keeps_all_qualified_targets(self):
         self.assertEqual(check._MYPY_FILES, EXPECTED)
-        self.assertEqual(len(EXPECTED), 121)
+        self.assertEqual(len(EXPECTED), 123)
         self.assertEqual(len(set(EXPECTED)), len(EXPECTED))
         for relative in EXPECTED:
             with self.subTest(path=relative):
