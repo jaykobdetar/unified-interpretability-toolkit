@@ -528,7 +528,7 @@ function refuseUnsupportedView() {
   }
   return true;
 }
-function populateModel(model, prior) {
+function validateModelCatalog(model) {
   assert(
     Array.isArray(model.catalog) && model.catalog.length > 0,
     "nonempty full tensor catalog required.",
@@ -548,8 +548,9 @@ function populateModel(model, prior) {
     rules.length >= 7 && new Set(rules.map((r) => r.id)).size === rules.length,
     "all supported pointwise rules required.",
   );
-  state.model = model;
-  drawExamples();
+  return rules;
+}
+function drawModelSummary(model) {
   text("model-name", model.name);
   document.title = `Unified Interpretability Toolkit · ${model.name}`;
   text(
@@ -585,6 +586,8 @@ function populateModel(model, prior) {
             : "") +
           " This can make global matrix colors pale. Tensor asinh uses separately labeled calibration to show local detail.",
   );
+}
+function populateModelFilters(model, rules, prior) {
   const layers = [
     ...new Set(model.catalog.map(layerKey).filter((v) => v !== "shared")),
   ].sort((a, b) => Number(a) - Number(b));
@@ -616,6 +619,8 @@ function populateModel(model, prior) {
       $("" + side + "-rule").value =
         side === "left" ? "tensor_linear" : "tensor_asinh";
   }
+}
+function selectModelTensor(model, prior) {
   const candidates = model.catalog
     .filter((t) => t.available !== false && t.shape.length <= 2)
     .sort(
@@ -632,6 +637,14 @@ function populateModel(model, prior) {
       ...state.tensor,
       slice: prior.slice ? prior.slice.split(",").map(Number) : [],
     };
+}
+function populateModel(model, prior) {
+  const rules = validateModelCatalog(model);
+  state.model = model;
+  drawExamples();
+  drawModelSummary(model);
+  populateModelFilters(model, rules, prior);
+  selectModelTensor(model, prior);
   updateRuleAvailability();
   drawCatalog();
   globalThis.atlasWorkspace?.model(model);
