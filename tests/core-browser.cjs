@@ -176,6 +176,16 @@ fs.mkdirSync(out, { recursive: true });
     await page.goto(urls[1]);
     await page.setViewportSize({ width: 1100, height: 850 });
     await pairReady();
+    const moduleBoundary = await page.evaluate(async () => ({
+      scriptType: document.querySelector('script[src="/comparison.js"]').type,
+      globalState: typeof state,
+      exportedViewReady: !!(await import("/comparison.js")).state.view,
+    }));
+    assert.deepEqual(moduleBoundary, {
+      scriptType: "module",
+      globalState: "undefined",
+      exportedViewReady: true,
+    });
     const matrix = await page.evaluate(async () => {
       const current =
         typeof state === "undefined"

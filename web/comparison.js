@@ -27,7 +27,7 @@ const error = (message) => {
   text("error", message);
   $("error").hidden = !message;
 };
-function envelope(v) {
+function envelope(v, model) {
   assert(
     v.coordinate_space === SPACE && v.inference_editable === false,
     "Invalid comparison coordinate boundary",
@@ -38,11 +38,11 @@ function envelope(v) {
       v.sources?.b?.source_identity,
     "Missing ordered comparison identities",
   );
-  if (state.model) {
+  if (model) {
     assert(
-      v.comparison_identity === state.model.comparison_identity &&
-        v.sources.a.source_identity === state.model.sources.a.source_identity &&
-        v.sources.b.source_identity === state.model.sources.b.source_identity,
+      v.comparison_identity === model.comparison_identity &&
+        v.sources.a.source_identity === model.sources.a.source_identity &&
+        v.sources.b.source_identity === model.sources.b.source_identity,
       "Comparison source identity changed; refresh required",
     );
   }
@@ -159,7 +159,7 @@ async function refresh() {
       { signal: state.modelController.signal },
     );
     if (ticket !== state.modelEpoch) return;
-    envelope(model);
+    envelope(model, state.model);
     assert(
       model.compatibility?.complete && model.catalog?.length,
       "Complete named-shape compatibility required",
@@ -253,7 +253,7 @@ async function loadView() {
   try {
     const view = await request("view", s, { signal: state.controller.signal });
     if (epoch !== state.epoch) return;
-    envelope(view);
+    envelope(view, state.model);
     assert(
       view.pair?.id === s.tensor &&
         view.pair.name === state.pair.name &&
@@ -380,7 +380,7 @@ async function inspectAt(row, col) {
       { signal: state.inspectController.signal },
     );
     if (ticket !== state.inspectEpoch || epoch !== state.epoch) return;
-    envelope(v);
+    envelope(v, state.model);
     assert(
       v.pair_id === p.id && v.name === p.name && v.row === row && v.col === col,
       "Comparison address mismatch",
@@ -449,7 +449,7 @@ async function calibrate() {
       try {
         const m = await request("model");
         if (epoch !== state.epoch) return;
-        envelope(m);
+        envelope(m, state.model);
         const p = m.catalog.find((p) => p.id === id);
         if (m.progress.error) throw Error(m.progress.error);
         if (p.calibration_complete) {
@@ -513,4 +513,17 @@ function initialize() {
   bind();
   refresh();
 }
-initialize();
+// A Node import exposes the pure logic without starting the browser controller.
+if (typeof document !== "undefined") initialize();
+
+export {
+  state,
+  envelope,
+  tileSource,
+  bind,
+  refresh,
+  settings,
+  loadView,
+  inspectAt,
+  calibrate,
+};
