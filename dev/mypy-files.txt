@@ -100,3 +100,6 @@ tools/atlas_host/hosted_runtime.py
 tests/typing/hosted_runtime_clients.py
 tools/atlas_host/profile_http.py
 tests/typing/profile_http_clients.py
+tools/atlas_host/budget.py
+tools/atlas_host/profile_adapter.py
+tests/typing/profile_ledger_clients.py
