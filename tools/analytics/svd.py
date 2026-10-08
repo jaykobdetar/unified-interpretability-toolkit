@@ -15,7 +15,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal, TYPE_CHECKING, TypedDict
 
-from .core import Unavailable, checked_values, permutation
+from .core import Unavailable, checked_values, integer, permutation
 from atlas_host.memory import available_bytes as _available_bytes
 from .runtime import configure_svd_worker as _configure_worker
 
@@ -148,8 +148,6 @@ def worker() -> None:
         raise ValueError("Worker input cap exceeded")
     data = json.loads(raw)
     rows, cols = data["rows"], data["cols"]
-    from .core import integer
-
     integer(rows, 1, MAX_SVD_AXIS, "rows")
     integer(cols, 1, MAX_SVD_AXIS, "cols")
     checked_values(

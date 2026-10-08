@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence, TypedDict
 
+from . import acquisition as _acquisition
+from . import prepare_fixture as _prepare_fixture
 from .common import read_json
 from .config import capabilities, load_config
 from .registry import Registry, content_digest, validate_manifest, MAX_MANIFEST_BYTES
@@ -64,7 +66,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "Downloads are disabled; no acquisition authorized by this local stage"
             )
         elif args.command in ("acquire-plan", "acquire"):
-            from .acquisition import plan, acquire
+            plan, acquire = _acquisition.plan, _acquisition.acquire
 
             manifest = read_json(args.manifest, MAX_MANIFEST_BYTES)
             options: AcquisitionOptions = {
@@ -113,7 +115,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "receipt":
             result = registry.owner_receipt(args.model_id)
         elif args.command == "prepare-fixture":
-            from .prepare_fixture import prepare
+            prepare = _prepare_fixture.prepare
 
             result = prepare(config, args.model_id)
         else:

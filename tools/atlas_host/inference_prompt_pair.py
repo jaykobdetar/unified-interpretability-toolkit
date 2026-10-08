@@ -14,6 +14,7 @@ from atlas_host import inference_pair_contract as contract
 import hashlib
 import json
 import math
+import time
 from atlas_host.inference_architecture import (
     ARCH,
     WIDTH,
@@ -121,8 +122,6 @@ def run(
     record: Record,
 ) -> None:
     """Exactly two uncached prefills and one selected observational hook."""
-    import time
-
     ids = [[t["id"] for t in tokens] for tokens in preview["tokens"]]
     if ids != [
         tokenizer.encode(p, add_special_tokens=True) for p in request["prompts"]

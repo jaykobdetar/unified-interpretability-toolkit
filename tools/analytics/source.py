@@ -6,6 +6,8 @@ No directory discovery, source writes, whole tensor reads, or persistent cache.
 
 from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
+import hashlib
+import json
 import math
 import os
 from pathlib import Path
@@ -395,8 +397,6 @@ def read_layout_evidence(
     The returned digest pair must match an application-owned reviewed profile.
     Re-read on each request (including cache hits) if head labels are enabled.
     """
-    import hashlib
-    import json
 
     def read(path: _Path) -> bytes:
         path = Path(path)

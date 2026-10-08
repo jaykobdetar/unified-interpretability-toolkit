@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .common import digest, fields, integer, require, read_json
 from .registry import RegistryEntry, fingerprint
+from .fixture_source import check_fixture
 
 from collections.abc import Mapping
 from typing import Any, Protocol, TypeAlias
@@ -108,8 +109,6 @@ class BoundValidationPolicy:
         binary.check()
 
     def check_entry(self, entry: RegistryEntry) -> None:
-        from .fixture_source import check_fixture
-
         self.check()
         check_fixture(entry, hash_bytes=True)
 

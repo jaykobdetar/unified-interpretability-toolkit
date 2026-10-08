@@ -6,7 +6,7 @@ from copy import deepcopy
 from typing import Any, TypedDict, cast
 
 from .cache import binding
-from .common import canonical, fields, integer, require
+from .common import canonical, digest, fields, integer, require
 
 
 class ProgressEntry(TypedDict):
@@ -28,8 +28,6 @@ ERRORS = {
 
 
 def model_id(value: str) -> str:
-    from .common import digest
-
     require(type(value) is str and value.startswith("m_"), "Invalid model ID")
     digest(value[2:])
     return value

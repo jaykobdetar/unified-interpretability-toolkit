@@ -1,6 +1,7 @@
 """Exact installed tiny-fixture receipts; no launcher or provider dependency."""
 
 import hashlib
+import os
 from pathlib import Path
 from typing import cast
 
@@ -43,8 +44,6 @@ def check_fixture(entry: RegistryEntry, *, hash_bytes: bool = False) -> None:
     )
     if hash_bytes:
         # Exactly 244 known fixture bytes, not an arbitrary model hash request.
-        import os
-
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, "rb") as source:
             require(
