@@ -1,32 +1,50 @@
 """Loopback profile bridge installed only by the explicit owner profile launcher."""
 
 from urllib.parse import urlsplit, parse_qs, urlencode
+from typing import Any, Protocol, cast
 from .startup_diagnostics import diagnose
 from .common import canonical, require
 from .config import LOCAL_LIMITS
 from .profile_os import strict_json
-from .runtime_adapter import dispatch, fixture_entry
+from .runtime_adapter import (
+    FixtureHost,
+    NativeResponse,
+    OwnedRenderer,
+    dispatch,
+    fixture_entry,
+)
+from .hosted_runtime import HostedApplication
+from .static_operation import StaticOperation
 from host_atlas import HostHandler, ROOT, BUNDLE
 
 
+class HostedServer(Protocol):
+    application: HostedApplication
+    host: FixtureHost
+
+
 class HostedHandler(HostHandler):
-    def handle(self):
-        app = self.server.application
+    def handle(self) -> None:
+        app = cast(HostedServer, self.server).application
         grant, meter = app.profiles.admission()  # Before receive/framing/body work.
         self.profile_admission = grant
         try:
             super().handle()
         finally:
             try:
-                operation = getattr(self, "static_finalizer", None)
+                operation = cast(
+                    StaticOperation | None, getattr(self, "static_finalizer", None)
+                )
                 if operation is not None and not operation.finished:
                     operation.abort()
             finally:
                 meter.freeze()
                 app.profiles.finish_admission(grant)
 
-    def dispatch_host(self, method, raw_path, data=None):
-        app = self.server.application
+    def dispatch_host(
+        self, method: str, raw_path: str, data: dict[str, Any] | None = None
+    ) -> NativeResponse:
+        app = cast(HostedServer, self.server).application
         operation = None
         parsed = urlsplit(raw_path)
         parts = parsed.path.strip("/").split("/")
@@ -69,10 +87,12 @@ class HostedHandler(HostHandler):
                 self.static_finalizer = operation
         return dispatch(app.host, method, raw_path, data, operation=operation)
 
-    def send(self, status, body, mime="application/json"):
+    def send(self, status: int, body: object, mime: str = "application/json") -> None:
         if getattr(self, "static_write_failed", False):
             return
-        operation = getattr(self, "static_finalizer", None)
+        operation = cast(
+            StaticOperation | None, getattr(self, "static_finalizer", None)
+        )
         if operation is None or operation.finished:
             return super().send(status, body, mime)
         if status >= 400:
@@ -102,8 +122,8 @@ class HostedHandler(HostHandler):
             self.close_connection = True
             raise
 
-    def handle_action(self):
-        app = self.server.application
+    def handle_action(self) -> None:
+        app = cast(HostedServer, self.server).application
         try:
             path, length = self.validated()
             for key in (
@@ -187,7 +207,9 @@ class HostedHandler(HostHandler):
                     native = "/api/binding?" + urlencode(
                         {k: v[0] for k, v in query.items() if k != "context"}
                     )
-                    status, raw, mime = app.host.reader.read(native)
+                    status, raw, mime = cast(OwnedRenderer, app.host.reader).read(
+                        native
+                    )
                     require(
                         status == 200 and mime == "application/json",
                         "Binding unavailable",
@@ -226,7 +248,7 @@ class HostedHandler(HostHandler):
                             body["source_binding"],
                         )
                     return self.send(status, body, mime)
-                self.server.host = app.host
+                cast(HostedServer, self.server).host = app.host
                 return super().handle_action()
         except (ValueError, KeyError, TypeError, OSError) as error:
             diagnose(
