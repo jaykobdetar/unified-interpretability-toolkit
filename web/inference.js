@@ -312,23 +312,16 @@ function workerCleanupConfirmed(snapshot) {
     ].includes(snapshot.status)
   );
 }
-function experimentRecord(
-  request,
-  snapshot,
-  { includePrompt = false, createdAt = new Date().toISOString() } = {},
-) {
-  if (!request || !Array.isArray(snapshot.steps) || snapshot.steps.length > 32)
-    throw new Error("A bounded accepted run is required.");
-  const details = snapshot.details || {},
-    settings = picked(
-      request,
-      /* schema-fields: generation_settings */ [
-        "mode",
-        "max_new_tokens",
-        "layer",
-        "activation_site",
-      ] /* end-schema-fields */,
-    );
+function recordRequestSettings(request, details, includePrompt) {
+  const settings = picked(
+    request,
+    /* schema-fields: generation_settings */ [
+      "mode",
+      "max_new_tokens",
+      "layer",
+      "activation_site",
+    ] /* end-schema-fields */,
+  );
   settings.activation_site = settings.activation_site || "block";
   if (request.observation)
     settings.observation = picked(
@@ -364,6 +357,10 @@ function experimentRecord(
   );
   if (settings.edits.length > 8)
     throw new Error("Experiment edit cap exceeded.");
+  recordModeSettings(request, settings, details, includePrompt);
+  return settings;
+}
+function recordModeSettings(request, settings, details, includePrompt) {
   if (request.mode === "sweep") {
     delete settings.edits;
     Object.assign(
@@ -400,186 +397,248 @@ function experimentRecord(
     if (Array.isArray(details.prompt_ids))
       settings.prompt_ids = [...details.prompt_ids];
   }
-  const branch = (value) =>
-    value === null
-      ? null
-      : picked(
-          value,
-          /* schema-fields: sequence */ [
-            "token_id",
-            "token_piece",
-            "generated_text",
-            "generated_ids",
-            "eos",
-            "compute_ms",
-            "compute_total_ms",
-          ] /* end-schema-fields */,
-        );
-  const steps = snapshot.steps.map((step, index) => {
-    if (
-      step.index !== index ||
-      !Array.isArray(step.activation) ||
-      !step.activation.length ||
-      step.activation.length * snapshot.steps.length > 18432
-    )
-      throw new Error("Invalid experiment trace.");
-    const out = picked(
-      step,
-      /* schema-fields: step */ [
-        "index",
-        "phase",
-        "position",
-        "input_token_id",
-        "token_id",
-        "token_piece",
-        "generated_text",
-        "compute_ms",
-        "compute_total_ms",
-        "layer",
-        "activation_site",
-        "activation_kind",
-        "activation_branch",
-        "alignment",
-        "score_kind",
-        "eos",
+}
+const recordBranch = (value) =>
+  value === null
+    ? null
+    : picked(
+        value,
+        /* schema-fields: sequence */ [
+          "token_id",
+          "token_piece",
+          "generated_text",
+          "generated_ids",
+          "eos",
+          "compute_ms",
+          "compute_total_ms",
+        ] /* end-schema-fields */,
+      );
+function recordStepCore(snapshot, request, includePrompt, step, index) {
+  if (
+    step.index !== index ||
+    !Array.isArray(step.activation) ||
+    !step.activation.length ||
+    step.activation.length * snapshot.steps.length > 18432
+  )
+    throw new Error("Invalid experiment trace.");
+  const out = picked(
+    step,
+    /* schema-fields: step */ [
+      "index",
+      "phase",
+      "position",
+      "input_token_id",
+      "token_id",
+      "token_piece",
+      "generated_text",
+      "compute_ms",
+      "compute_total_ms",
+      "layer",
+      "activation_site",
+      "activation_kind",
+      "activation_branch",
+      "alignment",
+      "score_kind",
+      "eos",
+    ] /* end-schema-fields */,
+  );
+  // The last prompt token is also prompt content; omit it at prefill when excluded.
+  if (!includePrompt && (index === 0 || request.mode === "sweep"))
+    delete out.input_token_id;
+  out.activation = [...step.activation];
+  return out;
+}
+function projectSweepStep(step, out) {
+  if (step.sweep) {
+    out.mode = "sweep";
+    out.sweep = picked(
+      step.sweep,
+      /* schema-fields: sweep_record */ [
+        "record_id",
+        "case_id",
+        "role",
+        "prompt_index",
+        "selected_cells",
+        "changed_cells",
+        "parameter_delta_l2",
+        "restoration_verified",
+        "metrics",
+        "candidates",
       ] /* end-schema-fields */,
     );
-    // The last prompt token is also prompt content; omit it at prefill when excluded.
-    if (!includePrompt && (index === 0 || request.mode === "sweep"))
-      delete out.input_token_id;
-    out.activation = [...step.activation];
-    if (step.sweep) {
-      out.mode = "sweep";
-      out.sweep = picked(
-        step.sweep,
-        /* schema-fields: sweep_record */ [
-          "record_id",
-          "case_id",
-          "role",
-          "prompt_index",
-          "selected_cells",
-          "changed_cells",
-          "parameter_delta_l2",
-          "restoration_verified",
-          "metrics",
-          "candidates",
+  }
+}
+function projectPairStep(step, out, includePrompt) {
+  if (step.prompt_pair) {
+    out.mode = "prompt_pair";
+    const p = step.prompt_pair;
+    out.prompt_pair = {
+      token_equal: p.token_equal,
+      prefix_equal: p.prefix_equal,
+      metrics: picked(
+        p.metrics,
+        /* schema-fields: pair_metrics */ [
+          "a_l2",
+          "b_l2",
+          "delta_l2",
+          "cosine",
         ] /* end-schema-fields */,
+      ),
+    };
+    for (const key of ["a", "b"])
+      out.prompt_pair[key] = picked(
+        p[key],
+        includePrompt
+          ? ["position", "token_id", "token_piece", "activation"]
+          : ["position", "activation"],
       );
-    }
-    if (step.prompt_pair) {
-      out.mode = "prompt_pair";
-      const p = step.prompt_pair;
-      out.prompt_pair = {
-        token_equal: p.token_equal,
-        prefix_equal: p.prefix_equal,
-        metrics: picked(
-          p.metrics,
-          /* schema-fields: pair_metrics */ [
-            "a_l2",
-            "b_l2",
-            "delta_l2",
-            "cosine",
-          ] /* end-schema-fields */,
-        ),
-      };
-      for (const key of ["a", "b"])
-        out.prompt_pair[key] = picked(
-          p[key],
-          includePrompt
-            ? ["position", "token_id", "token_piece", "activation"]
-            : ["position", "activation"],
-        );
-    }
-    if (step.attention) {
-      out.attention = picked(
-        step.attention,
-        /* schema-fields: attention_projection */ [
-          "layer",
-          "query_head",
-          "kv_head",
-          "head_dim",
-          "query_position",
-          "key_positions",
-          "probabilities",
-          "semantics",
+  }
+}
+function projectAttentionStep(step, out, includePrompt) {
+  if (step.attention) {
+    out.attention = picked(
+      step.attention,
+      /* schema-fields: attention_projection */ [
+        "layer",
+        "query_head",
+        "kv_head",
+        "head_dim",
+        "query_position",
+        "key_positions",
+        "probabilities",
+        "semantics",
+      ] /* end-schema-fields */,
+    );
+    if (includePrompt)
+      out.attention.key_token_ids = step.attention.key_token_ids;
+  }
+}
+function projectLensStep(step, out) {
+  if (step.logit_lens) {
+    out.logit_lens = picked(
+      step.logit_lens,
+      /* schema-fields: lens_projection */ [
+        "layer",
+        "position",
+        "score_kind",
+        "lens_argmax_id",
+        "final_argmax_id",
+        "semantics",
+      ] /* end-schema-fields */,
+    );
+    out.logit_lens.candidates = step.logit_lens.candidates.map((entry) =>
+      picked(
+        entry,
+        /* schema-fields: lens_candidate */ [
+          "id",
+          "piece",
+          "lens_logit",
+          "final_logit",
+          "delta_lens_minus_final",
         ] /* end-schema-fields */,
-      );
-      if (includePrompt)
-        out.attention.key_token_ids = step.attention.key_token_ids;
-    }
-    if (step.logit_lens) {
-      out.logit_lens = picked(
-        step.logit_lens,
-        /* schema-fields: lens_projection */ [
-          "layer",
-          "position",
-          "score_kind",
-          "lens_argmax_id",
-          "final_argmax_id",
-          "semantics",
+      ),
+    );
+  }
+}
+function projectLogitStep(step, out) {
+  if (step.top_logits)
+    out.top_logits = step.top_logits.map((entry) =>
+      picked(
+        entry,
+        /* schema-fields: logit */ ["id", "value"] /* end-schema-fields */,
+      ),
+    );
+}
+function projectComparisonStep(step, out, branch) {
+  if (Object.hasOwn(step, "baseline")) {
+    out.baseline = branch(step.baseline);
+    out.edited = branch(step.edited);
+    out.candidates = step.candidates.map((entry) =>
+      picked(
+        entry,
+        /* schema-fields: candidate */ [
+          "id",
+          "piece",
+          "baseline_logit",
+          "edited_logit",
+          "delta",
         ] /* end-schema-fields */,
-      );
-      out.logit_lens.candidates = step.logit_lens.candidates.map((entry) =>
-        picked(
-          entry,
-          /* schema-fields: lens_candidate */ [
-            "id",
-            "piece",
-            "lens_logit",
-            "final_logit",
-            "delta_lens_minus_final",
-          ] /* end-schema-fields */,
-        ),
-      );
-    }
-    if (step.top_logits)
-      out.top_logits = step.top_logits.map((entry) =>
-        picked(
-          entry,
-          /* schema-fields: logit */ ["id", "value"] /* end-schema-fields */,
-        ),
-      );
-    if (Object.hasOwn(step, "baseline")) {
-      out.baseline = branch(step.baseline);
-      out.edited = branch(step.edited);
-      out.candidates = step.candidates.map((entry) =>
-        picked(
-          entry,
-          /* schema-fields: candidate */ [
-            "id",
-            "piece",
-            "baseline_logit",
-            "edited_logit",
-            "delta",
-          ] /* end-schema-fields */,
-        ),
-      );
-    }
+      ),
+    );
+  }
+}
+function recordTraceSteps(snapshot, request, includePrompt) {
+  const steps = snapshot.steps.map((step, index) => {
+    const out = recordStepCore(snapshot, request, includePrompt, step, index);
+    projectSweepStep(step, out);
+    projectPairStep(step, out, includePrompt);
+    projectAttentionStep(step, out, includePrompt);
+    projectLensStep(step, out);
+    projectLogitStep(step, out);
+    projectComparisonStep(step, out, recordBranch);
     return out;
   });
-  const result = {
+  return steps;
+}
+function recordPrivacy(request, settings, includePrompt) {
+  return {
+    generated_outputs_included: request.mode !== "prompt_pair",
+    prompt_included: includePrompt,
+    request_replayable:
+      includePrompt &&
+      (typeof settings.prompt === "string" || Array.isArray(settings.prompts)),
+    note:
+      request.mode === "prompt_pair"
+        ? includePrompt
+          ? "Private prompts, source tokens and activation captures: keep this file private."
+          : "Prompts and source tokens omitted; captures remain private and exact request replay is unavailable."
+        : includePrompt
+          ? "Private prompt and generated data: keep this file private."
+          : "Prompt omitted; exact request replay unavailable. Generated outputs may still reveal prompt content.",
+  };
+}
+function recordLimits(request, details) {
+  return request.mode === "sweep"
+    ? {
+        interventions: details.sweep_plan?.cases?.length,
+        prompts: request.prompts.length,
+        probes_per_prompt: 1,
+        records: details.sweep_plan?.records,
+        prefills: details.sweep_plan?.prefills,
+        trace_cap: 32,
+        edits_per_intervention: 8,
+        snapshot_cells: 65536,
+        wall_seconds: 120,
+        worker_cpu_seconds: 90,
+      }
+    : request.mode === "prompt_pair"
+      ? {
+          prompt_tokens_each: 128,
+          prefills: 2,
+          positions: 8,
+          new_tokens: 0,
+          trace_steps: 8,
+          vector_equivalents: 24,
+        }
+      : { prompt_tokens: 128, new_tokens: 32, trace_steps: 32, edits: 8 };
+}
+function recordEnvelope(
+  request,
+  snapshot,
+  settings,
+  details,
+  steps,
+  includePrompt,
+  createdAt,
+) {
+  return {
     schema: "weight-atlas-experiment-v1",
     created_at: createdAt,
     status: snapshot.status,
     complete: snapshot.status === "complete",
     worker_cleanup_confirmed: workerCleanupConfirmed(snapshot),
     termination: snapshot.termination || null,
-    privacy: {
-      generated_outputs_included: request.mode !== "prompt_pair",
-      prompt_included: includePrompt,
-      request_replayable:
-        includePrompt &&
-        (typeof settings.prompt === "string" ||
-          Array.isArray(settings.prompts)),
-      note:
-        request.mode === "prompt_pair"
-          ? includePrompt
-            ? "Private prompts, source tokens and activation captures: keep this file private."
-            : "Prompts and source tokens omitted; captures remain private and exact request replay is unavailable."
-          : includePrompt
-            ? "Private prompt and generated data: keep this file private."
-            : "Prompt omitted; exact request replay unavailable. Generated outputs may still reveal prompt content.",
-    },
+    privacy: recordPrivacy(request, settings, includePrompt),
     request: settings,
     settings: {
       seed: 0,
@@ -611,30 +670,7 @@ function experimentRecord(
         "attention_backend",
       ] /* end-schema-fields */,
     ),
-    limits:
-      request.mode === "sweep"
-        ? {
-            interventions: details.sweep_plan?.cases?.length,
-            prompts: request.prompts.length,
-            probes_per_prompt: 1,
-            records: details.sweep_plan?.records,
-            prefills: details.sweep_plan?.prefills,
-            trace_cap: 32,
-            edits_per_intervention: 8,
-            snapshot_cells: 65536,
-            wall_seconds: 120,
-            worker_cpu_seconds: 90,
-          }
-        : request.mode === "prompt_pair"
-          ? {
-              prompt_tokens_each: 128,
-              prefills: 2,
-              positions: 8,
-              new_tokens: 0,
-              trace_steps: 8,
-              vector_equivalents: 24,
-            }
-          : { prompt_tokens: 128, new_tokens: 32, trace_steps: 32, edits: 8 },
+    limits: recordLimits(request, details),
     summary: picked(
       details,
       /* schema-fields: summary */ [
@@ -668,6 +704,26 @@ function experimentRecord(
     ),
     steps,
   };
+}
+function experimentRecord(
+  request,
+  snapshot,
+  { includePrompt = false, createdAt = new Date().toISOString() } = {},
+) {
+  if (!request || !Array.isArray(snapshot.steps) || snapshot.steps.length > 32)
+    throw new Error("A bounded accepted run is required.");
+  const details = snapshot.details || {},
+    settings = recordRequestSettings(request, details, includePrompt);
+  const steps = recordTraceSteps(snapshot, request, includePrompt);
+  const result = recordEnvelope(
+    request,
+    snapshot,
+    settings,
+    details,
+    steps,
+    includePrompt,
+    createdAt,
+  );
   if (request.mode === "sweep")
     result.sweep_plan = picked(
       details.sweep_plan,
