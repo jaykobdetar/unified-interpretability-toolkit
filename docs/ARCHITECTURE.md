@@ -45,6 +45,8 @@ Viewer and comparison legend envelopes, viewer overview records and original com
 
 Comparison catalog entries and viewer selected-tensor fields use private presentation records as well. They add the existing calibration/scales and slice fields to the already serialized pair or tensor. Calibration/progress lock scopes, catalog order, source checks, selected-slice validation and binding construction remain at their original callers; saved scales and tensor records keep their existing serializers.
 
+Native calibration, tile, benchmark, metadata and verification report envelopes use private records in `src/main/response.rs`. They borrow the caller's data and carry its original `Instant` into the JSON conversion. Elapsed-time and peak-memory samples therefore retain their positions after preceding field serialization. Numerical work, source hashing/checks, file writes, stderr progress, saved verification bytes and CPU affinity selection remain at the original callers.
+
 ## Python package, architecture and engine boundary
 
 Canonical implementations live in the ordinary `atlas_host` and `analytics` packages under `tools`. Compatibility modules alias the same canonical module objects, mutable defaults and callbacks. The script directory supplies normal imports for documented `python3 tools/...` commands; no package installation is required. Late helper lookup is retained where callers/tests replace module state. Portable tests use the import environment supplied by the existing checker. Some standalone tests, qualification guards and the oracle retain explicit search-path setup; some imports remain deferred for numerical initialization, compatibility cycles or platform-specific use.

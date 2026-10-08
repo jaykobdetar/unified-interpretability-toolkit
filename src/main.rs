@@ -10,12 +10,15 @@ use std::{
 use weight_atlas_rust::{
     atomic_write,
     command::{defaults, parse_options, Command, COMPARISON_PREFIX, HELP},
-    configure, configure_standalone, headroom, peak_rss_mib, render, require, server,
+    configure, configure_standalone, headroom, render, require, server,
     slice::{parse_indices, TensorSlice},
     source::{Dtype, Source},
     state::State,
     Result,
 };
+#[path = "main/response.rs"]
+mod response;
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("ERROR: {e}");
@@ -132,7 +135,12 @@ fn run_calibration(
     let model = state.model()?;
     println!(
         "{}",
-        json!({"model":model,"wall_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"minimum_available_gib":minimum as f64/1024f64.powi(3),"cpu":cpu})
+        Value::from(response::Calibration {
+            model: &model,
+            start,
+            minimum,
+            cpu
+        })
     );
     Ok(())
 }
@@ -196,10 +204,7 @@ fn run_tile(state: &State, opts: &BTreeMap<String, String>, start: Instant) -> R
             f.write_all(&x.to_le_bytes())?
         }
     }
-    println!(
-        "{}",
-        json!({"metrics":m,"seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib()})
-    );
+    println!("{}", Value::from(response::Tile { m: &m, start }));
     Ok(())
 }
 
@@ -244,7 +249,11 @@ fn run_benchmark(
     }
     println!(
         "{}",
-        json!({"records":records,"wall_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"cpu":cpu})
+        Value::from(response::Benchmark {
+            records: &records,
+            start,
+            cpu
+        })
     );
     Ok(())
 }
@@ -264,10 +273,7 @@ fn initialize_resources(command: &str, opts: &BTreeMap<String, String>) -> Resul
 
 fn print_metadata(model: &Path, cpu: usize, start: Instant) -> Result<()> {
     let s = Source::open(model)?;
-    println!(
-        "{}",
-        json!({"source_directory":s.root,"source_identity":s.identity,"header_bytes":s.header_bytes,"source_bytes":s.bytes,"tensor_count":s.tensors.len(),"parameter_count":s.tensors.iter().map(|t|t.count).sum::<usize>(),"catalog":s.tensors,"shards":s.shards,"elapsed_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"cpu":cpu,"full_sha_recomputed":false})
-    );
+    println!("{}", Value::from(response::Metadata { s: &s, start, cpu }));
     Ok(())
 }
 
@@ -474,7 +480,13 @@ fn verify_source(state: &State, cpu: usize, start: Instant) -> Result<Value> {
         records.push(json!({"shard":s.name,"sha256":hash,"matches_saved_expected_sha":expected.map(|e|e==hash),"bytes":s.fingerprint.size}));
         eprintln!("Hashed {}", s.name);
     }
-    let v = json!({"source_identity":state.source.identity,"shards":records,"wall_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"minimum_available_gib":minimum as f64/1024f64.powi(3),"cpu":cpu,"scope":"Fresh full source SHA; comparisons use explicitly selected local metadata, not a new remote trust check"});
+    let v = Value::from(response::Verification {
+        source_identity: &state.source.identity,
+        records: &records,
+        start,
+        minimum,
+        cpu,
+    });
     atomic_write(
         &state.root.join("verification.json"),
         &serde_json::to_vec_pretty(&v)?,
