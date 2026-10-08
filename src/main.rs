@@ -1,4 +1,6 @@
-use serde_json::{json, Value};
+#[cfg(test)]
+use serde_json::json;
+use serde_json::Value;
 use std::{
     collections::BTreeMap,
     io::Write,
@@ -243,9 +245,15 @@ fn run_benchmark(
                 bytes += render::png(&field, m.width, m.height)?.len()
             }
             times.push(begin.elapsed().as_secs_f64());
-            last = Some(json!({"metrics":m,"png_bytes":bytes}));
+            last = Some(Value::from(response::BenchmarkSample { m: &m, bytes }));
         }
-        records.push(json!({"tensor":t.name,"shape":t.shape,"factor":f,"level":level,"runs_seconds":times,"last":last}));
+        records.push(Value::from(response::BenchmarkRun {
+            t,
+            f,
+            level,
+            times: &times,
+            last: &last,
+        }));
     }
     println!(
         "{}",
@@ -422,14 +430,14 @@ fn run_comparison(
                     .flat_map(|x| x.to_le_bytes())
                     .collect::<Vec<_>>(),
             )?;
-            let mut result = pair.identity_metadata();
-            result["pair_id"] = json!(id);
-            result["quantity"] = json!(quantity);
-            result["mapping"] = json!(mapping);
-            result["legend"] = pair.legend(id, &quantity, &mapping)?;
-            result["metrics"] = json!(metrics);
-            result["cpu"] = json!(cpu);
-            result
+            Value::try_from(response::ComparisonTile {
+                pair: &pair,
+                id,
+                quantity: &quantity,
+                mapping: &mapping,
+                metrics: &metrics,
+                cpu,
+            })?
         }
         Some(Command::CompareServe) => {
             comparison_http::serve(pair, get("port", defaults::COMPARISON_PORT).parse()?)?;
@@ -477,7 +485,11 @@ fn verify_source(state: &State, cpu: usize, start: Instant) -> Result<Value> {
                 "Full shard SHA mismatch against local pinned metadata",
             )?
         }
-        records.push(json!({"shard":s.name,"sha256":hash,"matches_saved_expected_sha":expected.map(|e|e==hash),"bytes":s.fingerprint.size}));
+        records.push(Value::from(response::VerificationShard {
+            s,
+            hash: &hash,
+            expected,
+        }));
         eprintln!("Hashed {}", s.name);
     }
     let v = Value::from(response::Verification {

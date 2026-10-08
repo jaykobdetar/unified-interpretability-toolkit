@@ -16,6 +16,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod response;
+
 fn sealed(file: &File, size: usize) -> Result<()> {
     let seals = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GET_SEALS) };
     let required = libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
@@ -83,9 +85,12 @@ pub fn run(options: &BTreeMap<String, String>) -> Result<()> {
     // rusage/reap within its original grant before any terminal publication.
     println!(
         "{}",
-        json!({"schema":"weight-atlas.profile-candidate.v1","revision":revision,
-        "visited_values":profile.visited_values(),"new_values":profile.visited_values()-before,
-        "frame_bytes":layout.frame_bytes,"live_bytes":layout.live_bytes})
+        serde_json::Value::from(response::Candidate {
+            revision: &revision,
+            profile: &profile,
+            before,
+            layout: &layout
+        })
     );
     Ok(())
 }
