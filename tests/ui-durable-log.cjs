@@ -92,15 +92,22 @@ const context = vm.createContext({
     }),
   }),
   document: {
+    currentScript: null,
     getElementById: get,
     createElement: () => new Element(),
     head: {
       append: (script) => {
         assert.equal(script.src, "/inference-import.js");
-        vm.runInContext(
-          fs.readFileSync("web/inference-import.js", "utf8"),
-          context,
-        );
+        const previous = context.document.currentScript;
+        context.document.currentScript = script;
+        try {
+          vm.runInContext(
+            fs.readFileSync("web/inference-import.js", "utf8"),
+            context,
+          );
+        } finally {
+          context.document.currentScript = previous;
+        }
         script.onload();
       },
     },
@@ -360,15 +367,22 @@ require("./support/async-completion.cjs").requireCompletion(
       sessionStorage: tabStorage,
       crypto: { randomUUID: () => "should-not-replace" },
       document: {
+        currentScript: null,
         getElementById: newGet,
         createElement: () => new Element(),
         head: {
           append: (script) => {
             assert.equal(script.src, "/inference-import.js");
-            vm.runInContext(
-              fs.readFileSync("web/inference-import.js", "utf8"),
-              reload,
-            );
+            const previous = reload.document.currentScript;
+            reload.document.currentScript = script;
+            try {
+              vm.runInContext(
+                fs.readFileSync("web/inference-import.js", "utf8"),
+                reload,
+              );
+            } finally {
+              reload.document.currentScript = previous;
+            }
             script.onload();
           },
         },
