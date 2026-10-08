@@ -301,3 +301,5 @@ Acquisition declares complete signatures, exact plan fields and structural byte-
 Owner CLI and fixture/inference metadata boundaries have inert contracts for exact arguments, defaults, exits, receipts, identities and defensive copying. Twelve matched benign correctness faults across all four original functions are caught; production and previous tests remain unchanged during qualification.
 
 Owner CLI, descriptor projection and fixture preparation signatures now describe the existing arguments and receipt dictionaries. Explicit option keys and a structural subprocess runner retain the same forwarding, checks, errors and execution order; complete original runtime AST comparison and twelve qualified correctness faults protect these boundaries.
+
+Profile and static owner launchers have inert contracts for loop calls, cleanup retries, shutdown exceptions, announcements and command forwarding. Eighteen matched correctness faults across all six original functions, including nested shutdown callbacks, are caught without opening a listener or starting threads or a native worker.
