@@ -337,3 +337,86 @@ fn comparison_matrix_indices_nonfinite_and_signed_zero_bytes() {
         );
     }
 }
+
+#[test]
+fn every_comparison_legend_quantity_and_mapping_has_exact_fields() {
+    let _isolation = workspace::guard();
+    let fixture = Fixture::new();
+    fixture.comparison.calibrate_one(0).unwrap();
+    // Independent expectations for the held A=[-1,1], B=[3,-1] fixture.
+    for (quantity, derived, bound, signed_min, scale, scope, domain, definition) in [
+        (
+            "a",
+            false,
+            3.0,
+            -3.0,
+            0.03,
+            "complete paired tensor; shared original A+B scale",
+            "shared_raw",
+            "original source A weight",
+        ),
+        (
+            "b",
+            false,
+            3.0,
+            -3.0,
+            0.03,
+            "complete paired tensor; shared original A+B scale",
+            "shared_raw",
+            "original source B weight",
+        ),
+        (
+            "delta",
+            true,
+            4.0,
+            -4.0,
+            0.04,
+            "complete paired tensor; shared derived B-A scale",
+            "difference",
+            "derived F64 arithmetic B-A; not an original weight",
+        ),
+        (
+            "abs_delta",
+            true,
+            4.0,
+            0.0,
+            0.04,
+            "complete paired tensor; shared derived B-A scale",
+            "difference",
+            "derived abs(F64 B-A); not an original weight",
+        ),
+    ] {
+        for (mapping, formula) in [
+            ("linear", "v/bound; bound=0 => 0"),
+            (
+                "asinh",
+                "asinh(v/s)/asinh(bound/s); s=bound/100; bound=0 => 0",
+            ),
+            ("magnitude", "abs(v)/bound; bound=0 => 0"),
+        ] {
+            let (minimum, palette) = match (quantity, mapping) {
+                ("abs_delta", _) | (_, "magnitude") => (0.0, "sequential-purple-v1"),
+                _ => (signed_min, "signed-blue-red"),
+            };
+            let expected = json!({
+                "quantity":quantity, "mapping":mapping,
+                "original_source_values":!derived, "derived":derived,
+                "difference_direction":"B-A", "min":minimum, "max":bound, "bound":bound,
+                "s":if mapping == "asinh" { Some(scale) } else { None },
+                "scope":scope, "calibration_domain":domain, "palette":palette,
+                "formula":formula, "value_definition":definition,
+                "units":"native: selected quantity on labeled scale; pooled: mean of pointwise transformed quantity, not transform of a pooled weight",
+                "rounding":"A/B decode exactly to F64; derived subtraction and field arithmetic may round"
+            });
+            assert_eq!(
+                fixture
+                    .comparison
+                    .legend(0, quantity, mapping)
+                    .unwrap()
+                    .to_string(),
+                expected.to_string(),
+                "comparison legend exact fields: {quantity}/{mapping}"
+            );
+        }
+    }
+}
