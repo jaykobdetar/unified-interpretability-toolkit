@@ -9,7 +9,7 @@ from atlas_host.memory import guard
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def main():
+def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("directory", type=Path)
     args = p.parse_args()

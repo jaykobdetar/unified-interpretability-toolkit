@@ -3,9 +3,17 @@
 
 import json, struct
 from pathlib import Path
+from typing import TypedDict
 
 ROOT = Path(__file__).resolve().parents[1]
-VALUES = {
+
+
+class _FixtureTensor(TypedDict):
+    shape: list[int]
+    values: list[float]
+
+
+VALUES: dict[str, _FixtureTensor] = {
     "matrix": {
         "shape": [3, 5],
         "values": [
@@ -31,7 +39,7 @@ VALUES = {
 }
 
 
-def generate(destination):
+def generate(destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     header = {}
     payload = bytearray()
