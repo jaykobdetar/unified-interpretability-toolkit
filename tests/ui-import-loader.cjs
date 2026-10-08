@@ -69,6 +69,7 @@ function fixture() {
     console,
     TextEncoder,
     document: {
+      currentScript: null,
       getElementById: get,
       createElement: () => new Element(),
       head: { append: (s) => scripts.push(s) },
@@ -100,7 +101,13 @@ function fixture() {
     };
   const load = (s) => {
     assert.equal(s.src, "/inference-import.js");
-    vm.runInContext(asset, context);
+    const previous = context.document.currentScript;
+    context.document.currentScript = s;
+    try {
+      vm.runInContext(asset, context);
+    } finally {
+      context.document.currentScript = previous;
+    }
     s.onload();
   };
   get("infer-import-file").files = [
