@@ -88,3 +88,24 @@ are not audited.
 Unknown-name rejection requires a separate production/tests/changelog commit.
 Its deliberate refusal differences must be reported separately. Current ignored
 names, unknown-command routing and validation priorities remain held here.
+
+## Lazy CLI field parsing
+
+`command::argument` declares the existing option names, Rust result types, static
+fallback references, required-value messages and parsing functions. The common
+`parameter::Parameter` reader parses only the requested field. Ordinary CLI
+callers evaluate these fields at their original points: model admission precedes
+command-specific parsing, optional calibration tensor omission still means all
+available tensors, and comparison commands still parse tensor eagerly. Dynamic
+tile levels are obtained from the selected tensor/pair before the field read,
+even when an explicit level is present. Empty values remain present values.
+
+The command help and static fallback text still come from the existing macro;
+the typed fields reference those fallback constants. Resource configuration and
+numerical/domain checks retain their existing owner and order. Unknown options
+remain in the parsed map and remain ignored by ordinary command execution.
+The private worker and HTTP field declarations are separate boundaries.
+
+The pure slice-index parser lives in the dependency-leaf parameter module.
+`slice::parse_indices` re-exports the same function for existing callers; the
+parser body, length guard and error text are unchanged.

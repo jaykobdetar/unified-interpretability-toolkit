@@ -242,3 +242,54 @@ impl Command {
         }
     }
 }
+
+/// Typed option facts. Reading a field never validates unrelated/unknown names.
+/// The existing help/default declaration above remains the source of fallback text.
+pub mod argument {
+    use super::defaults;
+    use crate::parameter::parse_indices;
+    use crate::parameter::{number, text, Parameter};
+
+    macro_rules! arguments {
+        ($($id:ident: $ty:ty = ($name:expr, $default:expr, $missing:expr, $parser:expr);)*) => {
+            $(pub const $id: Parameter<$ty> = Parameter::new($name, $default, $missing, $parser);)*
+        };
+    }
+
+    arguments! {
+        MODEL: String = ("model", "", Some("--model DIRECTORY is required"), text);
+        CACHE: String = ("cache", defaults::INTAKE_CACHE, None, text);
+        NAME: String = ("name", "", None, text);
+        REVISION: String = ("revision", "", None, text);
+        RESOURCES: String = ("resources", "", None, text);
+        SERVE_PORT: u16 = ("port", defaults::SERVE_PORT, None, number);
+        VERIFY_SHA: String = ("verify-sha", defaults::INTAKE_VERIFY_SHA, None, text);
+        CALIBRATE_TENSOR: usize = ("tensor", "", None, number);
+        CHANNEL_FD: i32 = ("channel-fd", "", Some("Private channel required"), number);
+        OVERVIEW_TENSOR: usize = ("tensor", "", Some("Overview requires explicit --tensor ID"), number);
+        OVERVIEW_SLICE: Vec<usize> = ("slice", defaults::OVERVIEW_SLICE, None, parse_indices);
+        OVERVIEW_RULES: String = ("rules", defaults::OVERVIEW_RULES, None, text);
+        OVERVIEW_MAX_VALUES: usize = ("max-values", defaults::OVERVIEW_MAX_VALUES, None, number);
+        TILE_TENSOR: usize = ("tensor", defaults::TILE_TENSOR, None, number);
+        TILE_SLICE: Vec<usize> = ("slice", defaults::TILE_SLICE, None, parse_indices);
+        TILE_RULES: String = ("rules", defaults::TILE_RULES, None, text);
+        TILE_LEVEL: u32 = ("level", "", None, number);
+        TILE_X: usize = ("x", defaults::TILE_X, None, number);
+        TILE_Y: usize = ("y", defaults::TILE_Y, None, number);
+        TILE_OUT: String = ("out", defaults::TILE_OUT, None, text);
+        BENCH_TENSOR: usize = ("tensor", defaults::BENCH_TENSOR, None, number);
+        BENCH_REPEATS: usize = ("repeats", defaults::BENCH_REPEATS, None, number);
+        COMPARE_MODEL: String = ("compare-model", "", Some("--compare-model DIRECTORY is required for comparison"), text);
+        COMPARE_CACHE: String = ("cache", defaults::COMPARISON_CACHE, None, text);
+        COMPARE_TENSOR: usize = ("tensor", defaults::COMPARISON_TENSOR, None, number);
+        COMPARE_ROW: usize = ("row", defaults::COMPARISON_ROW, None, number);
+        COMPARE_COL: usize = ("col", defaults::COMPARISON_COL, None, number);
+        COMPARE_QUANTITY: String = ("quantity", defaults::COMPARISON_QUANTITY, None, text);
+        COMPARE_MAPPING: String = ("mapping", defaults::COMPARISON_MAPPING, None, text);
+        COMPARE_LEVEL: u32 = ("level", "", None, number);
+        COMPARE_X: usize = ("x", defaults::COMPARISON_X, None, number);
+        COMPARE_Y: usize = ("y", defaults::COMPARISON_Y, None, number);
+        COMPARE_OUT: String = ("out", "", Some("--out PREFIX required"), text);
+        COMPARE_PORT: u16 = ("port", defaults::COMPARISON_PORT, None, number);
+    }
+}

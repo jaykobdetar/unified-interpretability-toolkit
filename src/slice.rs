@@ -141,18 +141,4 @@ impl TensorSlice {
     }
 }
 
-pub fn parse_indices(text: &str) -> Result<Vec<usize>> {
-    if text.is_empty() {
-        return Ok(Vec::new());
-    }
-    require(text.len() <= 256, "Slice index list too long")?;
-    text.split(',')
-        .map(|part| {
-            require(
-                !part.is_empty() && part.bytes().all(|c| c.is_ascii_digit()),
-                "Slice indices must be unsigned decimal integers",
-            )?;
-            Ok(part.parse()?)
-        })
-        .collect()
-}
+pub use crate::parameter::parse_indices;

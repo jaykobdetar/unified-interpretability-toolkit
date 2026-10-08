@@ -345,3 +345,4 @@ pub mod error;
 pub use error::Error;
 
 pub mod command;
+pub mod parameter;

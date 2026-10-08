@@ -11,9 +11,9 @@ use std::{
 };
 use weight_atlas_rust::{
     atomic_write,
-    command::{defaults, parse_options, Command, COMPARISON_PREFIX, HELP},
+    command::{argument as arg, parse_options, Command, COMPARISON_PREFIX, HELP},
     configure, configure_standalone, headroom, render, require, server,
-    slice::{parse_indices, TensorSlice},
+    slice::TensorSlice,
     source::{Dtype, Source},
     state::State,
     Result,
@@ -48,8 +48,7 @@ fn run_args(
     if Command::lookup(command) == Some(Command::ProfileWorker) {
         return weight_atlas_rust::profile_worker::run(&opts);
     }
-    let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
-    let model = PathBuf::from(opts.get("model").ok_or("--model DIRECTORY is required")?);
+    let model = PathBuf::from(arg::MODEL.read(&opts)?);
     let cpu = configure(weight_atlas_rust::resources::StartupScope::for_command(
         command,
     ))?;
@@ -62,13 +61,11 @@ fn run_args(
     }
     let state = Arc::new(State::open(
         &model,
-        Path::new(&get("cache", defaults::INTAKE_CACHE)),
-        opts.get("name").cloned(),
-        opts.get("revision").cloned(),
+        Path::new(&arg::CACHE.read(&opts)?),
+        arg::NAME.optional(&opts)?,
+        arg::REVISION.optional(&opts)?,
     )?);
-    if Command::lookup(command) == Some(Command::Serve)
-        && get("verify-sha", defaults::INTAKE_VERIFY_SHA) == "true"
-    {
+    if Command::lookup(command) == Some(Command::Serve) && arg::VERIFY_SHA.read(&opts)? == "true" {
         verify_source(&state, cpu, Instant::now())?;
     }
     dispatch_command(command, &opts, state, cpu, start)
@@ -81,15 +78,11 @@ fn dispatch_command(
     cpu: usize,
     start: Instant,
 ) -> Result<()> {
-    let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
     match Command::lookup(command) {
-        Some(Command::Serve) => server::serve(state, get("port", defaults::SERVE_PORT).parse()?)?,
-        Some(Command::HostedRenderer) => weight_atlas_rust::hosted_renderer::run(
-            state,
-            opts.get("channel-fd")
-                .ok_or("Private channel required")?
-                .parse()?,
-        )?,
+        Some(Command::Serve) => server::serve(state, arg::SERVE_PORT.read(opts)?)?,
+        Some(Command::HostedRenderer) => {
+            weight_atlas_rust::hosted_renderer::run(state, arg::CHANNEL_FD.read(opts)?)?
+        }
         Some(Command::Calibrate) => run_calibration(&state, opts, cpu, start)?,
         Some(Command::Verify) => println!("{}", verify_source(&state, cpu, Instant::now())?),
         Some(Command::Inspect) => println!(
@@ -118,8 +111,8 @@ fn run_calibration(
     cpu: usize,
     start: Instant,
 ) -> Result<()> {
-    let ids = if let Some(id) = opts.get("tensor") {
-        vec![id.parse()?]
+    let ids = if let Some(id) = arg::CALIBRATE_TENSOR.optional(opts)? {
+        vec![id]
     } else {
         state
             .source
@@ -148,35 +141,22 @@ fn run_calibration(
 }
 
 fn run_overview(state: &State, opts: &BTreeMap<String, String>) -> Result<()> {
-    let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
-    let id = opts
-        .get("tensor")
-        .ok_or("Overview requires explicit --tensor ID")?
-        .parse()?;
-    let leading = parse_indices(&get("slice", defaults::OVERVIEW_SLICE))?;
-    let rules = get("rules", defaults::OVERVIEW_RULES);
+    let id = arg::OVERVIEW_TENSOR.read(opts)?;
+    let leading = arg::OVERVIEW_SLICE.read(opts)?;
+    let rules = arg::OVERVIEW_RULES.read(opts)?;
     let rules = rules.split(',').collect::<Vec<_>>();
-    let report = state.prepare_overview(
-        id,
-        &leading,
-        &rules,
-        get("max-values", defaults::OVERVIEW_MAX_VALUES).parse()?,
-    )?;
+    let report =
+        state.prepare_overview(id, &leading, &rules, arg::OVERVIEW_MAX_VALUES.read(opts)?)?;
     println!("{}", report);
     Ok(())
 }
 
 fn run_tile(state: &State, opts: &BTreeMap<String, String>, start: Instant) -> Result<()> {
-    let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
-    let id: usize = get("tensor", defaults::TILE_TENSOR).parse()?;
-    let slice = TensorSlice::new(
-        &state.source,
-        id,
-        &parse_indices(&get("slice", defaults::TILE_SLICE))?,
-    )?;
+    let id: usize = arg::TILE_TENSOR.read(opts)?;
+    let slice = TensorSlice::new(&state.source, id, &arg::TILE_SLICE.read(opts)?)?;
     let t = &slice.tensor;
-    let level: u32 = get("level", &t.max_level.to_string()).parse()?;
-    let rules = get("rules", defaults::TILE_RULES);
+    let level: u32 = arg::TILE_LEVEL.read_with_default(opts, &t.max_level.to_string())?;
+    let rules = arg::TILE_RULES.read(opts)?;
     let rules = rules.split(',').collect::<Vec<_>>();
     let luts = rules
         .iter()
@@ -192,10 +172,10 @@ fn run_tile(state: &State, opts: &BTreeMap<String, String>, start: Instant) -> R
         t,
         &refs,
         level,
-        get("x", defaults::TILE_X).parse()?,
-        get("y", defaults::TILE_Y).parse()?,
+        arg::TILE_X.read(opts)?,
+        arg::TILE_Y.read(opts)?,
     )?;
-    let out = get("out", defaults::TILE_OUT);
+    let out = arg::TILE_OUT.read(opts)?;
     for (rule, field) in rules.iter().zip(&fields) {
         std::fs::write(
             format!("{out}-{rule}.png"),
@@ -216,10 +196,9 @@ fn run_benchmark(
     cpu: usize,
     start: Instant,
 ) -> Result<()> {
-    let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
-    let id = get("tensor", defaults::BENCH_TENSOR).parse()?;
+    let id = arg::BENCH_TENSOR.read(opts)?;
     let t = state.source.tensor(id)?;
-    let reps: usize = get("repeats", defaults::BENCH_REPEATS).parse()?;
+    let reps: usize = arg::BENCH_REPEATS.read(opts)?;
     require((1..=30).contains(&reps), "repeats 1–30")?;
     let mut records = Vec::new();
     for f in [1usize, 4, 16] {
@@ -375,17 +354,13 @@ fn run_comparison(
     cpu: usize,
 ) -> Result<()> {
     use weight_atlas_rust::{comparison::Comparison, comparison_http};
-    let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
-    let b = PathBuf::from(
-        opts.get("compare-model")
-            .ok_or("--compare-model DIRECTORY is required for comparison")?,
-    );
+    let b = PathBuf::from(arg::COMPARE_MODEL.read(opts)?);
     let pair = Arc::new(Comparison::open(
         model,
         &b,
-        Path::new(&get("cache", defaults::COMPARISON_CACHE)),
+        Path::new(&arg::COMPARE_CACHE.read(opts)?),
     )?);
-    let id = get("tensor", defaults::COMPARISON_TENSOR).parse()?;
+    let id = arg::COMPARE_TENSOR.read(opts)?;
     let output = match Command::lookup(command) {
         Some(Command::CompareMetadata) => pair.model()?,
         Some(Command::CompareCalibrate) => {
@@ -398,17 +373,17 @@ fn run_comparison(
         }
         Some(Command::CompareInspect) => pair.inspect(
             id,
-            get("row", defaults::COMPARISON_ROW).parse()?,
-            get("col", defaults::COMPARISON_COL).parse()?,
+            arg::COMPARE_ROW.read(opts)?,
+            arg::COMPARE_COL.read(opts)?,
         )?,
         Some(Command::CompareTile) => {
-            let quantity = get("quantity", defaults::COMPARISON_QUANTITY);
-            let mapping = get("mapping", defaults::COMPARISON_MAPPING);
-            let level = get("level", &pair.pair(id)?.max_level.to_string()).parse()?;
-            let x = get("x", defaults::COMPARISON_X).parse()?;
-            let y = get("y", defaults::COMPARISON_Y).parse()?;
-            let prefix =
-                pair.output_prefix(Path::new(opts.get("out").ok_or("--out PREFIX required")?))?;
+            let quantity = arg::COMPARE_QUANTITY.read(opts)?;
+            let mapping = arg::COMPARE_MAPPING.read(opts)?;
+            let level = arg::COMPARE_LEVEL
+                .read_with_default(opts, &pair.pair(id)?.max_level.to_string())?;
+            let x = arg::COMPARE_X.read(opts)?;
+            let y = arg::COMPARE_Y.read(opts)?;
+            let prefix = pair.output_prefix(Path::new(&arg::COMPARE_OUT.read(opts)?))?;
             let (field, metrics) = pair.fields(id, &quantity, &mapping, level, x, y)?;
             let rule = if quantity == "abs_delta" || mapping == "magnitude" {
                 "tensor_magnitude"
@@ -440,7 +415,7 @@ fn run_comparison(
             })?
         }
         Some(Command::CompareServe) => {
-            comparison_http::serve(pair, get("port", defaults::COMPARISON_PORT).parse()?)?;
+            comparison_http::serve(pair, arg::COMPARE_PORT.read(opts)?)?;
             return Ok(());
         }
         _ => return Err("Unknown comparison command".into()),
