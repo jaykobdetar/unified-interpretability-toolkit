@@ -35,6 +35,8 @@ Typed presentation records in `src/slice/response.rs`, `src/state/response.rs`, 
 
 Entrypoint, source, dispatch and numeric-worker functions have private natural stages. Viewer and comparison worker loops keep queue behavior, deadlines and closure-owned state lifetimes. Single-tensor calibration holds the publication lock across its nonblocking queue attempt and error clearing; failed admission retains the previous error. [Native invariants](NATIVE-INVARIANTS.md) records explicit panic sites and poison policies. That source audit is not proof against every malformed input, implicit panic, poisoned lock or deadlock, and does not establish unused-code deletion safety.
 
+The native plain-error and coded intake-rejection bodies use private typed records in `server::response`. They convert through the existing sorted JSON value map, preserving field names, escaping and wire bytes. Callers still choose status and code; the bounded full-response and best-effort intake write paths retain their original behavior.
+
 ## Python package, architecture and engine boundary
 
 Canonical implementations live in the ordinary `atlas_host` and `analytics` packages under `tools`. Compatibility modules alias the same canonical module objects, mutable defaults and callbacks. The script directory supplies normal imports for documented `python3 tools/...` commands; no package installation is required. Late helper lookup is retained where callers/tests replace module state. Portable tests use the import environment supplied by the existing checker. Some standalone tests, qualification guards and the oracle retain explicit search-path setup; some imports remain deferred for numerical initialization, compatibility cycles or platform-specific use.

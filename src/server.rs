@@ -185,7 +185,11 @@ fn reply_viewer_bundle(mut socket: TcpStream) {
 // Intake never waits for output: one best-effort write, then close. Full responses
 // are owned by the bounded dispatch/numeric workers, away from header progress.
 fn reject_now(mut socket: TcpStream, status: u16, code: &str, message: &str) {
-    let body = json!({"api_version":1,"code":code,"error":message}).to_string();
+    let body = Value::from(response::CodedErrorBody {
+        code,
+        error: message,
+    })
+    .to_string();
     let wire = response_head(status, "application/json", body.len(), "") + &body;
     if socket.set_nonblocking(true).is_ok() {
         let _ = socket.write(wire.as_bytes());
@@ -195,7 +199,13 @@ pub(crate) fn json_reply(s: TcpStream, status: u16, v: Value) {
     reply(s, status, "application/json", v.to_string().as_bytes(), "")
 }
 pub(crate) fn error(s: TcpStream, status: u16, e: impl std::fmt::Display) {
-    json_reply(s, status, json!({"error":e.to_string(),"api_version":1}))
+    json_reply(
+        s,
+        status,
+        Value::from(response::ErrorBody {
+            error: e.to_string(),
+        }),
+    )
 }
 enum Job {
     Wake,

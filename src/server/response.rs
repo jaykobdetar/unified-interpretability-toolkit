@@ -92,3 +92,31 @@ impl From<View> for Value {
         ))
     }
 }
+
+pub(super) struct ErrorBody {
+    pub error: String,
+}
+
+impl From<ErrorBody> for Value {
+    fn from(response: ErrorBody) -> Self {
+        Value::Object(Map::from_iter([
+            ("error".to_owned(), Value::from(response.error)),
+            ("api_version".to_owned(), Value::from(1)),
+        ]))
+    }
+}
+
+pub(super) struct CodedErrorBody<'a> {
+    pub code: &'a str,
+    pub error: &'a str,
+}
+
+impl From<CodedErrorBody<'_>> for Value {
+    fn from(response: CodedErrorBody<'_>) -> Self {
+        Value::Object(Map::from_iter([
+            ("api_version".to_owned(), Value::from(1)),
+            ("code".to_owned(), Value::from(response.code)),
+            ("error".to_owned(), Value::from(response.error)),
+        ]))
+    }
+}
