@@ -40,7 +40,6 @@ if TYPE_CHECKING:
     from analytics.service import AnalyticsJobs, Handler as AnalyticsHandler
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "tools"))
 from atlas_host.inference_architecture import (
     ARCH,
     WIDTH,
