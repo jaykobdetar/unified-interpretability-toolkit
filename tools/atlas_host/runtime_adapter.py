@@ -325,24 +325,7 @@ class FixtureHost:
             )
         )
 
-    def acquire(
-        self, data: dict[str, Any], *, operation: StaticOperation | None = None
-    ) -> AcquisitionReceipt:
-        fields(data, ("model_id",), ("context_id", "capability"))
-        require(
-            ("context_id" in data) == ("capability" in data),
-            "Complete current lease required",
-        )
-        if operation is not None:
-            operation.check()
-        self.tick()
-        if operation is not None:
-            operation.check()
-        if self.stopping:
-            refuse(503, "cleanup_pending", "Reader cleanup is pending")
-        current = data.get("capability")
-        if current is not None and not self._owns(data["context_id"], current):
-            refuse(409, "stale_context", "Current reader lease is unavailable")
+    def _resolve_acquisition(self, data: dict[str, Any]) -> tuple[RegistryEntry, str]:
         kind = None
         try:
             entry = self.registry.owner_receipt(data["model_id"])
@@ -370,16 +353,15 @@ class FixtureHost:
                 "fixture_unavailable",
                 "Enabled verified synthetic fixture required",
             )
-        if (
-            self.reader is not None
-            and cast(RegistryEntry, self.entry)["model_id"] != entry["model_id"]
-        ):
-            if current is None or len(self.leases) != 1:
-                refuse(
-                    409,
-                    "reader_busy",
-                    "Another tab owns the reader; close its view or wait for its lease",
-                )
+        return entry, kind
+
+    def _prepare_acquisition(
+        self,
+        data: dict[str, Any],
+        entry: RegistryEntry,
+        kind: str,
+        operation: StaticOperation | None,
+    ) -> PreparedStatic | None:
         prepared = None
         if kind == "static":
             try:
@@ -424,6 +406,86 @@ class FixtureHost:
                     "static_unavailable",
                     "Registered static activation is unavailable",
                 )
+        return prepared
+
+    def _initialize_acquired_reader(
+        self,
+        entry: RegistryEntry,
+        kind: str,
+        prepared: PreparedStatic | None,
+        operation: StaticOperation | None,
+    ) -> None:
+        cache = self.cache_root / entry["model_id"]
+        require(
+            not cache.is_relative_to(Path(entry["root"])),
+            "Cache must be outside source",
+        )
+        try:
+            reader = (
+                cast(StaticFactory, self.factory)(
+                    deepcopy(entry), cache, prepared=prepared, operation=operation
+                )
+                if kind == "static" and operation is not None
+                else self.factory(deepcopy(entry), cache)
+            )
+        except (ValueError, OSError):
+            refuse(503, "activation_failed", "Fixture renderer could not start")
+        # Own the child before any fallible pipe/readiness initialization.
+        self.reader = reader
+        self.entry = entry
+        self.view_kind, self.static_prepared = kind, prepared
+        try:
+            if operation is not None:
+                operation.check()
+            initialize = getattr(reader, "initialize", None)
+            if initialize is not None:
+                initialize()
+            if operation is not None:
+                operation.check()
+        except BaseException as error:
+            try:
+                self._stop()
+            except Exception:
+                # Uncertain cleanup keeps the owned stopping handle/slot.
+                # Preserve the setup diagnostic instead of replacing it.
+                pass
+            if not isinstance(error, Exception):
+                raise
+            raise HostError(
+                503, "activation_failed", "Fixture renderer could not start"
+            ) from error
+        self.context, self.started = secrets.token_hex(16), self.clock()
+
+    def acquire(
+        self, data: dict[str, Any], *, operation: StaticOperation | None = None
+    ) -> AcquisitionReceipt:
+        fields(data, ("model_id",), ("context_id", "capability"))
+        require(
+            ("context_id" in data) == ("capability" in data),
+            "Complete current lease required",
+        )
+        if operation is not None:
+            operation.check()
+        self.tick()
+        if operation is not None:
+            operation.check()
+        if self.stopping:
+            refuse(503, "cleanup_pending", "Reader cleanup is pending")
+        current = data.get("capability")
+        if current is not None and not self._owns(data["context_id"], current):
+            refuse(409, "stale_context", "Current reader lease is unavailable")
+        entry, kind = self._resolve_acquisition(data)
+        if (
+            self.reader is not None
+            and cast(RegistryEntry, self.entry)["model_id"] != entry["model_id"]
+        ):
+            if current is None or len(self.leases) != 1:
+                refuse(
+                    409,
+                    "reader_busy",
+                    "Another tab owns the reader; close its view or wait for its lease",
+                )
+        prepared = self._prepare_acquisition(data, entry, kind, operation)
         if (
             self.reader is not None
             and cast(RegistryEntry, self.entry)["model_id"] != entry["model_id"]
@@ -437,46 +499,7 @@ class FixtureHost:
                 operation.check()
             current = None
         if self.reader is None:
-            cache = self.cache_root / entry["model_id"]
-            require(
-                not cache.is_relative_to(Path(entry["root"])),
-                "Cache must be outside source",
-            )
-            try:
-                reader = (
-                    cast(StaticFactory, self.factory)(
-                        deepcopy(entry), cache, prepared=prepared, operation=operation
-                    )
-                    if kind == "static" and operation is not None
-                    else self.factory(deepcopy(entry), cache)
-                )
-            except (ValueError, OSError):
-                refuse(503, "activation_failed", "Fixture renderer could not start")
-            # Own the child before any fallible pipe/readiness initialization.
-            self.reader = reader
-            self.entry = entry
-            self.view_kind, self.static_prepared = kind, prepared
-            try:
-                if operation is not None:
-                    operation.check()
-                initialize = getattr(reader, "initialize", None)
-                if initialize is not None:
-                    initialize()
-                if operation is not None:
-                    operation.check()
-            except BaseException as error:
-                try:
-                    self._stop()
-                except Exception:
-                    # Uncertain cleanup keeps the owned stopping handle/slot.
-                    # Preserve the setup diagnostic instead of replacing it.
-                    pass
-                if not isinstance(error, Exception):
-                    raise
-                raise HostError(
-                    503, "activation_failed", "Fixture renderer could not start"
-                ) from error
-            self.context, self.started = secrets.token_hex(16), self.clock()
+            self._initialize_acquired_reader(entry, kind, prepared, operation)
         if current is None:
             if len(self.leases) >= 4:
                 refuse(409, "reader_busy", "Reader tab lease capacity reached")
