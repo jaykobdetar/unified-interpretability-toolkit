@@ -1,10 +1,5 @@
 //! Inactive hosted renderer: one inherited Unix channel, no listener or work queue.
-use crate::{
-    api, require, server,
-    slice::{parse_indices, TensorSlice},
-    state::State,
-    Result,
-};
+use crate::{api, require, server, slice::TensorSlice, state::State, Result};
 use serde::Deserialize;
 #[cfg(test)]
 use serde_json::json;
@@ -54,19 +49,15 @@ fn execute(state: &State, request: &Request) -> Result<(String, Vec<u8>)> {
         api::hosted::MODEL => state.model()?,
         api::hosted::PROGRESS | api::hosted::TENSOR_STATUS => {
             state.status(if request.query.contains_key(api::parameter::TENSOR) {
-                Some(q.int(api::parameter::TENSOR, "0")?)
+                Some(q.read(&api::argument::TENSOR)?)
             } else {
                 None
             })?
         }
         api::hosted::INSPECT => server::inspect(state, &q)?,
         api::hosted::BINDING | api::hosted::VIEW => {
-            let id = q.int(api::parameter::TENSOR, "0")?;
-            let slice = TensorSlice::new(
-                &state.source,
-                id,
-                &parse_indices(q.get(api::parameter::SLICE, ""))?,
-            )?;
+            let id = q.read(&api::argument::TENSOR)?;
+            let slice = TensorSlice::new(&state.source, id, &q.read(&api::argument::SLICE)?)?;
             if request.route == api::hosted::BINDING {
                 Value::from(response::Binding {
                     state,
@@ -92,17 +83,17 @@ fn execute(state: &State, request: &Request) -> Result<(String, Vec<u8>)> {
                 request.query.contains_key(api::parameter::TENSOR),
                 "One explicit tensor required",
             )?;
-            state.calibrate_one(q.int(api::parameter::TENSOR, "0")?)?;
+            state.calibrate_one(q.read(&api::argument::TENSOR)?)?;
             Value::from(response::Calibrated)
         }
         api::hosted::TILE => {
             let (png, _, _) = state.tile_slice(
-                q.int(api::parameter::TENSOR, "0")?,
-                &parse_indices(q.get(api::parameter::SLICE, ""))?,
-                q.get(api::parameter::RULE, "global_linear"),
-                q.int(api::parameter::LEVEL, "0")?.try_into()?,
-                q.int(api::parameter::X, "0")?,
-                q.int(api::parameter::Y, "0")?,
+                q.read(&api::argument::TENSOR)?,
+                &q.read(&api::argument::SLICE)?,
+                q.field(&api::argument::RULE),
+                q.read(&api::argument::LEVEL)?,
+                q.read(&api::argument::X)?,
+                q.read(&api::argument::Y)?,
             )?;
             return Ok(("image/png".into(), png));
         }

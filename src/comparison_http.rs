@@ -42,12 +42,12 @@ fn numeric_worker(receiver: std::sync::mpsc::Receiver<Job>, worker: &Arc<Compari
                 let start = Instant::now();
                 let result = (|| {
                     worker.tile(
-                        q.int("tensor", "0")?,
-                        q.get("quantity", "delta"),
-                        q.get("mapping", "linear"),
-                        q.int("level", "0")?.try_into()?,
-                        q.int("x", "0")?,
-                        q.int("y", "0")?,
+                        q.read(&api::argument::comparison::TENSOR)?,
+                        q.field(&api::argument::comparison::QUANTITY),
+                        q.field(&api::argument::comparison::MAPPING),
+                        q.read(&api::argument::comparison::LEVEL)?,
+                        q.read(&api::argument::comparison::X)?,
+                        q.read(&api::argument::comparison::Y)?,
                     )
                 })();
                 match result {Ok((png,cached,m))=>server::reply(socket,200,"image/png",&png,&format!("X-Atlas-Factor: {}\r\nX-Atlas-Cache: {}\r\nX-Atlas-Seconds: {:.6}\r\nX-Atlas-Source-Bytes: {}\r\nX-Atlas-Coordinate-Space: checkpoint-comparison-v1\r\nX-Atlas-Inference-Editable: false\r\nX-Atlas-Comparison-Identity: {}\r\nX-Atlas-Source-A-Identity: {}\r\nX-Atlas-Source-B-Identity: {}\r\n",m.factor,if cached{"hit"}else{"miss"},start.elapsed().as_secs_f64(),m.source_bytes_read,worker.identity,worker.a.identity,worker.b.identity)),Err(e)=>server::error(socket,code(&e),e)}
@@ -115,17 +115,19 @@ fn dispatch(
             return;
         }
     };
-    if !q.get(api::parameter::COMPARISON_IDENTITY, "").is_empty()
-        && q.get(api::parameter::COMPARISON_IDENTITY, "") != state.identity
+    if !q
+        .field(&api::argument::comparison::COMPARISON_IDENTITY)
+        .is_empty()
+        && q.field(&api::argument::comparison::COMPARISON_IDENTITY) != state.identity
     {
         server::error(socket, 400, "Comparison identity changed; refresh required");
         return;
     }
-    if method == "POST" && path == api::comparison::CALIBRATION {
+    if method == api::comparison::methods::CALIBRATION && path == api::comparison::CALIBRATION {
         reply_calibration(state, sender, socket, &q, &headers);
         return;
     }
-    if method != "GET" {
+    if method != api::comparison::methods::MODEL {
         server::error(
             socket,
             400,
@@ -161,11 +163,11 @@ fn reply_calibration(
             "Local action header required",
         )?;
         require(
-            q.get("all", "0") != "1",
+            q.field(&api::argument::comparison::ALL) != "1",
             "Comparison calibration is explicitly tensor-scoped",
         )?;
         state.check()?;
-        let id = q.int("tensor", "")?;
+        let id = q.read(&api::argument::comparison::CALIBRATION_TENSOR)?;
         state.pair(id)?;
         Ok(id)
     })();
@@ -211,17 +213,17 @@ fn read_api(state: &Comparison, path: &str, q: &Query) -> Option<Result<Value>> 
         api::comparison::MODEL => Some(state.model()),
         api::comparison::VIEW => Some((|| {
             state.view(
-                q.int(api::parameter::TENSOR, "0")?,
-                q.get(api::parameter::LEFT, "a"),
-                q.get(api::parameter::RIGHT, "b"),
-                q.get(api::parameter::MAPPING, "linear"),
+                q.read(&api::argument::comparison::TENSOR)?,
+                q.field(&api::argument::comparison::LEFT),
+                q.field(&api::argument::comparison::RIGHT),
+                q.field(&api::argument::comparison::MAPPING),
             )
         })()),
         api::comparison::INSPECT => Some((|| {
             state.inspect(
-                q.int(api::parameter::TENSOR, "0")?,
-                q.int(api::parameter::ROW, "0")?,
-                q.int(api::parameter::COL, "0")?,
+                q.read(&api::argument::comparison::TENSOR)?,
+                q.read(&api::argument::comparison::ROW)?,
+                q.read(&api::argument::comparison::COL)?,
             )
         })()),
         _ => None,

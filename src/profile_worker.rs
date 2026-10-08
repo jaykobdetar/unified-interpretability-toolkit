@@ -1,7 +1,8 @@
 //! Private disposable worker protocol. No HTTP, calibration/cache or subprocesses.
 use crate::{
+    command::argument as arg,
     configure, require, sha,
-    slice::{parse_indices, TensorSlice},
+    slice::TensorSlice,
     source::Source,
     strength::{snapshot, StrengthProfile, CHUNK_VALUES},
     Result,
@@ -26,8 +27,8 @@ fn sealed(file: &File, size: usize) -> Result<()> {
         "Snapshot descriptor is not sealed/exact-sized",
     )
 }
-fn fd(value: &str) -> Result<File> {
-    let input: i32 = value.parse()?;
+fn fd(value: &str, parameter: &crate::parameter::Parameter<i32>) -> Result<File> {
+    let input: i32 = parameter.parse_value(value)?;
     require(input > 2, "Private inherited FD required")?;
     // Duplicate ownership: never close an arbitrary caller handle via from_raw_fd.
     let owned = unsafe { libc::fcntl(input, libc::F_DUPFD_CLOEXEC, 3) };
@@ -44,8 +45,8 @@ pub fn run(options: &BTreeMap<String, String>) -> Result<()> {
     let source = Source::open(Path::new(&options["model"]))?;
     let slice = TensorSlice::new(
         &source,
-        options["tensor"].parse()?,
-        &parse_indices(&options["slice"])?,
+        arg::PROFILE_TENSOR.read(options)?,
+        &arg::PROFILE_SLICE.read(options)?,
     )?;
     let model_identity = sha(json!([
         "weight-atlas-model-v1",
@@ -61,9 +62,9 @@ pub fn run(options: &BTreeMap<String, String>) -> Result<()> {
     )?;
     let layout = snapshot::layout(slice.tensor.rows, slice.tensor.cols, binding.len())?;
     limit_output(layout.frame_bytes)?;
-    let seed: u64 = options["seed"].parse()?;
+    let seed: u64 = arg::PROFILE_SEED.read(options)?;
     require(seed <= u32::MAX as u64, "Worker seed must fit uint32")?;
-    let values: usize = options["values"].parse()?;
+    let values: usize = arg::PROFILE_VALUES.read(options)?;
     let mut output = candidate_output(options)?;
     let context = ProfileContext {
         source: &source,
@@ -126,8 +127,8 @@ fn admit_options(
         options.contains_key("input-fd") == options.contains_key("input-sha"),
         "Incomplete restore input",
     )?;
-    let ms: u64 = options["wall-ms"].parse()?;
-    let cpu: u64 = options["cpu-ms"].parse()?;
+    let ms: u64 = arg::PROFILE_WALL_MS.read(options)?;
+    let cpu: u64 = arg::PROFILE_CPU_MS.read(options)?;
     require(
         (1..=5000).contains(&ms) && (1..=4000).contains(&cpu),
         "Worker duration outside total grant",
@@ -163,7 +164,7 @@ fn limit_output(frame_bytes: usize) -> Result<()> {
 }
 
 fn candidate_output(options: &BTreeMap<String, String>) -> Result<File> {
-    let output = fd(&options["output-fd"])?;
+    let output = fd(&options["output-fd"], &arg::PROFILE_OUTPUT_FD)?;
     require(
         output.metadata()?.len() == 0,
         "Candidate output must be empty",
@@ -179,7 +180,7 @@ fn create_profile(context: &ProfileContext<'_>, slice: TensorSlice) -> Result<St
             input != &context.options["output-fd"],
             "Input and output must differ",
         )?;
-        let mut input = fd(input)?;
+        let mut input = fd(input, &arg::PROFILE_INPUT_FD)?;
         sealed(&input, context.frame_bytes)?;
         input.seek(SeekFrom::Start(0))?;
         StrengthProfile::restore_snapshot(

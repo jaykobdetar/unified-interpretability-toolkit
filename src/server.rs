@@ -3,7 +3,7 @@ mod reuse;
 mod reuse_transport;
 use crate::{
     api, headroom, render, require,
-    slice::{parse_indices, TensorSlice},
+    slice::TensorSlice,
     source::{exact_decimal_for, Dtype},
     state::State,
     Result,
@@ -24,6 +24,12 @@ use std::{
 #[derive(Clone)]
 pub struct Query(BTreeMap<String, String>);
 impl Query {
+    pub fn field<T>(&self, parameter: &crate::parameter::Parameter<T>) -> &str {
+        parameter.value(&self.0)
+    }
+    pub fn read<T>(&self, parameter: &crate::parameter::Parameter<T>) -> Result<T> {
+        parameter.read(&self.0)
+    }
     pub fn get<'a>(&'a self, key: &str, default: &'a str) -> &'a str {
         self.0.get(key).map(String::as_str).unwrap_or(default)
     }
@@ -219,11 +225,11 @@ pub(crate) fn disconnected(s: &TcpStream) -> bool {
     matches!(r, Ok(0))
 }
 pub fn inspect(state: &State, q: &Query) -> Result<Value> {
-    let id = q.int("tensor", "0")?;
-    let slice = TensorSlice::new(&state.source, id, &parse_indices(q.get("slice", ""))?)?;
+    let id = q.read(&api::argument::TENSOR)?;
+    let slice = TensorSlice::new(&state.source, id, &q.read(&api::argument::SLICE)?)?;
     let t = &slice.tensor;
-    let row = q.int("row", "0")?;
-    let col = q.int("col", "0")?;
+    let row = q.read(&api::argument::ROW)?;
+    let col = q.read(&api::argument::COL)?;
     let (bits, offset) = state.source.scalar_bits(t, row, col)?;
     let dtype = Dtype::parse(&t.dtype)?;
     let value = dtype.value(bits);
@@ -231,8 +237,8 @@ pub fn inspect(state: &State, q: &Query) -> Result<Value> {
     let mut transform_errors = serde_json::Map::new();
     let mut ready = true;
     for (side, rule) in [
-        ("left", q.get("left", "global_linear")),
-        ("right", q.get("right", "global_asinh")),
+        ("left", q.field(&api::argument::LEFT)),
+        ("right", q.field(&api::argument::RIGHT)),
     ] {
         render::rule_info(rule)?;
         let result = (|| -> Result<Value> {
@@ -438,14 +444,14 @@ fn numeric_worker(
                 }
                 let start = Instant::now();
                 let result = (|| {
-                    let binding = q.get("binding", "");
+                    let binding = q.field(&api::argument::BINDING);
                     worker.tile_slice_bound(
-                        q.int("tensor", "0")?,
-                        &parse_indices(q.get("slice", ""))?,
-                        q.get("rule", "global_linear"),
-                        q.int("level", "0")?.try_into()?,
-                        q.int("x", "0")?,
-                        q.int("y", "0")?,
+                        q.read(&api::argument::TENSOR)?,
+                        &q.read(&api::argument::SLICE)?,
+                        q.field(&api::argument::RULE),
+                        q.read(&api::argument::LEVEL)?,
+                        q.read(&api::argument::X)?,
+                        q.read(&api::argument::Y)?,
                         (!binding.is_empty()).then_some(binding),
                     )
                 })();
@@ -453,7 +459,7 @@ fn numeric_worker(
                     Ok((png, cached, metrics)) => {
                         let mut headers = format!("X-Atlas-Factor: {}\r\nX-Atlas-Cache: {}\r\nX-Atlas-Seconds: {:.6}\r\nX-Atlas-Source-Bytes: {}\r\n",
                             metrics.factor, if cached { "hit" } else { "miss" }, start.elapsed().as_secs_f64(), metrics.source_bytes_read);
-                        if !q.get("binding", "").is_empty() {
+                        if !q.field(&api::argument::BINDING).is_empty() {
                             headers
                                 .push_str("Cache-Control: private, max-age=86400, immutable\r\n");
                         }
@@ -713,7 +719,7 @@ fn dispatch(
         raw,
         &method,
         &path,
-        q.get(api::parameter::BINDING, ""),
+        q.field(&api::argument::BINDING),
         headers.get("connection").map(String::as_str).unwrap_or(""),
     );
     let Connection {
@@ -721,11 +727,11 @@ fn dispatch(
         lease,
         eligible,
     } = connection;
-    if method == "POST" && path == api::viewer::CALIBRATION {
+    if method == api::viewer::methods::CALIBRATION && path == api::viewer::CALIBRATION {
         reply_calibration(state, sender, socket, &q, &headers);
         return;
     }
-    if method != "GET" {
+    if method != api::viewer::methods::MODEL {
         error(
             socket,
             400,
@@ -796,7 +802,7 @@ fn reply_calibration(
         error(socket, 400, "Local action header required");
         return;
     }
-    if q.get("all", "0") == "1" {
+    if q.field(&api::argument::ALL) == "1" {
         let mut p = state.progress.lock().unwrap();
         // Wake a sleeping worker without recurring polling. A full queue
         // already wakes it; disconnected transport cannot accept work.
@@ -822,7 +828,7 @@ fn reply_calibration(
         );
         return;
     }
-    match q.int("tensor", "0").and_then(|id| {
+    match q.read(&api::argument::TENSOR).and_then(|id| {
         let t = state.source.tensor(id)?;
         require(
             t.available,
@@ -869,13 +875,13 @@ fn enqueue_tile(sender: &SyncSender<Job>, connection: Connection, q: Query) {
 fn reply_status(state: &State, socket: TcpStream, path: &str, q: &Query) {
     let result = (|| -> Result<Value> {
         let selected = if path == api::viewer::TENSOR_STATUS
-            || !q.get(api::parameter::TENSOR, "").is_empty()
+            || !q.field(&api::argument::SELECTED_TENSOR).is_empty()
         {
             require(
-                !q.get(api::parameter::TENSOR, "").is_empty(),
+                !q.field(&api::argument::SELECTED_TENSOR).is_empty(),
                 "Selected tensor required",
             )?;
-            Some(q.int(api::parameter::TENSOR, "0")?)
+            Some(q.read(&api::argument::TENSOR)?)
         } else {
             None
         };
@@ -890,8 +896,8 @@ fn reply_status(state: &State, socket: TcpStream, path: &str, q: &Query) {
 fn reply_view(state: &State, socket: TcpStream, q: &Query) {
     let result = (|| -> Result<Value> {
         state.source.check()?;
-        let id = q.int("tensor", "0")?;
-        let slice = TensorSlice::new(&state.source, id, &parse_indices(q.get("slice", ""))?)?;
+        let id = q.read(&api::argument::TENSOR)?;
+        let slice = TensorSlice::new(&state.source, id, &q.read(&api::argument::SLICE)?)?;
         let t = state.source.tensor(id)?;
         let selected = Value::from(response::Selection {
             tensor: serde_json::to_value(t)?,
@@ -901,20 +907,16 @@ fn reply_view(state: &State, socket: TcpStream, q: &Query) {
         });
         let l = state.legends(
             t,
-            q.get("left", "global_linear"),
-            q.get("right", "global_asinh"),
+            q.field(&api::argument::LEFT),
+            q.field(&api::argument::RIGHT),
         )?;
         Ok(response::View {
             tensor: selected,
             source_binding: state.slice_binding(&slice),
-            left_binding: state.tile_binding_for(
-                &slice,
-                q.get("left", "global_linear"),
-                &l["left"],
-            ),
+            left_binding: state.tile_binding_for(&slice, q.field(&api::argument::LEFT), &l["left"]),
             right_binding: state.tile_binding_for(
                 &slice,
-                q.get("right", "global_asinh"),
+                q.field(&api::argument::RIGHT),
                 &l["right"],
             ),
             legends: l,

@@ -246,7 +246,7 @@ fn run_benchmark(
 }
 
 fn initialize_resources(command: &str, opts: &BTreeMap<String, String>) -> Result<()> {
-    if let Some(raw) = opts.get("resources") {
+    if let Some(raw) = opts.get(arg::RESOURCES.name) {
         require(
             weight_atlas_rust::resources::StartupScope::for_command(command)
                 == weight_atlas_rust::resources::StartupScope::Standalone,
@@ -365,7 +365,7 @@ fn run_comparison(
         Some(Command::CompareMetadata) => pair.model()?,
         Some(Command::CompareCalibrate) => {
             require(
-                opts.contains_key("tensor"),
+                opts.contains_key(arg::COMPARE_TENSOR.name),
                 "Comparison calibration requires an explicit --tensor ID",
             )?;
             pair.calibrate_one(id)?;

@@ -49,7 +49,7 @@ impl TryFrom<View<'_>> for Value {
         } = report;
         Ok(
             json!({"api_version":1,"tensor":selected,"source_binding":state.slice_binding(slice),
-                    "legends":state.legends(t,q.get(api::parameter::LEFT,"global_linear"),q.get(api::parameter::RIGHT,"global_asinh"))?,
+                    "legends":state.legends(t,q.field(&api::argument::LEFT),q.field(&api::argument::RIGHT))?,
                     "tile_size":256,"overlap":0,"source_values_unchanged":true}),
         )
     }
