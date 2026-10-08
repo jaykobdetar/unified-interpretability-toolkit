@@ -6,7 +6,9 @@ use crate::{
     Result,
 };
 use serde::Deserialize;
+#[cfg(test)]
 use serde_json::json;
+use serde_json::Value;
 use std::{
     collections::BTreeMap,
     io::{Read, Write},
@@ -15,6 +17,8 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+
+mod response;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -64,16 +68,23 @@ fn execute(state: &State, request: &Request) -> Result<(String, Vec<u8>)> {
                 &parse_indices(q.get(api::parameter::SLICE, ""))?,
             )?;
             if request.route == api::hosted::BINDING {
-                json!({"api_version":1,"source_binding":state.slice_binding(&slice)})
+                Value::from(response::Binding {
+                    state,
+                    slice: &slice,
+                })
             } else {
                 let t = state.source.tensor(id)?;
-                let mut selected = serde_json::to_value(t)?;
-                selected["slice"] = json!(slice.leading);
-                selected["slice_identity"] = json!(slice.identity);
-                selected["slice_count"] = json!(slice.tensor.count);
-                json!({"api_version":1,"tensor":selected,"source_binding":state.slice_binding(&slice),
-                    "legends":state.legends(t,q.get(api::parameter::LEFT,"global_linear"),q.get(api::parameter::RIGHT,"global_asinh"))?,
-                    "tile_size":256,"overlap":0,"source_values_unchanged":true})
+                let selected = Value::from(response::Selection {
+                    selected: serde_json::to_value(t)?,
+                    slice: &slice,
+                });
+                Value::try_from(response::View {
+                    state,
+                    slice: &slice,
+                    t,
+                    q: &q,
+                    selected: &selected,
+                })?
             }
         }
         api::hosted::CALIBRATION => {
@@ -82,7 +93,7 @@ fn execute(state: &State, request: &Request) -> Result<(String, Vec<u8>)> {
                 "One explicit tensor required",
             )?;
             state.calibrate_one(q.int(api::parameter::TENSOR, "0")?)?;
-            json!({"api_version":1,"complete":true})
+            Value::from(response::Calibrated)
         }
         api::hosted::TILE => {
             let (png, _, _) = state.tile_slice(
@@ -171,10 +182,12 @@ pub fn run(state: Arc<State>, fd: i32) -> Result<()> {
                 br#"{"error":"Hosted operation unavailable"}"#.to_vec(),
             ),
         };
-        let header = serde_json::to_vec(
-            &json!({"ack":{"version":1,"operation_id":command.operation_id,
-            "complete":true,"numeric_idle":true},"status":status,"mime":mime,"body_bytes":body.len()}),
-        )?;
+        let header = serde_json::to_vec(&Value::from(response::Frame {
+            operation_id: &command.operation_id,
+            status,
+            mime: &mime,
+            body: &body,
+        }))?;
         let remaining = end
             .checked_duration_since(Instant::now())
             .filter(|v| !v.is_zero())
@@ -362,5 +375,134 @@ mod declaration_vectors {
                 "hosted declaration refusal: {route}"
             );
         }
+    }
+
+    // Additional hosted response witnesses; original declaration tests above are unchanged.
+    #[test]
+    fn hosted_binding_view_and_calibration_keep_exact_envelopes() {
+        let _isolation = crate::resources::test_workspace_guard();
+        let fixture = Fixture::new();
+        let (mime, bytes) = fixture.request("calibration", &[("tensor", "0")]).unwrap();
+        assert_eq!(mime, "application/json");
+        assert_eq!(bytes, br#"{"api_version":1,"complete":true}"#);
+        let slice = TensorSlice::new(&fixture.state.source, 0, &[]).unwrap();
+        let binding = fixture.state.slice_binding(&slice);
+        let (_, bytes) = fixture
+            .request("binding", &[("tensor", "0"), ("slice", "")])
+            .unwrap();
+        assert_eq!(
+            bytes,
+            serde_json::to_vec(&json!({"api_version":1,"source_binding":binding})).unwrap()
+        );
+        let (_, bytes) = fixture
+            .request(
+                "view",
+                &[
+                    ("tensor", "0"),
+                    ("slice", ""),
+                    ("left", "tensor_linear"),
+                    ("right", "tensor_asinh"),
+                ],
+            )
+            .unwrap();
+        let tensor = &fixture.state.source.tensors[0];
+        let mut selected = serde_json::to_value(tensor).unwrap();
+        selected["slice"] = json!([]);
+        selected["slice_identity"] = json!(slice.identity);
+        selected["slice_count"] = json!(2);
+        let legends = fixture
+            .state
+            .legends(tensor, "tensor_linear", "tensor_asinh")
+            .unwrap();
+        let expected = json!({"api_version":1,"tensor":selected,"source_binding":binding,"legends":legends,
+            "tile_size":256,"overlap":0,"source_values_unchanged":true});
+        assert_eq!(bytes, serde_json::to_vec(&expected).unwrap());
+    }
+
+    struct LocalChannel {
+        stream: UnixStream,
+        worker: Option<std::thread::JoinHandle<Result<()>>>,
+    }
+    impl LocalChannel {
+        fn new(fixture: &Fixture) -> Self {
+            let state = Arc::new(
+                State::open(
+                    &fixture.root.join("model"),
+                    &fixture.root.join("wire-cache"),
+                    None,
+                    None,
+                )
+                .unwrap(),
+            );
+            let (stream, receiver) = UnixStream::pair().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let worker = std::thread::spawn(move || {
+                let fd = std::os::fd::AsRawFd::as_raw_fd(&receiver);
+                run(state, fd)
+            });
+            Self {
+                stream,
+                worker: Some(worker),
+            }
+        }
+    }
+    impl Drop for LocalChannel {
+        fn drop(&mut self) {
+            let _ = self.stream.shutdown(std::net::Shutdown::Both);
+            let result = self.worker.take().unwrap().join();
+            if !std::thread::panicking() {
+                assert!(
+                    matches!(result, Ok(Ok(()))),
+                    "owned hosted thread cleanup assertion: {result:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn private_channel_acknowledges_exact_completed_body_and_reaps() {
+        let _isolation = crate::resources::test_workspace_guard();
+        let fixture = Fixture::new();
+        let mut channel = LocalChannel::new(&fixture);
+        let id = "0123456789abcdef0123456789abcdef";
+        let command =
+            serde_json::to_vec(&json!({"version":1,"operation_id":id,"kind":"calibration",
+            "remaining_ms":5000,"request":{"route":"calibration","query":{"tensor":"0"}}}))
+            .unwrap();
+        channel
+            .stream
+            .write_all(&(command.len() as u32).to_be_bytes())
+            .unwrap();
+        channel.stream.write_all(&command).unwrap();
+        let mut size = [0u8; 4];
+        let read = channel.stream.read_exact(&mut size);
+        assert!(
+            read.is_ok(),
+            "bounded header prefix read assertion: {read:?}"
+        );
+        let size = u32::from_be_bytes(size) as usize;
+        assert!(size <= 4096, "header length bound assertion");
+        let mut header = vec![0u8; size];
+        let read = channel.stream.read_exact(&mut header);
+        assert!(read.is_ok(), "bounded header read assertion: {read:?}");
+        let body = br#"{"api_version":1,"complete":true}"#;
+        let expected = json!({"ack":{"version":1,"operation_id":id,"complete":true,"numeric_idle":true},
+            "status":200,"mime":"application/json","body_bytes":body.len()});
+        assert_eq!(
+            header,
+            serde_json::to_vec(&expected).unwrap(),
+            "exact private acknowledgement bytes"
+        );
+        let mut received = vec![0u8; body.len()];
+        let read = channel.stream.read_exact(&mut received);
+        assert!(read.is_ok(), "bounded body read assertion: {read:?}");
+        assert_eq!(received, body);
+        drop(channel);
+        // The owned thread joins before the fixture removes its source/cache tree.
     }
 }
