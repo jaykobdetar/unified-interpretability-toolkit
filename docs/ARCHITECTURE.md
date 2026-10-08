@@ -69,7 +69,7 @@ Native work retains one CPU, a 768 MiB address-space cap, bounded bands, output/
 
 The supervisor owns grants, cumulative CPU accounting, snapshot charges and busy/cleanup decisions. Profile platform/OS adapters observe and operate on owned descriptors/processes. HTTP adapters validate requests before dispatch and preserve bounded writes, status/code/body fields and error text. A caller never acquires another session's worker. Uncertain cleanup remains blocking; only owned children are terminated/reaped, and completion follows verified cleanup.
 
-Analytics reads bounded BF16 windows, labels partial coverage, uses deterministic controls and optionally runs a small SVD child. Its runtime setup precedes input/numerical work; affinity, nice value, alarm where applicable, inherited resource caps and admission order remain unchanged. Optional NumPy is loaded only in its existing child path. Numerical oracle tests and inert worker tests qualify different boundaries.
+Analytics reads bounded BF16 windows, labels partial coverage, uses deterministic controls and optionally runs a small SVD child. Its request dispatcher selects model ranking, a summary stage or a region-report stage. The two private report stages retain their original source reads, final source verification, deferred numerical imports, computation arguments and result fields; runtime setup still precedes request processing. Its runtime setup precedes input/numerical work; affinity, nice value, alarm where applicable, inherited resource caps and admission order remain unchanged. Optional NumPy is loaded only in its existing child path. Numerical oracle tests and inert worker tests qualify different boundaries.
 
 ## Browser and owner workflows
 
