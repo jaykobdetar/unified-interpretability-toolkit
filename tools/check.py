@@ -42,6 +42,7 @@ def lint() -> None:
             if file.suffix in (".js", ".cjs", ".mjs") and "vendor" not in file.parts:
                 run(["node", "--check", str(file.relative_to(ROOT))])
     run(["bash", "-n", "run-atlas.sh"])
+    run([sys.executable, "-B", "tools/generate_experiment_schema.py", "--check"])
 
 
 def contracts() -> None:

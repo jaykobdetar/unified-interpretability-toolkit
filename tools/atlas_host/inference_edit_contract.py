@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import math
 from typing import Any
 
+from atlas_host import experiment_schema as _record_schema
 from atlas_host.inference_geometry import Architecture
 
 
@@ -75,8 +76,10 @@ def validate_edits(
             "scale",
         ):
             raise ValueError("Choose rows, columns, or element and zero or scale")
-        keys = {"tensor", "shape", "kind", "operation"} | (
-            {"row", "col"} if kind == "element" else {"start", "end"}
+        keys = set(_record_schema.EDIT_BASE_FIELDS) | (
+            set(_record_schema.EDIT_ELEMENT_FIELDS)
+            if kind == "element"
+            else set(_record_schema.EDIT_RANGE_FIELDS)
         )
         if operation == "scale":
             keys.add("scale")

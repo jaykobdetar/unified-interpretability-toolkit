@@ -101,7 +101,7 @@
     function validateRecordEnvelope(record) {
       keys(
         record,
-        "schema created_at status complete worker_cleanup_confirmed termination privacy request settings runtime limits summary baseline edited steps sweep_plan",
+        /* schema-fields: archive */ "schema created_at status complete worker_cleanup_confirmed termination privacy request settings runtime limits summary baseline edited steps sweep_plan" /* end-schema-fields */,
       );
       check(
         record.runtime &&
@@ -134,7 +134,7 @@
       const request = record.request;
       keys(
         request,
-        "mode max_new_tokens layer activation_site source_model edits observation prompt prompt_ids prompts preview_digest plan_digest positions targets operation scale seed capture_layer",
+        /* schema-fields: archive_request */ "mode max_new_tokens layer activation_site source_model edits observation prompt prompt_ids prompts preview_digest plan_digest positions targets operation scale seed capture_layer" /* end-schema-fields */,
       );
       check(
         [undefined, "generate", "comparison", "prompt_pair", "sweep"].includes(
@@ -142,7 +142,10 @@
         ),
         "Unsupported archived mode",
       );
-      keys(request.source_model, "repo revision weights_sha256");
+      keys(
+        request.source_model,
+        /* schema-fields: source_model */ "repo revision weights_sha256" /* end-schema-fields */,
+      );
       check(
         Object.keys(request.source_model).length === 0 ||
           ["repo", "revision", "weights_sha256"].every(
@@ -292,7 +295,10 @@
     };
     const candidates = (a) =>
       a?.forEach((c) => {
-        keys(c, "id piece baseline_logit edited_logit delta");
+        keys(
+          c,
+          /* schema-fields: candidate */ "id piece baseline_logit edited_logit delta" /* end-schema-fields */,
+        );
         check(
           Object.keys(c).length === 5 &&
             integer(c.id, 0, 49151) &&
@@ -331,7 +337,7 @@
         );
         keys(
           v,
-          "planned_ids completed_ids unrun_ids interrupted_id complete finished_targets unfinished_targets unfinished_heads",
+          /* schema-fields: coverage */ "planned_ids completed_ids unrun_ids interrupted_id complete finished_targets unfinished_targets unfinished_heads" /* end-schema-fields */,
         );
         check(
           Object.keys(v).length === 8 &&
@@ -363,9 +369,12 @@
       );
       keys(
         a,
-        "model_type width layers query_heads kv_heads head_dim queries_per_kv vocab_size intermediate_size capture_sites layout head_ablation query_intervention",
+        /* schema-fields: architecture */ "model_type width layers query_heads kv_heads head_dim queries_per_kv vocab_size intermediate_size capture_sites layout head_ablation query_intervention" /* end-schema-fields */,
       );
-      keys(a.capture_sites, "block attention mlp");
+      keys(
+        a.capture_sites,
+        /* schema-fields: capture_sites */ "block attention mlp" /* end-schema-fields */,
+      );
       check(
         Object.keys(a).length === 13 &&
           Object.keys(a.capture_sites).length === 3 &&
@@ -385,7 +394,7 @@
         if (step.sweep) {
           keys(
             step.sweep.metrics,
-            "logit_delta_rms logit_delta_max_abs softmax_total_variation baseline_argmax_id baseline_argmax_logit_delta edited_argmax_id context semantics",
+            /* schema-fields: sweep_metrics */ "logit_delta_rms logit_delta_max_abs softmax_total_variation baseline_argmax_id baseline_argmax_logit_delta edited_argmax_id context semantics" /* end-schema-fields */,
           );
           candidates(step.sweep.candidates);
         }
@@ -396,12 +405,18 @@
         const plan = record.sweep_plan;
         keys(
           plan,
-          "version scope architecture intervention_semantics control_semantics seed control_version source_model targets cases prompt_count records prefills capture_layer activation_site coverage limits",
+          /* schema-fields: sweep_plan */ "version scope architecture intervention_semantics control_semantics seed control_version source_model targets cases prompt_count records prefills capture_layer activation_site coverage limits" /* end-schema-fields */,
         );
-        keys(plan.source_model, "repo revision weights_sha256");
+        keys(
+          plan.source_model,
+          /* schema-fields: source_model */ "repo revision weights_sha256" /* end-schema-fields */,
+        );
         plan.targets.forEach(target);
         for (const c of plan.cases) {
-          keys(c, "id role target edits selected_cells control_geometry");
+          keys(
+            c,
+            /* schema-fields: sweep_case */ "id role target edits selected_cells control_geometry" /* end-schema-fields */,
+          );
           if (c.target) target(c.target);
           check(
             Array.isArray(c.edits) && c.edits.length <= 8,
@@ -412,9 +427,12 @@
         architecture(plan.architecture);
         keys(
           plan.limits,
-          "targets interventions_including_controls prompts subset_limits probes_per_prompt records prefills edits selected_cells wall_seconds worker_cpu_seconds control_version full_layer_records trace_cap architecture scope",
+          /* schema-fields: sweep_limits */ "targets interventions_including_controls prompts subset_limits probes_per_prompt records prefills edits selected_cells wall_seconds worker_cpu_seconds control_version full_layer_records trace_cap architecture scope" /* end-schema-fields */,
         );
-        keys(plan.limits.subset_limits, "targets records prefills");
+        keys(
+          plan.limits.subset_limits,
+          /* schema-fields: sweep_subset_limits */ "targets records prefills" /* end-schema-fields */,
+        );
         architecture(plan.limits.architecture);
         const caps = {
           targets: 9,
@@ -503,7 +521,10 @@
           "Invalid paired positions",
         );
         for (const p of request.positions) {
-          keys(p, "a b");
+          keys(
+            p,
+            /* schema-fields: pair_positions */ "a b" /* end-schema-fields */,
+          );
           check(
             integer(p.a, 0, 127) && integer(p.b, 0, 127),
             "Invalid paired position",
@@ -567,7 +588,10 @@
             "Invalid prompt/plan digest",
           );
       if (request.observation) {
-        keys(request.observation, "kind head");
+        keys(
+          request.observation,
+          /* schema-fields: observation_request */ "kind head" /* end-schema-fields */,
+        );
         check(
           request.observation.kind === "attention"
             ? integer(request.observation.head, 0, 8) &&
@@ -831,7 +855,10 @@
     function validateCandidateTables(record) {
       for (const step of record.steps) {
         for (const c of step.top_logits || []) {
-          keys(c, "id value");
+          keys(
+            c,
+            /* schema-fields: logit */ "id value" /* end-schema-fields */,
+          );
           check(
             Object.keys(c).length === 2 &&
               integer(c.id, 0, 49151) &&
@@ -840,7 +867,10 @@
           );
         }
         for (const c of step.logit_lens?.candidates || []) {
-          keys(c, "id piece lens_logit final_logit delta_lens_minus_final");
+          keys(
+            c,
+            /* schema-fields: lens_candidate */ "id piece lens_logit final_logit delta_lens_minus_final" /* end-schema-fields */,
+          );
           check(
             Object.keys(c).length === 5 &&
               integer(c.id, 0, 49151) &&
@@ -926,8 +956,14 @@
       const value = parse(text);
       let records;
       if (value.schema === "weight-atlas-session-log-v1") {
-        keys(value, "schema created_at persistence limits records");
-        keys(value.limits, "bytes runs");
+        keys(
+          value,
+          /* schema-fields: session_log */ "schema created_at persistence limits records" /* end-schema-fields */,
+        );
+        keys(
+          value.limits,
+          /* schema-fields: session_limits */ "bytes runs" /* end-schema-fields */,
+        );
         check(
           value.limits.bytes <= MAX_BYTES &&
             value.limits.runs <= MAX_RUNS &&

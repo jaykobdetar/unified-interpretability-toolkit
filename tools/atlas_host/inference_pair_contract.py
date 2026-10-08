@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 from typing import Any
+from atlas_host import experiment_schema as _record_schema
 from atlas_host.inference_geometry import Architecture
 
 
@@ -66,7 +67,7 @@ def validate_request(data: dict[str, Any], *, bindings: PairBindings) -> dict[st
         for pair in positions:
             if (
                 type(pair) is not dict
-                or set(pair) != {"a", "b"}
+                or set(pair) != set(_record_schema.FIELD_GROUPS["pair_positions"])
                 or any(
                     type(pair[k]) is not int or not 0 <= pair[k] < 128
                     for k in ("a", "b")

@@ -320,32 +320,47 @@ function experimentRecord(
   if (!request || !Array.isArray(snapshot.steps) || snapshot.steps.length > 32)
     throw new Error("A bounded accepted run is required.");
   const details = snapshot.details || {},
-    settings = picked(request, [
-      "mode",
-      "max_new_tokens",
-      "layer",
-      "activation_site",
-    ]);
+    settings = picked(
+      request,
+      /* schema-fields: generation_settings */ [
+        "mode",
+        "max_new_tokens",
+        "layer",
+        "activation_site",
+      ] /* end-schema-fields */,
+    );
   settings.activation_site = settings.activation_site || "block";
   if (request.observation)
-    settings.observation = picked(request.observation, ["kind", "head"]);
-  settings.source_model = picked(request.source_model, [
-    "repo",
-    "revision",
-    "weights_sha256",
-  ]);
+    settings.observation = picked(
+      request.observation,
+      /* schema-fields: observation_request */ [
+        "kind",
+        "head",
+      ] /* end-schema-fields */,
+    );
+  settings.source_model = picked(
+    request.source_model,
+    /* schema-fields: source_model */ [
+      "repo",
+      "revision",
+      "weights_sha256",
+    ] /* end-schema-fields */,
+  );
   settings.edits = (request.edits || []).map((edit) =>
-    picked(edit, [
-      "tensor",
-      "shape",
-      "kind",
-      "operation",
-      "start",
-      "end",
-      "row",
-      "col",
-      "scale",
-    ]),
+    picked(
+      edit,
+      /* schema-fields: edit_projection */ [
+        "tensor",
+        "shape",
+        "kind",
+        "operation",
+        "start",
+        "end",
+        "row",
+        "col",
+        "scale",
+      ] /* end-schema-fields */,
+    ),
   );
   if (settings.edits.length > 8)
     throw new Error("Experiment edit cap exceeded.");
@@ -353,13 +368,16 @@ function experimentRecord(
     delete settings.edits;
     Object.assign(
       settings,
-      picked(request, [
-        "targets",
-        "operation",
-        "scale",
-        "seed",
-        "capture_layer",
-      ]),
+      picked(
+        request,
+        /* schema-fields: sweep_settings */ [
+          "targets",
+          "operation",
+          "scale",
+          "seed",
+          "capture_layer",
+        ] /* end-schema-fields */,
+      ),
     );
     if (includePrompt) {
       settings.prompts = [...request.prompts];
@@ -367,7 +385,12 @@ function experimentRecord(
     }
   } else if (request.mode === "prompt_pair") {
     delete settings.edits;
-    settings.positions = request.positions.map((p) => picked(p, ["a", "b"]));
+    settings.positions = request.positions.map((p) =>
+      picked(
+        p,
+        /* schema-fields: pair_positions */ ["a", "b"] /* end-schema-fields */,
+      ),
+    );
     if (includePrompt) {
       settings.prompts = [...request.prompts];
       settings.preview_digest = request.preview_digest;
@@ -380,15 +403,18 @@ function experimentRecord(
   const branch = (value) =>
     value === null
       ? null
-      : picked(value, [
-          "token_id",
-          "token_piece",
-          "generated_text",
-          "generated_ids",
-          "eos",
-          "compute_ms",
-          "compute_total_ms",
-        ]);
+      : picked(
+          value,
+          /* schema-fields: sequence */ [
+            "token_id",
+            "token_piece",
+            "generated_text",
+            "generated_ids",
+            "eos",
+            "compute_ms",
+            "compute_total_ms",
+          ] /* end-schema-fields */,
+        );
   const steps = snapshot.steps.map((step, index) => {
     if (
       step.index !== index ||
@@ -397,42 +423,48 @@ function experimentRecord(
       step.activation.length * snapshot.steps.length > 18432
     )
       throw new Error("Invalid experiment trace.");
-    const out = picked(step, [
-      "index",
-      "phase",
-      "position",
-      "input_token_id",
-      "token_id",
-      "token_piece",
-      "generated_text",
-      "compute_ms",
-      "compute_total_ms",
-      "layer",
-      "activation_site",
-      "activation_kind",
-      "activation_branch",
-      "alignment",
-      "score_kind",
-      "eos",
-    ]);
+    const out = picked(
+      step,
+      /* schema-fields: step */ [
+        "index",
+        "phase",
+        "position",
+        "input_token_id",
+        "token_id",
+        "token_piece",
+        "generated_text",
+        "compute_ms",
+        "compute_total_ms",
+        "layer",
+        "activation_site",
+        "activation_kind",
+        "activation_branch",
+        "alignment",
+        "score_kind",
+        "eos",
+      ] /* end-schema-fields */,
+    );
     // The last prompt token is also prompt content; omit it at prefill when excluded.
     if (!includePrompt && (index === 0 || request.mode === "sweep"))
       delete out.input_token_id;
     out.activation = [...step.activation];
     if (step.sweep) {
       out.mode = "sweep";
-      out.sweep = picked(step.sweep, [
-        "record_id",
-        "case_id",
-        "role",
-        "prompt_index",
-        "selected_cells",
-        "changed_cells",
-        "parameter_delta_l2",
-        "restoration_verified",
-        "metrics",
-        "candidates",
-      ]);
+      out.sweep = picked(
+        step.sweep,
+        /* schema-fields: sweep_record */ [
+          "record_id",
+          "case_id",
+          "role",
+          "prompt_index",
+          "selected_cells",
+          "changed_cells",
+          "parameter_delta_l2",
+          "restoration_verified",
+          "metrics",
+          "candidates",
+        ] /* end-schema-fields */,
+      );
     }
     if (step.prompt_pair) {
       out.mode = "prompt_pair";
@@ -440,7 +472,15 @@ function experimentRecord(
       out.prompt_pair = {
         token_equal: p.token_equal,
         prefix_equal: p.prefix_equal,
-        metrics: picked(p.metrics, ["a_l2", "b_l2", "delta_l2", "cosine"]),
+        metrics: picked(
+          p.metrics,
+          /* schema-fields: pair_metrics */ [
+            "a_l2",
+            "b_l2",
+            "delta_l2",
+            "cosine",
+          ] /* end-schema-fields */,
+        ),
       };
       for (const key of ["a", "b"])
         out.prompt_pair[key] = picked(
@@ -451,53 +491,68 @@ function experimentRecord(
         );
     }
     if (step.attention) {
-      out.attention = picked(step.attention, [
-        "layer",
-        "query_head",
-        "kv_head",
-        "head_dim",
-        "query_position",
-        "key_positions",
-        "probabilities",
-        "semantics",
-      ]);
+      out.attention = picked(
+        step.attention,
+        /* schema-fields: attention_projection */ [
+          "layer",
+          "query_head",
+          "kv_head",
+          "head_dim",
+          "query_position",
+          "key_positions",
+          "probabilities",
+          "semantics",
+        ] /* end-schema-fields */,
+      );
       if (includePrompt)
         out.attention.key_token_ids = step.attention.key_token_ids;
     }
     if (step.logit_lens) {
-      out.logit_lens = picked(step.logit_lens, [
-        "layer",
-        "position",
-        "score_kind",
-        "lens_argmax_id",
-        "final_argmax_id",
-        "semantics",
-      ]);
+      out.logit_lens = picked(
+        step.logit_lens,
+        /* schema-fields: lens_projection */ [
+          "layer",
+          "position",
+          "score_kind",
+          "lens_argmax_id",
+          "final_argmax_id",
+          "semantics",
+        ] /* end-schema-fields */,
+      );
       out.logit_lens.candidates = step.logit_lens.candidates.map((entry) =>
-        picked(entry, [
-          "id",
-          "piece",
-          "lens_logit",
-          "final_logit",
-          "delta_lens_minus_final",
-        ]),
+        picked(
+          entry,
+          /* schema-fields: lens_candidate */ [
+            "id",
+            "piece",
+            "lens_logit",
+            "final_logit",
+            "delta_lens_minus_final",
+          ] /* end-schema-fields */,
+        ),
       );
     }
     if (step.top_logits)
       out.top_logits = step.top_logits.map((entry) =>
-        picked(entry, ["id", "value"]),
+        picked(
+          entry,
+          /* schema-fields: logit */ ["id", "value"] /* end-schema-fields */,
+        ),
       );
     if (Object.hasOwn(step, "baseline")) {
       out.baseline = branch(step.baseline);
       out.edited = branch(step.edited);
       out.candidates = step.candidates.map((entry) =>
-        picked(entry, [
-          "id",
-          "piece",
-          "baseline_logit",
-          "edited_logit",
-          "delta",
-        ]),
+        picked(
+          entry,
+          /* schema-fields: candidate */ [
+            "id",
+            "piece",
+            "baseline_logit",
+            "edited_logit",
+            "delta",
+          ] /* end-schema-fields */,
+        ),
       );
     }
     return out;
@@ -537,22 +592,25 @@ function experimentRecord(
       dtype: "float32",
       deterministic_algorithms: true,
     },
-    runtime: picked(details.runtime, [
-      "python",
-      "torch",
-      "transformers",
-      "tokenizers",
-      "safetensors",
-      "platform",
-      "machine",
-      "device",
-      "dtype",
-      "sampling",
-      "seed",
-      "deterministic_algorithms",
-      "numerical_threads",
-      "attention_backend",
-    ]),
+    runtime: picked(
+      details.runtime,
+      /* schema-fields: runtime */ [
+        "python",
+        "torch",
+        "transformers",
+        "tokenizers",
+        "safetensors",
+        "platform",
+        "machine",
+        "device",
+        "dtype",
+        "sampling",
+        "seed",
+        "deterministic_algorithms",
+        "numerical_threads",
+        "attention_backend",
+      ] /* end-schema-fields */,
+    ),
     limits:
       request.mode === "sweep"
         ? {
@@ -577,50 +635,62 @@ function experimentRecord(
               vector_equivalents: 24,
             }
           : { prompt_tokens: 128, new_tokens: 32, trace_steps: 32, edits: 8 },
-    summary: picked(details, [
-      "reason",
-      "comparison_phase",
-      "generated_tokens",
-      "record_count",
-      "coverage",
-      "sweep_coverage",
-      "sweep_current",
-      "compute_total_ms",
-      "load_ms",
-      "error",
-    ]),
-    baseline: picked(details.baseline, [
-      "generated_ids",
-      "generated_text",
-      "reason",
-    ]),
-    edited: picked(details.edited, [
-      "generated_ids",
-      "generated_text",
-      "reason",
-    ]),
+    summary: picked(
+      details,
+      /* schema-fields: summary */ [
+        "reason",
+        "comparison_phase",
+        "generated_tokens",
+        "record_count",
+        "coverage",
+        "sweep_coverage",
+        "sweep_current",
+        "compute_total_ms",
+        "load_ms",
+        "error",
+      ] /* end-schema-fields */,
+    ),
+    baseline: picked(
+      details.baseline,
+      /* schema-fields: branch_summary */ [
+        "generated_ids",
+        "generated_text",
+        "reason",
+      ] /* end-schema-fields */,
+    ),
+    edited: picked(
+      details.edited,
+      /* schema-fields: branch_summary */ [
+        "generated_ids",
+        "generated_text",
+        "reason",
+      ] /* end-schema-fields */,
+    ),
     steps,
   };
   if (request.mode === "sweep")
-    result.sweep_plan = picked(details.sweep_plan, [
-      "version",
-      "scope",
-      "architecture",
-      "intervention_semantics",
-      "control_semantics",
-      "seed",
-      "control_version",
-      "source_model",
-      "targets",
-      "cases",
-      "prompt_count",
-      "records",
-      "prefills",
-      "capture_layer",
-      "activation_site",
-      "coverage",
-      "limits",
-    ]);
+    result.sweep_plan = picked(
+      details.sweep_plan,
+      /* schema-fields: sweep_plan */ [
+        "version",
+        "scope",
+        "architecture",
+        "intervention_semantics",
+        "control_semantics",
+        "seed",
+        "control_version",
+        "source_model",
+        "targets",
+        "cases",
+        "prompt_count",
+        "records",
+        "prefills",
+        "capture_layer",
+        "activation_site",
+        "coverage",
+        "limits",
+      ] /* end-schema-fields */,
+    );
   const json = finiteJSON(result);
   if (utf8Size(json) > EXPERIMENT_BYTES)
     throw new Error(
