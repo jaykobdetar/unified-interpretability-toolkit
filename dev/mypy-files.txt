@@ -113,3 +113,7 @@ tools/profile_atlas.py
 tools/static_atlas.py
 tests/typing/owner_launcher_clients.py
 tools/atlas_host/limits.py
+tools/analytics/make_examples.py
+tools/check_model_hashes.py
+tools/make_fixture.py
+tools/smoke.py
