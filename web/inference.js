@@ -1,721 +1,658 @@
 "use strict";
-// Bounded session playback; draft edits apply only to a disposable model in RAM.
-class AtlasPlayback {
-  constructor(width = null) {
-    this.width = width;
-    this.reset();
-  }
-  reset() {
-    this.steps = [];
-    this.cursor = -1;
-    this.paused = false;
-    this.status = "idle";
-    this.replaying = false;
-  }
-  accept(snapshot) {
-    if (!Array.isArray(snapshot.steps) || snapshot.steps.length > 32)
-      throw new Error("Invalid trace size");
-    const width = this.width ?? snapshot.steps[0]?.activation?.length;
-    snapshot.steps.forEach((s, i) => {
-      if (
-        s.index !== i ||
-        !Number.isInteger(width) ||
-        width < 1 ||
-        width * snapshot.steps.length > 18432 ||
-        s.activation?.length !== width ||
-        !s.activation.every(Number.isFinite)
-      )
-        throw new Error("Invalid activation record");
-    });
-    this.steps = snapshot.steps;
-    this.status = snapshot.status;
-  }
-  advance() {
-    if (this.cursor + 1 < this.steps.length) {
-      this.cursor++;
-      return true;
+// Playback, record, storage and deferred import contracts share one private scope.
+const {
+  AtlasPlayback,
+  sameSource,
+  draftEdit,
+  editRangeSummary,
+  observationSelection,
+  pairPositions,
+  sweepRequest,
+  EXPERIMENT_BYTES,
+  utf8Size,
+  finiteJSON,
+  workerCleanupConfirmed,
+  experimentRecord,
+  redactExperiment,
+  AtlasExperimentLog,
+  AtlasExperimentImport,
+  loadExperimentImport,
+  AtlasLogStorage,
+  AtlasFileJournal,
+} = (() => {
+  // Bounded session playback; draft edits apply only to a disposable model in RAM.
+  class AtlasPlayback {
+    constructor(width = null) {
+      this.width = width;
+      this.reset();
     }
-    return false;
-  }
-  rewind() {
-    this.cursor = -1;
-    this.paused = true;
-    this.replaying = true;
-  }
-  get current() {
-    return this.steps[this.cursor] || null;
-  }
-  branchAtCursor(name) {
-    for (
-      let index = Math.min(this.cursor, this.steps.length - 1);
-      index >= 0;
-      index--
-    ) {
-      const branch = this.steps[index][name];
-      if (branch !== null && branch !== undefined) return branch;
+    reset() {
+      this.steps = [];
+      this.cursor = -1;
+      this.paused = false;
+      this.status = "idle";
+      this.replaying = false;
     }
-    return null;
+    accept(snapshot) {
+      if (!Array.isArray(snapshot.steps) || snapshot.steps.length > 32)
+        throw new Error("Invalid trace size");
+      const width = this.width ?? snapshot.steps[0]?.activation?.length;
+      snapshot.steps.forEach((s, i) => {
+        if (
+          s.index !== i ||
+          !Number.isInteger(width) ||
+          width < 1 ||
+          width * snapshot.steps.length > 18432 ||
+          s.activation?.length !== width ||
+          !s.activation.every(Number.isFinite)
+        )
+          throw new Error("Invalid activation record");
+      });
+      this.steps = snapshot.steps;
+      this.status = snapshot.status;
+    }
+    advance() {
+      if (this.cursor + 1 < this.steps.length) {
+        this.cursor++;
+        return true;
+      }
+      return false;
+    }
+    rewind() {
+      this.cursor = -1;
+      this.paused = true;
+      this.replaying = true;
+    }
+    get current() {
+      return this.steps[this.cursor] || null;
+    }
+    branchAtCursor(name) {
+      for (
+        let index = Math.min(this.cursor, this.steps.length - 1);
+        index >= 0;
+        index--
+      ) {
+        const branch = this.steps[index][name];
+        if (branch !== null && branch !== undefined) return branch;
+      }
+      return null;
+    }
+    get active() {
+      return ["loading", "running", "stopping"].includes(this.status);
+    }
   }
-  get active() {
-    return ["loading", "running", "stopping"].includes(this.status);
-  }
-}
-function sameSource(left, right) {
-  return (
-    !!left &&
-    !!right &&
-    ["repo", "revision", "weights_sha256"].every((k) => left[k] === right[k])
-  );
-}
-function draftEdit(selection, contract, kind, operation, start, end, factor) {
-  const mapping = contract?.tensors.find((t) => t.name === selection?.tensor);
-  if (
-    !sameSource(selection?.source_model, contract?.source_model) ||
-    !mapping ||
-    JSON.stringify(mapping.shape) !== JSON.stringify(selection.shape)
-  )
-    throw new Error(
-      "This selection has no verified edit mapping. Inspect a supported pinned SmolLM2 2-D tensor.",
+  function sameSource(left, right) {
+    return (
+      !!left &&
+      !!right &&
+      ["repo", "revision", "weights_sha256"].every((k) => left[k] === right[k])
     );
-  const edit = {
-    tensor: selection.tensor,
-    shape: [...selection.shape],
-    kind,
-    operation,
-  };
-  if (kind === "element") {
-    edit.row = selection.row;
-    edit.col = selection.col;
+  }
+  function draftEdit(selection, contract, kind, operation, start, end, factor) {
+    const mapping = contract?.tensors.find((t) => t.name === selection?.tensor);
     if (
-      ![edit.row, edit.col].every(
-        (v, i) => Number.isSafeInteger(v) && v >= 0 && v < edit.shape[i],
-      )
-    )
-      throw new Error("Invalid inspected native coordinates.");
-  } else if (["rows", "columns"].includes(kind)) {
-    if (start === "" || end === "")
-      throw new Error("Enter both native range endpoints.");
-    edit.start = Number(start);
-    edit.end = Number(end);
-    if (
-      !Number.isSafeInteger(edit.start) ||
-      !Number.isSafeInteger(edit.end) ||
-      edit.start < 0 ||
-      edit.start >= edit.end ||
-      edit.end > edit.shape[kind === "rows" ? 0 : 1]
-    )
-      throw new Error("Use a nonempty in-bounds [start,end) range.");
-  } else throw new Error("Unknown edit target.");
-  if (operation === "scale") {
-    if (factor === "")
-      throw new Error("Enter a finite scale between -100 and 100.");
-    edit.scale = Number(factor);
-    if (!Number.isFinite(edit.scale) || Math.abs(edit.scale) > 100)
-      throw new Error("Scale must be finite, between -100 and 100.");
-  } else if (operation !== "zero") throw new Error("Unknown operation.");
-  return edit;
-}
-function editRangeSummary(edit) {
-  if (edit.kind === "element")
-    return `One original value at row ${edit.row}, column ${edit.col}.`;
-  const count =
-    (edit.end - edit.start) * edit.shape[edit.kind === "rows" ? 1 : 0];
-  return `${edit.kind === "rows" ? "Rows" : "Columns"} ${edit.start}–${edit.end - 1} inclusive (viewer convention) = [${edit.start}, ${edit.end}) with end exclusive (edit convention) · ${count.toLocaleString("en-US")} targeted values. Other axis: entire extent.`;
-}
-function observationSelection(kind, head, site, architecture) {
-  if (!kind || kind === "none") return null;
-  if (kind === "attention") {
-    if (
-      !["string", "number"].includes(typeof head) ||
-      head === "" ||
-      !Number.isInteger(Number(head)) ||
-      Number(head) < 0 ||
-      !architecture ||
-      Number(head) >= architecture.query_heads ||
-      site !== "attention"
+      !sameSource(selection?.source_model, contract?.source_model) ||
+      !mapping ||
+      JSON.stringify(mapping.shape) !== JSON.stringify(selection.shape)
     )
       throw new Error(
-        "Select attention output and a query head from the verified architecture.",
+        "This selection has no verified edit mapping. Inspect a supported pinned SmolLM2 2-D tensor.",
       );
-    return { kind, head: Number(head) };
-  }
-  if (kind === "logit_lens" && site === "block") return { kind };
-  throw new Error(
-    "The selected observation requires its matching capture output.",
-  );
-}
-function pairPositions(text, preview) {
-  if (
-    typeof text !== "string" ||
-    text.length > 256 ||
-    !preview?.tokens ||
-    preview.tokens.length !== 2
-  )
-    throw new Error("Review a token preview and enter 1–8 position pairs.");
-  const lines = text.trim().split(/\n/);
-  if (lines.length < 1 || lines.length > 8)
-    throw new Error("Use 1–8 position pairs.");
-  const seen = new Set();
-  return lines.map((line) => {
-    const match = line.trim().match(/^(\d{1,3})\s*,\s*(\d{1,3})$/);
-    if (!match) throw new Error("Use one A,B token position pair per line.");
-    const a = Number(match[1]),
-      b = Number(match[2]),
-      key = a + "," + b;
-    if (
-      a >= preview.tokens[0].length ||
-      b >= preview.tokens[1].length ||
-      seen.has(key)
-    )
-      throw new Error("Each pair must be unique and inside both token lists.");
-    seen.add(key);
-    return { a, b };
-  });
-}
-function sweepRequest(values, source_model, architecture) {
-  if (!source_model || !architecture)
-    throw new Error("Pinned model architecture metadata is required.");
-  const lines = values.targets.trim().split(/\n/);
-  if (lines.length < 1 || lines.length > 2)
-    throw new Error(
-      "Choose 1–2 explicit targets or one layer L for all output heads.",
-    );
-  const targets = lines.map((line) => {
-    let m = line.trim().match(/^layer (\d+)$/);
-    if (m) return { kind: "layer_heads", layer: Number(m[1]) };
-    m = line.trim().match(/^(head|query_head) (\d+) (\d+)$/);
-    if (m) return { kind: m[1], layer: Number(m[2]), head: Number(m[3]) };
-    m = line.trim().match(/^offset (\d+) (\d+(?:,\d+){0,7}) (\d+)$/);
-    if (m)
-      return {
-        kind: "offset",
-        layer: Number(m[1]),
-        heads: m[2].split(",").map(Number),
-        offset: Number(m[3]),
-      };
-    throw new Error(
-      "Use layer L, head L H, query_head L H or offset L H[,H...] O.",
-    );
-  });
-  if (
-    targets.some(
-      (t) =>
-        !Number.isSafeInteger(t.layer) ||
-        t.layer >= architecture.layers ||
-        (t.kind === "layer_heads"
-          ? targets.length !== 1
-          : t.kind === "offset"
-            ? t.offset >= architecture.head_dim ||
-              t.heads.some((h) => h >= architecture.query_heads) ||
-              new Set(t.heads).size !== t.heads.length
-            : t.head >= architecture.query_heads),
-    )
-  )
-    throw new Error(
-      "Use native layers, heads and offsets from the verified architecture; layer mode must stand alone.",
-    );
-  if (new Set(targets.map((t) => JSON.stringify(t))).size !== targets.length)
-    throw new Error("Choose distinct targets.");
-  const prompts = values.prompts;
-  if (
-    prompts.length < 1 ||
-    prompts.length > 2 ||
-    prompts.some(
-      (p) => typeof p !== "string" || !p.trim() || utf8Size(p) > 2048,
-    )
-  )
-    throw new Error("Choose 1–2 nonempty prompts of at most 2048 UTF-8 bytes.");
-  if (
-    targets[0].kind === "layer_heads" &&
-    ((1 + 2 * architecture.query_heads) * prompts.length > 32 ||
-      values.operation !== "zero")
-  )
-    throw new Error(
-      "All-head ablation requires zero and must fit the 32-record cap; choose one prompt or an explicit subset.",
-    );
-  const seed = Number(values.seed),
-    capture_layer = Number(values.layer);
-  if (
-    !["string", "number"].includes(typeof values.seed) ||
-    !["string", "number"].includes(typeof values.layer) ||
-    values.seed === "" ||
-    values.layer === "" ||
-    !Number.isSafeInteger(seed) ||
-    seed < 0 ||
-    seed > 4294967295 ||
-    !Number.isInteger(capture_layer) ||
-    capture_layer < 0 ||
-    capture_layer >= architecture.layers
-  )
-    throw new Error("Use a seed 0–4294967295 and a native capture layer.");
-  const request = {
-    mode: "sweep",
-    source_model,
-    prompts,
-    targets,
-    seed,
-    capture_layer,
-    activation_site: values.site,
-    operation: values.operation,
-  };
-  if (values.operation === "scale") {
-    request.scale = Number(values.scale);
-    if (
-      !["string", "number"].includes(typeof values.scale) ||
-      values.scale === "" ||
-      !Number.isFinite(request.scale) ||
-      Math.abs(request.scale) > 100
-    )
-      throw new Error("Use a finite scale between -100 and 100.");
-  } else if (values.operation !== "zero") throw new Error("Use zero or scale.");
-  return request;
-}
-const EXPERIMENT_BYTES = 1024 * 1024,
-  EXPERIMENT_RUNS = 8;
-const utf8Size = (text) => {
-  let size = 0;
-  for (const char of text) {
-    const code = char.codePointAt(0);
-    size += code < 128 ? 1 : code < 2048 ? 2 : code < 65536 ? 3 : 4;
-  }
-  return size;
-};
-function finiteJSON(value) {
-  const visit = (value) => {
-    if (typeof value === "number" && !Number.isFinite(value))
-      throw new Error("Nonfinite experiment data cannot be saved.");
-    if (value && typeof value === "object")
-      for (const item of Object.values(value)) visit(item);
-  };
-  visit(value);
-  return JSON.stringify(value, null, 2);
-}
-function picked(value, keys) {
-  const out = {};
-  for (const key of keys)
-    if (value && Object.hasOwn(value, key)) out[key] = value[key];
-  return out;
-}
-function workerCleanupConfirmed(snapshot) {
-  return (
-    snapshot.worker_alive === false &&
-    !snapshot.details?.cleanup_pending &&
-    [
-      "idle",
-      "complete",
-      "cancelled",
-      "error",
-      "resource_limit",
-      "time_limit",
-      "client_timeout",
-      "connection_lost",
-    ].includes(snapshot.status)
-  );
-}
-function recordRequestSettings(request, details, includePrompt) {
-  const settings = picked(
-    request,
-    /* schema-fields: generation_settings */ [
-      "mode",
-      "max_new_tokens",
-      "layer",
-      "activation_site",
-    ] /* end-schema-fields */,
-  );
-  settings.activation_site = settings.activation_site || "block";
-  if (request.observation)
-    settings.observation = picked(
-      request.observation,
-      /* schema-fields: observation_request */ [
-        "kind",
-        "head",
-      ] /* end-schema-fields */,
-    );
-  settings.source_model = picked(
-    request.source_model,
-    /* schema-fields: source_model */ [
-      "repo",
-      "revision",
-      "weights_sha256",
-    ] /* end-schema-fields */,
-  );
-  settings.edits = (request.edits || []).map((edit) =>
-    picked(
-      edit,
-      /* schema-fields: edit_projection */ [
-        "tensor",
-        "shape",
-        "kind",
-        "operation",
-        "start",
-        "end",
-        "row",
-        "col",
-        "scale",
-      ] /* end-schema-fields */,
-    ),
-  );
-  if (settings.edits.length > 8)
-    throw new Error("Experiment edit cap exceeded.");
-  recordModeSettings(request, settings, details, includePrompt);
-  return settings;
-}
-function recordModeSettings(request, settings, details, includePrompt) {
-  if (request.mode === "sweep") {
-    delete settings.edits;
-    Object.assign(
-      settings,
-      picked(
-        request,
-        /* schema-fields: sweep_settings */ [
-          "targets",
-          "operation",
-          "scale",
-          "seed",
-          "capture_layer",
-        ] /* end-schema-fields */,
-      ),
-    );
-    if (includePrompt) {
-      settings.prompts = [...request.prompts];
-      settings.plan_digest = request.plan_digest;
-    }
-  } else if (request.mode === "prompt_pair") {
-    delete settings.edits;
-    settings.positions = request.positions.map((p) =>
-      picked(
-        p,
-        /* schema-fields: pair_positions */ ["a", "b"] /* end-schema-fields */,
-      ),
-    );
-    if (includePrompt) {
-      settings.prompts = [...request.prompts];
-      settings.preview_digest = request.preview_digest;
-    }
-  } else if (includePrompt) {
-    settings.prompt = request.prompt;
-    if (Array.isArray(details.prompt_ids))
-      settings.prompt_ids = [...details.prompt_ids];
-  }
-}
-const recordBranch = (value) =>
-  value === null
-    ? null
-    : picked(
-        value,
-        /* schema-fields: sequence */ [
-          "token_id",
-          "token_piece",
-          "generated_text",
-          "generated_ids",
-          "eos",
-          "compute_ms",
-          "compute_total_ms",
-        ] /* end-schema-fields */,
-      );
-function recordStepCore(snapshot, request, includePrompt, step, index) {
-  if (
-    step.index !== index ||
-    !Array.isArray(step.activation) ||
-    !step.activation.length ||
-    step.activation.length * snapshot.steps.length > 18432
-  )
-    throw new Error("Invalid experiment trace.");
-  const out = picked(
-    step,
-    /* schema-fields: step */ [
-      "index",
-      "phase",
-      "position",
-      "input_token_id",
-      "token_id",
-      "token_piece",
-      "generated_text",
-      "compute_ms",
-      "compute_total_ms",
-      "layer",
-      "activation_site",
-      "activation_kind",
-      "activation_branch",
-      "alignment",
-      "score_kind",
-      "eos",
-    ] /* end-schema-fields */,
-  );
-  // The last prompt token is also prompt content; omit it at prefill when excluded.
-  if (!includePrompt && (index === 0 || request.mode === "sweep"))
-    delete out.input_token_id;
-  out.activation = [...step.activation];
-  return out;
-}
-function projectSweepStep(step, out) {
-  if (step.sweep) {
-    out.mode = "sweep";
-    out.sweep = picked(
-      step.sweep,
-      /* schema-fields: sweep_record */ [
-        "record_id",
-        "case_id",
-        "role",
-        "prompt_index",
-        "selected_cells",
-        "changed_cells",
-        "parameter_delta_l2",
-        "restoration_verified",
-        "metrics",
-        "candidates",
-      ] /* end-schema-fields */,
-    );
-  }
-}
-function projectPairStep(step, out, includePrompt) {
-  if (step.prompt_pair) {
-    out.mode = "prompt_pair";
-    const p = step.prompt_pair;
-    out.prompt_pair = {
-      token_equal: p.token_equal,
-      prefix_equal: p.prefix_equal,
-      metrics: picked(
-        p.metrics,
-        /* schema-fields: pair_metrics */ [
-          "a_l2",
-          "b_l2",
-          "delta_l2",
-          "cosine",
-        ] /* end-schema-fields */,
-      ),
+    const edit = {
+      tensor: selection.tensor,
+      shape: [...selection.shape],
+      kind,
+      operation,
     };
-    for (const key of ["a", "b"])
-      out.prompt_pair[key] = picked(
-        p[key],
-        includePrompt
-          ? ["position", "token_id", "token_piece", "activation"]
-          : ["position", "activation"],
+    if (kind === "element") {
+      edit.row = selection.row;
+      edit.col = selection.col;
+      if (
+        ![edit.row, edit.col].every(
+          (v, i) => Number.isSafeInteger(v) && v >= 0 && v < edit.shape[i],
+        )
+      )
+        throw new Error("Invalid inspected native coordinates.");
+    } else if (["rows", "columns"].includes(kind)) {
+      if (start === "" || end === "")
+        throw new Error("Enter both native range endpoints.");
+      edit.start = Number(start);
+      edit.end = Number(end);
+      if (
+        !Number.isSafeInteger(edit.start) ||
+        !Number.isSafeInteger(edit.end) ||
+        edit.start < 0 ||
+        edit.start >= edit.end ||
+        edit.end > edit.shape[kind === "rows" ? 0 : 1]
+      )
+        throw new Error("Use a nonempty in-bounds [start,end) range.");
+    } else throw new Error("Unknown edit target.");
+    if (operation === "scale") {
+      if (factor === "")
+        throw new Error("Enter a finite scale between -100 and 100.");
+      edit.scale = Number(factor);
+      if (!Number.isFinite(edit.scale) || Math.abs(edit.scale) > 100)
+        throw new Error("Scale must be finite, between -100 and 100.");
+    } else if (operation !== "zero") throw new Error("Unknown operation.");
+    return edit;
+  }
+  function editRangeSummary(edit) {
+    if (edit.kind === "element")
+      return `One original value at row ${edit.row}, column ${edit.col}.`;
+    const count =
+      (edit.end - edit.start) * edit.shape[edit.kind === "rows" ? 1 : 0];
+    return `${edit.kind === "rows" ? "Rows" : "Columns"} ${edit.start}–${edit.end - 1} inclusive (viewer convention) = [${edit.start}, ${edit.end}) with end exclusive (edit convention) · ${count.toLocaleString("en-US")} targeted values. Other axis: entire extent.`;
+  }
+  function observationSelection(kind, head, site, architecture) {
+    if (!kind || kind === "none") return null;
+    if (kind === "attention") {
+      if (
+        !["string", "number"].includes(typeof head) ||
+        head === "" ||
+        !Number.isInteger(Number(head)) ||
+        Number(head) < 0 ||
+        !architecture ||
+        Number(head) >= architecture.query_heads ||
+        site !== "attention"
+      )
+        throw new Error(
+          "Select attention output and a query head from the verified architecture.",
+        );
+      return { kind, head: Number(head) };
+    }
+    if (kind === "logit_lens" && site === "block") return { kind };
+    throw new Error(
+      "The selected observation requires its matching capture output.",
+    );
+  }
+  function pairPositions(text, preview) {
+    if (
+      typeof text !== "string" ||
+      text.length > 256 ||
+      !preview?.tokens ||
+      preview.tokens.length !== 2
+    )
+      throw new Error("Review a token preview and enter 1–8 position pairs.");
+    const lines = text.trim().split(/\n/);
+    if (lines.length < 1 || lines.length > 8)
+      throw new Error("Use 1–8 position pairs.");
+    const seen = new Set();
+    return lines.map((line) => {
+      const match = line.trim().match(/^(\d{1,3})\s*,\s*(\d{1,3})$/);
+      if (!match) throw new Error("Use one A,B token position pair per line.");
+      const a = Number(match[1]),
+        b = Number(match[2]),
+        key = a + "," + b;
+      if (
+        a >= preview.tokens[0].length ||
+        b >= preview.tokens[1].length ||
+        seen.has(key)
+      )
+        throw new Error(
+          "Each pair must be unique and inside both token lists.",
+        );
+      seen.add(key);
+      return { a, b };
+    });
+  }
+  function sweepRequest(values, source_model, architecture) {
+    if (!source_model || !architecture)
+      throw new Error("Pinned model architecture metadata is required.");
+    const lines = values.targets.trim().split(/\n/);
+    if (lines.length < 1 || lines.length > 2)
+      throw new Error(
+        "Choose 1–2 explicit targets or one layer L for all output heads.",
+      );
+    const targets = lines.map((line) => {
+      let m = line.trim().match(/^layer (\d+)$/);
+      if (m) return { kind: "layer_heads", layer: Number(m[1]) };
+      m = line.trim().match(/^(head|query_head) (\d+) (\d+)$/);
+      if (m) return { kind: m[1], layer: Number(m[2]), head: Number(m[3]) };
+      m = line.trim().match(/^offset (\d+) (\d+(?:,\d+){0,7}) (\d+)$/);
+      if (m)
+        return {
+          kind: "offset",
+          layer: Number(m[1]),
+          heads: m[2].split(",").map(Number),
+          offset: Number(m[3]),
+        };
+      throw new Error(
+        "Use layer L, head L H, query_head L H or offset L H[,H...] O.",
+      );
+    });
+    if (
+      targets.some(
+        (t) =>
+          !Number.isSafeInteger(t.layer) ||
+          t.layer >= architecture.layers ||
+          (t.kind === "layer_heads"
+            ? targets.length !== 1
+            : t.kind === "offset"
+              ? t.offset >= architecture.head_dim ||
+                t.heads.some((h) => h >= architecture.query_heads) ||
+                new Set(t.heads).size !== t.heads.length
+              : t.head >= architecture.query_heads),
+      )
+    )
+      throw new Error(
+        "Use native layers, heads and offsets from the verified architecture; layer mode must stand alone.",
+      );
+    if (new Set(targets.map((t) => JSON.stringify(t))).size !== targets.length)
+      throw new Error("Choose distinct targets.");
+    const prompts = values.prompts;
+    if (
+      prompts.length < 1 ||
+      prompts.length > 2 ||
+      prompts.some(
+        (p) => typeof p !== "string" || !p.trim() || utf8Size(p) > 2048,
+      )
+    )
+      throw new Error(
+        "Choose 1–2 nonempty prompts of at most 2048 UTF-8 bytes.",
+      );
+    if (
+      targets[0].kind === "layer_heads" &&
+      ((1 + 2 * architecture.query_heads) * prompts.length > 32 ||
+        values.operation !== "zero")
+    )
+      throw new Error(
+        "All-head ablation requires zero and must fit the 32-record cap; choose one prompt or an explicit subset.",
+      );
+    const seed = Number(values.seed),
+      capture_layer = Number(values.layer);
+    if (
+      !["string", "number"].includes(typeof values.seed) ||
+      !["string", "number"].includes(typeof values.layer) ||
+      values.seed === "" ||
+      values.layer === "" ||
+      !Number.isSafeInteger(seed) ||
+      seed < 0 ||
+      seed > 4294967295 ||
+      !Number.isInteger(capture_layer) ||
+      capture_layer < 0 ||
+      capture_layer >= architecture.layers
+    )
+      throw new Error("Use a seed 0–4294967295 and a native capture layer.");
+    const request = {
+      mode: "sweep",
+      source_model,
+      prompts,
+      targets,
+      seed,
+      capture_layer,
+      activation_site: values.site,
+      operation: values.operation,
+    };
+    if (values.operation === "scale") {
+      request.scale = Number(values.scale);
+      if (
+        !["string", "number"].includes(typeof values.scale) ||
+        values.scale === "" ||
+        !Number.isFinite(request.scale) ||
+        Math.abs(request.scale) > 100
+      )
+        throw new Error("Use a finite scale between -100 and 100.");
+    } else if (values.operation !== "zero")
+      throw new Error("Use zero or scale.");
+    return request;
+  }
+  const EXPERIMENT_BYTES = 1024 * 1024,
+    EXPERIMENT_RUNS = 8;
+  const utf8Size = (text) => {
+    let size = 0;
+    for (const char of text) {
+      const code = char.codePointAt(0);
+      size += code < 128 ? 1 : code < 2048 ? 2 : code < 65536 ? 3 : 4;
+    }
+    return size;
+  };
+  function finiteJSON(value) {
+    const visit = (value) => {
+      if (typeof value === "number" && !Number.isFinite(value))
+        throw new Error("Nonfinite experiment data cannot be saved.");
+      if (value && typeof value === "object")
+        for (const item of Object.values(value)) visit(item);
+    };
+    visit(value);
+    return JSON.stringify(value, null, 2);
+  }
+  function picked(value, keys) {
+    const out = {};
+    for (const key of keys)
+      if (value && Object.hasOwn(value, key)) out[key] = value[key];
+    return out;
+  }
+  function workerCleanupConfirmed(snapshot) {
+    return (
+      snapshot.worker_alive === false &&
+      !snapshot.details?.cleanup_pending &&
+      [
+        "idle",
+        "complete",
+        "cancelled",
+        "error",
+        "resource_limit",
+        "time_limit",
+        "client_timeout",
+        "connection_lost",
+      ].includes(snapshot.status)
+    );
+  }
+  function recordRequestSettings(request, details, includePrompt) {
+    const settings = picked(
+      request,
+      /* schema-fields: generation_settings */ [
+        "mode",
+        "max_new_tokens",
+        "layer",
+        "activation_site",
+      ] /* end-schema-fields */,
+    );
+    settings.activation_site = settings.activation_site || "block";
+    if (request.observation)
+      settings.observation = picked(
+        request.observation,
+        /* schema-fields: observation_request */ [
+          "kind",
+          "head",
+        ] /* end-schema-fields */,
+      );
+    settings.source_model = picked(
+      request.source_model,
+      /* schema-fields: source_model */ [
+        "repo",
+        "revision",
+        "weights_sha256",
+      ] /* end-schema-fields */,
+    );
+    settings.edits = (request.edits || []).map((edit) =>
+      picked(
+        edit,
+        /* schema-fields: edit_projection */ [
+          "tensor",
+          "shape",
+          "kind",
+          "operation",
+          "start",
+          "end",
+          "row",
+          "col",
+          "scale",
+        ] /* end-schema-fields */,
+      ),
+    );
+    if (settings.edits.length > 8)
+      throw new Error("Experiment edit cap exceeded.");
+    recordModeSettings(request, settings, details, includePrompt);
+    return settings;
+  }
+  function recordModeSettings(request, settings, details, includePrompt) {
+    if (request.mode === "sweep") {
+      delete settings.edits;
+      Object.assign(
+        settings,
+        picked(
+          request,
+          /* schema-fields: sweep_settings */ [
+            "targets",
+            "operation",
+            "scale",
+            "seed",
+            "capture_layer",
+          ] /* end-schema-fields */,
+        ),
+      );
+      if (includePrompt) {
+        settings.prompts = [...request.prompts];
+        settings.plan_digest = request.plan_digest;
+      }
+    } else if (request.mode === "prompt_pair") {
+      delete settings.edits;
+      settings.positions = request.positions.map((p) =>
+        picked(
+          p,
+          /* schema-fields: pair_positions */ [
+            "a",
+            "b",
+          ] /* end-schema-fields */,
+        ),
+      );
+      if (includePrompt) {
+        settings.prompts = [...request.prompts];
+        settings.preview_digest = request.preview_digest;
+      }
+    } else if (includePrompt) {
+      settings.prompt = request.prompt;
+      if (Array.isArray(details.prompt_ids))
+        settings.prompt_ids = [...details.prompt_ids];
+    }
+  }
+  const recordBranch = (value) =>
+    value === null
+      ? null
+      : picked(
+          value,
+          /* schema-fields: sequence */ [
+            "token_id",
+            "token_piece",
+            "generated_text",
+            "generated_ids",
+            "eos",
+            "compute_ms",
+            "compute_total_ms",
+          ] /* end-schema-fields */,
+        );
+  function recordStepCore(snapshot, request, includePrompt, step, index) {
+    if (
+      step.index !== index ||
+      !Array.isArray(step.activation) ||
+      !step.activation.length ||
+      step.activation.length * snapshot.steps.length > 18432
+    )
+      throw new Error("Invalid experiment trace.");
+    const out = picked(
+      step,
+      /* schema-fields: step */ [
+        "index",
+        "phase",
+        "position",
+        "input_token_id",
+        "token_id",
+        "token_piece",
+        "generated_text",
+        "compute_ms",
+        "compute_total_ms",
+        "layer",
+        "activation_site",
+        "activation_kind",
+        "activation_branch",
+        "alignment",
+        "score_kind",
+        "eos",
+      ] /* end-schema-fields */,
+    );
+    // The last prompt token is also prompt content; omit it at prefill when excluded.
+    if (!includePrompt && (index === 0 || request.mode === "sweep"))
+      delete out.input_token_id;
+    out.activation = [...step.activation];
+    return out;
+  }
+  function projectSweepStep(step, out) {
+    if (step.sweep) {
+      out.mode = "sweep";
+      out.sweep = picked(
+        step.sweep,
+        /* schema-fields: sweep_record */ [
+          "record_id",
+          "case_id",
+          "role",
+          "prompt_index",
+          "selected_cells",
+          "changed_cells",
+          "parameter_delta_l2",
+          "restoration_verified",
+          "metrics",
+          "candidates",
+        ] /* end-schema-fields */,
+      );
+    }
+  }
+  function projectPairStep(step, out, includePrompt) {
+    if (step.prompt_pair) {
+      out.mode = "prompt_pair";
+      const p = step.prompt_pair;
+      out.prompt_pair = {
+        token_equal: p.token_equal,
+        prefix_equal: p.prefix_equal,
+        metrics: picked(
+          p.metrics,
+          /* schema-fields: pair_metrics */ [
+            "a_l2",
+            "b_l2",
+            "delta_l2",
+            "cosine",
+          ] /* end-schema-fields */,
+        ),
+      };
+      for (const key of ["a", "b"])
+        out.prompt_pair[key] = picked(
+          p[key],
+          includePrompt
+            ? ["position", "token_id", "token_piece", "activation"]
+            : ["position", "activation"],
+        );
+    }
+  }
+  function projectAttentionStep(step, out, includePrompt) {
+    if (step.attention) {
+      out.attention = picked(
+        step.attention,
+        /* schema-fields: attention_projection */ [
+          "layer",
+          "query_head",
+          "kv_head",
+          "head_dim",
+          "query_position",
+          "key_positions",
+          "probabilities",
+          "semantics",
+        ] /* end-schema-fields */,
+      );
+      if (includePrompt)
+        out.attention.key_token_ids = step.attention.key_token_ids;
+    }
+  }
+  function projectLensStep(step, out) {
+    if (step.logit_lens) {
+      out.logit_lens = picked(
+        step.logit_lens,
+        /* schema-fields: lens_projection */ [
+          "layer",
+          "position",
+          "score_kind",
+          "lens_argmax_id",
+          "final_argmax_id",
+          "semantics",
+        ] /* end-schema-fields */,
+      );
+      out.logit_lens.candidates = step.logit_lens.candidates.map((entry) =>
+        picked(
+          entry,
+          /* schema-fields: lens_candidate */ [
+            "id",
+            "piece",
+            "lens_logit",
+            "final_logit",
+            "delta_lens_minus_final",
+          ] /* end-schema-fields */,
+        ),
+      );
+    }
+  }
+  function projectLogitStep(step, out) {
+    if (step.top_logits)
+      out.top_logits = step.top_logits.map((entry) =>
+        picked(
+          entry,
+          /* schema-fields: logit */ ["id", "value"] /* end-schema-fields */,
+        ),
       );
   }
-}
-function projectAttentionStep(step, out, includePrompt) {
-  if (step.attention) {
-    out.attention = picked(
-      step.attention,
-      /* schema-fields: attention_projection */ [
-        "layer",
-        "query_head",
-        "kv_head",
-        "head_dim",
-        "query_position",
-        "key_positions",
-        "probabilities",
-        "semantics",
-      ] /* end-schema-fields */,
-    );
-    if (includePrompt)
-      out.attention.key_token_ids = step.attention.key_token_ids;
+  function projectComparisonStep(step, out, branch) {
+    if (Object.hasOwn(step, "baseline")) {
+      out.baseline = branch(step.baseline);
+      out.edited = branch(step.edited);
+      out.candidates = step.candidates.map((entry) =>
+        picked(
+          entry,
+          /* schema-fields: candidate */ [
+            "id",
+            "piece",
+            "baseline_logit",
+            "edited_logit",
+            "delta",
+          ] /* end-schema-fields */,
+        ),
+      );
+    }
   }
-}
-function projectLensStep(step, out) {
-  if (step.logit_lens) {
-    out.logit_lens = picked(
-      step.logit_lens,
-      /* schema-fields: lens_projection */ [
-        "layer",
-        "position",
-        "score_kind",
-        "lens_argmax_id",
-        "final_argmax_id",
-        "semantics",
-      ] /* end-schema-fields */,
-    );
-    out.logit_lens.candidates = step.logit_lens.candidates.map((entry) =>
-      picked(
-        entry,
-        /* schema-fields: lens_candidate */ [
-          "id",
-          "piece",
-          "lens_logit",
-          "final_logit",
-          "delta_lens_minus_final",
-        ] /* end-schema-fields */,
-      ),
-    );
+  function recordTraceSteps(snapshot, request, includePrompt) {
+    const steps = snapshot.steps.map((step, index) => {
+      const out = recordStepCore(snapshot, request, includePrompt, step, index);
+      projectSweepStep(step, out);
+      projectPairStep(step, out, includePrompt);
+      projectAttentionStep(step, out, includePrompt);
+      projectLensStep(step, out);
+      projectLogitStep(step, out);
+      projectComparisonStep(step, out, recordBranch);
+      return out;
+    });
+    return steps;
   }
-}
-function projectLogitStep(step, out) {
-  if (step.top_logits)
-    out.top_logits = step.top_logits.map((entry) =>
-      picked(
-        entry,
-        /* schema-fields: logit */ ["id", "value"] /* end-schema-fields */,
-      ),
-    );
-}
-function projectComparisonStep(step, out, branch) {
-  if (Object.hasOwn(step, "baseline")) {
-    out.baseline = branch(step.baseline);
-    out.edited = branch(step.edited);
-    out.candidates = step.candidates.map((entry) =>
-      picked(
-        entry,
-        /* schema-fields: candidate */ [
-          "id",
-          "piece",
-          "baseline_logit",
-          "edited_logit",
-          "delta",
-        ] /* end-schema-fields */,
-      ),
-    );
-  }
-}
-function recordTraceSteps(snapshot, request, includePrompt) {
-  const steps = snapshot.steps.map((step, index) => {
-    const out = recordStepCore(snapshot, request, includePrompt, step, index);
-    projectSweepStep(step, out);
-    projectPairStep(step, out, includePrompt);
-    projectAttentionStep(step, out, includePrompt);
-    projectLensStep(step, out);
-    projectLogitStep(step, out);
-    projectComparisonStep(step, out, recordBranch);
-    return out;
-  });
-  return steps;
-}
-function recordPrivacy(request, settings, includePrompt) {
-  return {
-    generated_outputs_included: request.mode !== "prompt_pair",
-    prompt_included: includePrompt,
-    request_replayable:
-      includePrompt &&
-      (typeof settings.prompt === "string" || Array.isArray(settings.prompts)),
-    note:
-      request.mode === "prompt_pair"
-        ? includePrompt
-          ? "Private prompts, source tokens and activation captures: keep this file private."
-          : "Prompts and source tokens omitted; captures remain private and exact request replay is unavailable."
-        : includePrompt
-          ? "Private prompt and generated data: keep this file private."
-          : "Prompt omitted; exact request replay unavailable. Generated outputs may still reveal prompt content.",
-  };
-}
-function recordLimits(request, details) {
-  return request.mode === "sweep"
-    ? {
-        interventions: details.sweep_plan?.cases?.length,
-        prompts: request.prompts.length,
-        probes_per_prompt: 1,
-        records: details.sweep_plan?.records,
-        prefills: details.sweep_plan?.prefills,
-        trace_cap: 32,
-        edits_per_intervention: 8,
-        snapshot_cells: 65536,
-        wall_seconds: 120,
-        worker_cpu_seconds: 90,
-      }
-    : request.mode === "prompt_pair"
-      ? {
-          prompt_tokens_each: 128,
-          prefills: 2,
-          positions: 8,
-          new_tokens: 0,
-          trace_steps: 8,
-          vector_equivalents: 24,
-        }
-      : { prompt_tokens: 128, new_tokens: 32, trace_steps: 32, edits: 8 };
-}
-function recordEnvelope(
-  request,
-  snapshot,
-  settings,
-  details,
-  steps,
-  includePrompt,
-  createdAt,
-) {
-  return {
-    schema: "weight-atlas-experiment-v1",
-    created_at: createdAt,
-    status: snapshot.status,
-    complete: snapshot.status === "complete",
-    worker_cleanup_confirmed: workerCleanupConfirmed(snapshot),
-    termination: snapshot.termination || null,
-    privacy: recordPrivacy(request, settings, includePrompt),
-    request: settings,
-    settings: {
-      seed: 0,
-      sampling:
+  function recordPrivacy(request, settings, includePrompt) {
+    return {
+      generated_outputs_included: request.mode !== "prompt_pair",
+      prompt_included: includePrompt,
+      request_replayable:
+        includePrompt &&
+        (typeof settings.prompt === "string" ||
+          Array.isArray(settings.prompts)),
+      note:
         request.mode === "prompt_pair"
-          ? "none (no generation)"
-          : request.mode === "sweep"
-            ? "none (fixed-context score probe)"
-            : "greedy",
-      dtype: "float32",
-      deterministic_algorithms: true,
-    },
-    runtime: picked(
-      details.runtime,
-      /* schema-fields: runtime */ [
-        "python",
-        "torch",
-        "transformers",
-        "tokenizers",
-        "safetensors",
-        "platform",
-        "machine",
-        "device",
-        "dtype",
-        "sampling",
-        "seed",
-        "deterministic_algorithms",
-        "numerical_threads",
-        "attention_backend",
-      ] /* end-schema-fields */,
-    ),
-    limits: recordLimits(request, details),
-    summary: picked(
-      details,
-      /* schema-fields: summary */ [
-        "reason",
-        "comparison_phase",
-        "generated_tokens",
-        "record_count",
-        "coverage",
-        "sweep_coverage",
-        "sweep_current",
-        "compute_total_ms",
-        "load_ms",
-        "error",
-      ] /* end-schema-fields */,
-    ),
-    baseline: picked(
-      details.baseline,
-      /* schema-fields: branch_summary */ [
-        "generated_ids",
-        "generated_text",
-        "reason",
-      ] /* end-schema-fields */,
-    ),
-    edited: picked(
-      details.edited,
-      /* schema-fields: branch_summary */ [
-        "generated_ids",
-        "generated_text",
-        "reason",
-      ] /* end-schema-fields */,
-    ),
-    steps,
-  };
-}
-function experimentRecord(
-  request,
-  snapshot,
-  { includePrompt = false, createdAt = new Date().toISOString() } = {},
-) {
-  if (!request || !Array.isArray(snapshot.steps) || snapshot.steps.length > 32)
-    throw new Error("A bounded accepted run is required.");
-  const details = snapshot.details || {},
-    settings = recordRequestSettings(request, details, includePrompt);
-  const steps = recordTraceSteps(snapshot, request, includePrompt);
-  const result = recordEnvelope(
+          ? includePrompt
+            ? "Private prompts, source tokens and activation captures: keep this file private."
+            : "Prompts and source tokens omitted; captures remain private and exact request replay is unavailable."
+          : includePrompt
+            ? "Private prompt and generated data: keep this file private."
+            : "Prompt omitted; exact request replay unavailable. Generated outputs may still reveal prompt content.",
+    };
+  }
+  function recordLimits(request, details) {
+    return request.mode === "sweep"
+      ? {
+          interventions: details.sweep_plan?.cases?.length,
+          prompts: request.prompts.length,
+          probes_per_prompt: 1,
+          records: details.sweep_plan?.records,
+          prefills: details.sweep_plan?.prefills,
+          trace_cap: 32,
+          edits_per_intervention: 8,
+          snapshot_cells: 65536,
+          wall_seconds: 120,
+          worker_cpu_seconds: 90,
+        }
+      : request.mode === "prompt_pair"
+        ? {
+            prompt_tokens_each: 128,
+            prefills: 2,
+            positions: 8,
+            new_tokens: 0,
+            trace_steps: 8,
+            vector_equivalents: 24,
+          }
+        : { prompt_tokens: 128, new_tokens: 32, trace_steps: 32, edits: 8 };
+  }
+  function recordEnvelope(
     request,
     snapshot,
     settings,
@@ -723,279 +660,406 @@ function experimentRecord(
     steps,
     includePrompt,
     createdAt,
-  );
-  if (request.mode === "sweep")
-    result.sweep_plan = picked(
-      details.sweep_plan,
-      /* schema-fields: sweep_plan */ [
-        "version",
-        "scope",
-        "architecture",
-        "intervention_semantics",
-        "control_semantics",
-        "seed",
-        "control_version",
-        "source_model",
-        "targets",
-        "cases",
-        "prompt_count",
-        "records",
-        "prefills",
-        "capture_layer",
-        "activation_site",
-        "coverage",
-        "limits",
-      ] /* end-schema-fields */,
-    );
-  const json = finiteJSON(result);
-  if (utf8Size(json) > EXPERIMENT_BYTES)
-    throw new Error(
-      "This run exceeds the 1 MiB export cap. No file was saved.",
-    );
-  return JSON.parse(json); // Detached from mutable UI/snapshot objects.
-}
-function redactExperiment(record) {
-  const clean = JSON.parse(finiteJSON(record));
-  delete clean.request.prompt;
-  delete clean.request.prompt_ids;
-  delete clean.request.prompts;
-  delete clean.request.preview_digest;
-  delete clean.request.plan_digest;
-  if (clean.steps[0]) delete clean.steps[0].input_token_id;
-  for (const step of clean.steps) {
-    if (clean.request.mode === "sweep") delete step.input_token_id;
-    if (step.attention) delete step.attention.key_token_ids;
-    if (step.prompt_pair)
-      for (const key of ["a", "b"]) {
-        delete step.prompt_pair[key].token_id;
-        delete step.prompt_pair[key].token_piece;
-      }
-  }
-  clean.privacy = {
-    generated_outputs_included: clean.request.mode !== "prompt_pair",
-    prompt_included: false,
-    request_replayable: false,
-    note:
-      clean.request.mode === "prompt_pair"
-        ? "Prompts and source tokens omitted; captures remain private and exact request replay is unavailable."
-        : "Prompt omitted; exact request replay unavailable. Generated outputs may still reveal prompt content.",
-  };
-  return clean;
-}
-class AtlasExperimentLog {
-  constructor({ maxBytes = EXPERIMENT_BYTES, maxRuns = EXPERIMENT_RUNS } = {}) {
-    this.maxBytes = maxBytes;
-    this.maxRuns = maxRuns;
-    this.createdAt = new Date().toISOString();
-    this.records = [];
-  }
-  envelope(records = this.records) {
+  ) {
     return {
-      schema: "weight-atlas-session-log-v1",
-      created_at: this.createdAt,
-      persistence:
-        "browser session memory; durable only after explicit file download",
-      limits: { bytes: this.maxBytes, runs: this.maxRuns },
-      records,
+      schema: "weight-atlas-experiment-v1",
+      created_at: createdAt,
+      status: snapshot.status,
+      complete: snapshot.status === "complete",
+      worker_cleanup_confirmed: workerCleanupConfirmed(snapshot),
+      termination: snapshot.termination || null,
+      privacy: recordPrivacy(request, settings, includePrompt),
+      request: settings,
+      settings: {
+        seed: 0,
+        sampling:
+          request.mode === "prompt_pair"
+            ? "none (no generation)"
+            : request.mode === "sweep"
+              ? "none (fixed-context score probe)"
+              : "greedy",
+        dtype: "float32",
+        deterministic_algorithms: true,
+      },
+      runtime: picked(
+        details.runtime,
+        /* schema-fields: runtime */ [
+          "python",
+          "torch",
+          "transformers",
+          "tokenizers",
+          "safetensors",
+          "platform",
+          "machine",
+          "device",
+          "dtype",
+          "sampling",
+          "seed",
+          "deterministic_algorithms",
+          "numerical_threads",
+          "attention_backend",
+        ] /* end-schema-fields */,
+      ),
+      limits: recordLimits(request, details),
+      summary: picked(
+        details,
+        /* schema-fields: summary */ [
+          "reason",
+          "comparison_phase",
+          "generated_tokens",
+          "record_count",
+          "coverage",
+          "sweep_coverage",
+          "sweep_current",
+          "compute_total_ms",
+          "load_ms",
+          "error",
+        ] /* end-schema-fields */,
+      ),
+      baseline: picked(
+        details.baseline,
+        /* schema-fields: branch_summary */ [
+          "generated_ids",
+          "generated_text",
+          "reason",
+        ] /* end-schema-fields */,
+      ),
+      edited: picked(
+        details.edited,
+        /* schema-fields: branch_summary */ [
+          "generated_ids",
+          "generated_text",
+          "reason",
+        ] /* end-schema-fields */,
+      ),
+      steps,
     };
   }
-  text() {
-    return finiteJSON(this.envelope());
-  }
-  get bytes() {
-    return utf8Size(this.text());
-  }
-  append(record) {
-    const detached = JSON.parse(finiteJSON(record)),
-      next = [...this.records, detached];
+  function experimentRecord(
+    request,
+    snapshot,
+    { includePrompt = false, createdAt = new Date().toISOString() } = {},
+  ) {
     if (
-      next.length > this.maxRuns ||
-      utf8Size(finiteJSON(this.envelope(next))) > this.maxBytes
+      !request ||
+      !Array.isArray(snapshot.steps) ||
+      snapshot.steps.length > 32
     )
-      throw new Error(
-        "Session log is full. This run is held pending; export it and the log, then explicitly clear/discard before starting another run.",
+      throw new Error("A bounded accepted run is required.");
+    const details = snapshot.details || {},
+      settings = recordRequestSettings(request, details, includePrompt);
+    const steps = recordTraceSteps(snapshot, request, includePrompt);
+    const result = recordEnvelope(
+      request,
+      snapshot,
+      settings,
+      details,
+      steps,
+      includePrompt,
+      createdAt,
+    );
+    if (request.mode === "sweep")
+      result.sweep_plan = picked(
+        details.sweep_plan,
+        /* schema-fields: sweep_plan */ [
+          "version",
+          "scope",
+          "architecture",
+          "intervention_semantics",
+          "control_semantics",
+          "seed",
+          "control_version",
+          "source_model",
+          "targets",
+          "cases",
+          "prompt_count",
+          "records",
+          "prefills",
+          "capture_layer",
+          "activation_site",
+          "coverage",
+          "limits",
+        ] /* end-schema-fields */,
       );
-    this.records = next;
+    const json = finiteJSON(result);
+    if (utf8Size(json) > EXPERIMENT_BYTES)
+      throw new Error(
+        "This run exceeds the 1 MiB export cap. No file was saved.",
+      );
+    return JSON.parse(json); // Detached from mutable UI/snapshot objects.
   }
-  confirmCleanup(index) {
-    if (
-      !Number.isSafeInteger(index) ||
-      index < 0 ||
-      index >= this.records.length
-    )
-      throw new Error("Missing interrupted log record.");
-    // false -> true reduces serialized size; preserve the original outcome/trace.
-    this.records[index] = {
-      ...this.records[index],
-      worker_cleanup_confirmed: true,
-    };
-  }
-  clear() {
-    this.records = [];
-    this.createdAt = new Date().toISOString();
-  }
-}
-
-// The closed import codec is requested only by an explicit archive action.
-const AtlasExperimentImport =
-  typeof module !== "undefined" ? require("./inference-import.js") : null;
-const loadExperimentImport = (() => {
-  let importCodecPromise = null;
-  let importedExperimentCodec;
-  return function loadExperimentImport() {
-    const ready = () => {
-      const c = importedExperimentCodec;
-      if (!c || typeof c.read !== "function" || typeof c.append !== "function")
-        throw new Error("Archive importer did not initialize");
-      return c;
-    };
-    if (importCodecPromise) return importCodecPromise;
-    importCodecPromise = new Promise((resolve, reject) => {
-      const script = document.createElement("script");
-      script.atlasRegisterImport = (codec) => {
-        importedExperimentCodec = codec;
-      };
-      script.src = "/inference-import.js";
-      script.async = true;
-      const failed = () => {
-        clearTimeout(timeout);
-        script.remove();
-        reject(
-          new Error(
-            "Archive importer unavailable; existing records unchanged. Retry explicitly.",
-          ),
-        );
-      };
-      const timeout = setTimeout(failed, 15000);
-      script.onload = () => {
-        clearTimeout(timeout);
-        script.remove();
-        try {
-          resolve(ready());
-        } catch (error) {
-          reject(error);
+  function redactExperiment(record) {
+    const clean = JSON.parse(finiteJSON(record));
+    delete clean.request.prompt;
+    delete clean.request.prompt_ids;
+    delete clean.request.prompts;
+    delete clean.request.preview_digest;
+    delete clean.request.plan_digest;
+    if (clean.steps[0]) delete clean.steps[0].input_token_id;
+    for (const step of clean.steps) {
+      if (clean.request.mode === "sweep") delete step.input_token_id;
+      if (step.attention) delete step.attention.key_token_ids;
+      if (step.prompt_pair)
+        for (const key of ["a", "b"]) {
+          delete step.prompt_pair[key].token_id;
+          delete step.prompt_pair[key].token_piece;
         }
-      };
-      script.onerror = failed;
-      document.head.append(script);
-    }).catch((error) => {
-      importCodecPromise = null;
-      throw error;
-    });
-    return importCodecPromise;
-  };
-})();
-
-class AtlasLogStorage {
-  constructor(storage, tabStorage, makeOwner) {
-    this.storage = storage;
-    this.tabStorage = tabStorage;
-    this.makeOwner = makeOwner;
-    this.expected = undefined;
-    this.owner = null;
+    }
+    clean.privacy = {
+      generated_outputs_included: clean.request.mode !== "prompt_pair",
+      prompt_included: false,
+      request_replayable: false,
+      note:
+        clean.request.mode === "prompt_pair"
+          ? "Prompts and source tokens omitted; captures remain private and exact request replay is unavailable."
+          : "Prompt omitted; exact request replay unavailable. Generated outputs may still reveal prompt content.",
+    };
+    return clean;
   }
-  key() {
-    let owner =
-      this.owner || this.tabStorage.getItem("weight-atlas.experiment-owner.v1");
-    if (!owner) {
-      owner = this.makeOwner();
+  class AtlasExperimentLog {
+    constructor({
+      maxBytes = EXPERIMENT_BYTES,
+      maxRuns = EXPERIMENT_RUNS,
+    } = {}) {
+      this.maxBytes = maxBytes;
+      this.maxRuns = maxRuns;
+      this.createdAt = new Date().toISOString();
+      this.records = [];
+    }
+    envelope(records = this.records) {
+      return {
+        schema: "weight-atlas-session-log-v1",
+        created_at: this.createdAt,
+        persistence:
+          "browser session memory; durable only after explicit file download",
+        limits: { bytes: this.maxBytes, runs: this.maxRuns },
+        records,
+      };
+    }
+    text() {
+      return finiteJSON(this.envelope());
+    }
+    get bytes() {
+      return utf8Size(this.text());
+    }
+    append(record) {
+      const detached = JSON.parse(finiteJSON(record)),
+        next = [...this.records, detached];
+      if (
+        next.length > this.maxRuns ||
+        utf8Size(finiteJSON(this.envelope(next))) > this.maxBytes
+      )
+        throw new Error(
+          "Session log is full. This run is held pending; export it and the log, then explicitly clear/discard before starting another run.",
+        );
+      this.records = next;
+    }
+    confirmCleanup(index) {
+      if (
+        !Number.isSafeInteger(index) ||
+        index < 0 ||
+        index >= this.records.length
+      )
+        throw new Error("Missing interrupted log record.");
+      // false -> true reduces serialized size; preserve the original outcome/trace.
+      this.records[index] = {
+        ...this.records[index],
+        worker_cleanup_confirmed: true,
+      };
+    }
+    clear() {
+      this.records = [];
+      this.createdAt = new Date().toISOString();
+    }
+  }
+
+  // The closed import codec is requested only by an explicit archive action.
+  const AtlasExperimentImport =
+    typeof module !== "undefined" ? require("./inference-import.js") : null;
+  const loadExperimentImport = (() => {
+    let importCodecPromise = null;
+    let importedExperimentCodec;
+    return function loadExperimentImport() {
+      const ready = () => {
+        const c = importedExperimentCodec;
+        if (
+          !c ||
+          typeof c.read !== "function" ||
+          typeof c.append !== "function"
+        )
+          throw new Error("Archive importer did not initialize");
+        return c;
+      };
+      if (importCodecPromise) return importCodecPromise;
+      importCodecPromise = new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.atlasRegisterImport = (codec) => {
+          importedExperimentCodec = codec;
+        };
+        script.src = "/inference-import.js";
+        script.async = true;
+        const failed = () => {
+          clearTimeout(timeout);
+          script.remove();
+          reject(
+            new Error(
+              "Archive importer unavailable; existing records unchanged. Retry explicitly.",
+            ),
+          );
+        };
+        const timeout = setTimeout(failed, 15000);
+        script.onload = () => {
+          clearTimeout(timeout);
+          script.remove();
+          try {
+            resolve(ready());
+          } catch (error) {
+            reject(error);
+          }
+        };
+        script.onerror = failed;
+        document.head.append(script);
+      }).catch((error) => {
+        importCodecPromise = null;
+        throw error;
+      });
+      return importCodecPromise;
+    };
+  })();
+
+  class AtlasLogStorage {
+    constructor(storage, tabStorage, makeOwner) {
+      this.storage = storage;
+      this.tabStorage = tabStorage;
+      this.makeOwner = makeOwner;
+      this.expected = undefined;
+      this.owner = null;
+    }
+    key() {
+      let owner =
+        this.owner ||
+        this.tabStorage.getItem("weight-atlas.experiment-owner.v1");
+      if (!owner) {
+        owner = this.makeOwner();
+        if (!/^[a-zA-Z0-9-]{1,80}$/.test(owner))
+          throw new Error("Invalid local log owner");
+        this.owner = owner;
+      }
       if (!/^[a-zA-Z0-9-]{1,80}$/.test(owner))
         throw new Error("Invalid local log owner");
-      this.owner = owner;
+      return "weight-atlas.experiments.v1:" + owner;
     }
-    if (!/^[a-zA-Z0-9-]{1,80}$/.test(owner))
-      throw new Error("Invalid local log owner");
-    return "weight-atlas.experiments.v1:" + owner;
-  }
-  async mutate(locks, operation) {
-    if (!locks?.request)
-      throw new Error("Browser archive writes require Web Locks");
-    return locks.request("weight-atlas-experiment-storage-v1", () => {
-      this.key();
-      this.tabStorage.setItem(
-        "weight-atlas.experiment-owner.v1",
-        this.owner || this.key().split(":")[1],
-      );
-      return operation(this);
-    });
-  }
-  list() {
-    const keys = [];
-    for (let i = 0; i < this.storage.length; i++) {
-      const k = this.storage.key(i);
-      if (/^weight-atlas\.experiments\.v1:[a-zA-Z0-9-]{1,80}$/.test(k))
-        keys.push(k);
+    async mutate(locks, operation) {
+      if (!locks?.request)
+        throw new Error("Browser archive writes require Web Locks");
+      return locks.request("weight-atlas-experiment-storage-v1", () => {
+        this.key();
+        this.tabStorage.setItem(
+          "weight-atlas.experiment-owner.v1",
+          this.owner || this.key().split(":")[1],
+        );
+        return operation(this);
+      });
     }
-    if (keys.length > 8)
-      throw new Error(
-        "More than 8 saved archives; export/remove old browser data before creating another",
-      );
-    return keys.sort();
+    list() {
+      const keys = [];
+      for (let i = 0; i < this.storage.length; i++) {
+        const k = this.storage.key(i);
+        if (/^weight-atlas\.experiments\.v1:[a-zA-Z0-9-]{1,80}$/.test(k))
+          keys.push(k);
+      }
+      if (keys.length > 8)
+        throw new Error(
+          "More than 8 saved archives; export/remove old browser data before creating another",
+        );
+      return keys.sort();
+    }
+    readKey(key) {
+      if (!/^weight-atlas\.experiments\.v1:[a-zA-Z0-9-]{1,80}$/.test(key))
+        throw new Error("Invalid archive key");
+      const text = this.storage.getItem(key);
+      if (text !== null && utf8Size(text) > EXPERIMENT_BYTES)
+        throw new Error("Saved log exceeds 1 MiB");
+      return text;
+    }
+    save(text) {
+      if (utf8Size(text) > EXPERIMENT_BYTES)
+        throw new Error("Durable log exceeds 1 MiB");
+      const key = this.key(),
+        current = this.readKey(key);
+      if (this.expected === undefined && current !== null)
+        throw new Error(
+          "A saved log exists: explicitly restore or delete it before saving",
+        );
+      if (this.expected !== undefined && current !== this.expected)
+        throw new Error(
+          "Saved archive changed in another tab; export your records and reload the archive before saving",
+        );
+      if (current === null && this.list().length >= 8)
+        throw new Error("8 browser archive slots are full");
+      this.storage.setItem(key, text);
+      this.expected = text;
+    }
+    read() {
+      return this.readKey(this.key());
+    }
+    adopt(text) {
+      if (this.readKey(this.key()) !== text)
+        throw new Error("Saved archive changed during restore");
+      this.expected = text;
+    }
+    clear() {
+      this.storage.removeItem(this.key());
+      this.expected = null;
+    }
   }
-  readKey(key) {
-    if (!/^weight-atlas\.experiments\.v1:[a-zA-Z0-9-]{1,80}$/.test(key))
-      throw new Error("Invalid archive key");
-    const text = this.storage.getItem(key);
-    if (text !== null && utf8Size(text) > EXPERIMENT_BYTES)
-      throw new Error("Saved log exceeds 1 MiB");
-    return text;
-  }
-  save(text) {
-    if (utf8Size(text) > EXPERIMENT_BYTES)
-      throw new Error("Durable log exceeds 1 MiB");
-    const key = this.key(),
-      current = this.readKey(key);
-    if (this.expected === undefined && current !== null)
-      throw new Error(
-        "A saved log exists: explicitly restore or delete it before saving",
-      );
-    if (this.expected !== undefined && current !== this.expected)
-      throw new Error(
-        "Saved archive changed in another tab; export your records and reload the archive before saving",
-      );
-    if (current === null && this.list().length >= 8)
-      throw new Error("8 browser archive slots are full");
-    this.storage.setItem(key, text);
-    this.expected = text;
-  }
-  read() {
-    return this.readKey(this.key());
-  }
-  adopt(text) {
-    if (this.readKey(this.key()) !== text)
-      throw new Error("Saved archive changed during restore");
-    this.expected = text;
-  }
-  clear() {
-    this.storage.removeItem(this.key());
-    this.expected = null;
-  }
-}
-class AtlasFileJournal {
-  constructor(handle) {
-    this.handle = handle;
-    this.writing = false;
-  }
-  async save(text) {
-    if (this.writing) throw new Error("File journal write still pending");
-    if (utf8Size(text) > EXPERIMENT_BYTES)
-      throw new Error("File journal exceeds 1 MiB");
-    this.writing = true;
-    let writable;
-    try {
-      writable = await this.handle.createWritable();
-      await writable.write(text);
-      await writable.close();
-    } catch (error) {
-      try {
-        await writable?.abort();
-      } catch {}
-      throw error;
-    } finally {
+  class AtlasFileJournal {
+    constructor(handle) {
+      this.handle = handle;
       this.writing = false;
     }
+    async save(text) {
+      if (this.writing) throw new Error("File journal write still pending");
+      if (utf8Size(text) > EXPERIMENT_BYTES)
+        throw new Error("File journal exceeds 1 MiB");
+      this.writing = true;
+      let writable;
+      try {
+        writable = await this.handle.createWritable();
+        await writable.write(text);
+        await writable.close();
+      } catch (error) {
+        try {
+          await writable?.abort();
+        } catch {}
+        throw error;
+      } finally {
+        this.writing = false;
+      }
+    }
   }
-}
+
+  return {
+    AtlasPlayback,
+    sameSource,
+    draftEdit,
+    editRangeSummary,
+    observationSelection,
+    pairPositions,
+    sweepRequest,
+    EXPERIMENT_BYTES,
+    utf8Size,
+    finiteJSON,
+    workerCleanupConfirmed,
+    experimentRecord,
+    redactExperiment,
+    AtlasExperimentLog,
+    AtlasExperimentImport,
+    loadExperimentImport,
+    AtlasLogStorage,
+    AtlasFileJournal,
+  };
+})();
 
 if (typeof module !== "undefined")
   module.exports = {
