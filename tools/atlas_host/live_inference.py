@@ -35,6 +35,7 @@ from typing import (
 from collections.abc import Callable, Iterator, Mapping
 import socket
 from urllib.parse import urlsplit
+from atlas_host.host_assets import COORDINATOR_ASSETS
 
 if TYPE_CHECKING:
     from analytics.service import AnalyticsJobs, Handler as AnalyticsHandler
@@ -1133,16 +1134,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(404, {"error": "Not found"})
                 return self.send(200, session.snapshot())
             # Exact, task-owned assets only; no filesystem path from HTTP input.
-            analytics_assets = {
-                "/analytics-panel.js": "text/javascript",
-                "/analytics-mount.js": "text/javascript",
-                "/analytics-panel.css": "text/css",
-                "/app.js": "text/javascript",
-            }
-            if self.command == "GET" and path in analytics_assets:
-                return self.send(
-                    200, (ROOT / "web" / path[1:]).read_bytes(), analytics_assets[path]
-                )
+            if self.command == "GET" and path in COORDINATOR_ASSETS:
+                name, mime = COORDINATOR_ASSETS[path]
+                return self.send(200, (ROOT / "web" / name).read_bytes(), mime)
             if self.command == "GET" and path in ("/", "/index.html"):
                 body = (ROOT / "web/index.html").read_bytes()
                 extras = b'<link rel="stylesheet" href="/analytics-panel.css"><script type="module" src="/analytics-mount.js"></script>'

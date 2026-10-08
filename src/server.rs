@@ -156,18 +156,9 @@ pub fn reply(mut socket: TcpStream, status: u16, mime: &str, body: &[u8], header
 // One fixed startup resource keeps the normal page below the unchanged four
 // header-admission slots. Preserve script order without eval, loaders or copies.
 fn viewer_scripts() -> [&'static [u8]; 9] {
-    [
-        include_bytes!("../web/vendor/openseadragon.min.js"),
-        b"\n;\n",
-        include_bytes!("../web/atlas-tools.js"),
-        b"\n;\n",
-        include_bytes!("../web/app.js"),
-        b"\n;\n",
-        include_bytes!("../web/workspace-tools.js"),
-        b"\n;\n",
-        include_bytes!("../web/inference.js"),
-    ]
+    crate::page_assets::VIEWER_SCRIPTS
 }
+
 fn reply_viewer_bundle(mut socket: TcpStream) {
     let scripts = viewer_scripts();
     let head = response_head(
@@ -933,33 +924,7 @@ fn reply_view(state: &State, socket: TcpStream, q: &Query) {
 }
 
 fn reply_static(socket: TcpStream, path: &str) {
-    let static_file: Option<(&str, &[u8])> = match path {
-        "/" | "/index.html" => Some((
-            "text/html; charset=utf-8",
-            include_bytes!("../web/index.html"),
-        )),
-        "/inference.js" => Some(("text/javascript", include_bytes!("../web/inference.js"))),
-        "/inference-import.js" => Some((
-            "text/javascript",
-            include_bytes!("../web/inference-import.js"),
-        )),
-        "/atlas-tools.js" => Some(("text/javascript", include_bytes!("../web/atlas-tools.js"))),
-        "/workspace-tools.js" => Some((
-            "text/javascript",
-            include_bytes!("../web/workspace-tools.js"),
-        )),
-        "/app.js" => Some(("text/javascript", include_bytes!("../web/app.js"))),
-        "/style.css" => Some(("text/css", include_bytes!("../web/style.css"))),
-        "/vendor/openseadragon.min.js" => Some((
-            "text/javascript",
-            include_bytes!("../web/vendor/openseadragon.min.js"),
-        )),
-        "/vendor/OpenSeadragon-LICENSE.txt" => Some((
-            "text/plain",
-            include_bytes!("../web/vendor/OpenSeadragon-LICENSE.txt"),
-        )),
-        _ => None,
-    };
+    let static_file = crate::page_assets::viewer(path);
     if let Some((mime, body)) = static_file {
         reply(socket, 200, mime, body, "")
     } else {

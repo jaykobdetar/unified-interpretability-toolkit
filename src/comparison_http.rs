@@ -231,23 +231,7 @@ fn read_api(state: &Comparison, path: &str, q: &Query) -> Option<Result<Value>> 
 }
 
 fn reply_asset(socket: TcpStream, path: &str) {
-    let asset: Option<(&str, &[u8])> = match path {
-        "/" | "/comparison.html" => Some((
-            "text/html; charset=utf-8",
-            include_bytes!("../web/comparison.html"),
-        )),
-        "/comparison.js" => Some(("text/javascript", include_bytes!("../web/comparison.js"))),
-        "/comparison.css" => Some(("text/css", include_bytes!("../web/comparison.css"))),
-        "/vendor/openseadragon.min.js" => Some((
-            "text/javascript",
-            include_bytes!("../web/vendor/openseadragon.min.js"),
-        )),
-        "/vendor/OpenSeadragon-LICENSE.txt" => Some((
-            "text/plain",
-            include_bytes!("../web/vendor/OpenSeadragon-LICENSE.txt"),
-        )),
-        _ => None,
-    };
+    let asset = crate::page_assets::comparison(path);
     if let Some((mime, body)) = asset {
         server::reply(socket, 200, mime, body, "")
     } else {

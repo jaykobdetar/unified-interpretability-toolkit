@@ -2,7 +2,7 @@
 
 from typing import assert_type
 
-from atlas_host.host_assets import ASSETS, BUNDLE
+from atlas_host.host_assets import ASSETS, BUNDLE, render
 
 
 def asset_entry(path: str) -> tuple[str, str]:
@@ -13,3 +13,8 @@ def asset_entry(path: str) -> tuple[str, str]:
 def bundle_entry(index: int) -> str:
     assert_type(BUNDLE, list[str])
     return BUNDLE[index]
+
+
+def native_declarations() -> str:
+    assert_type(render(), str)
+    return render()

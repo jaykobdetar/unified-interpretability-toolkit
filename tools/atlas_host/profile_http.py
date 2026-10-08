@@ -16,6 +16,7 @@ from .runtime_adapter import (
 from .hosted_runtime import HostedApplication
 from .static_operation import StaticOperation
 from host_atlas import FixtureServer, HostHandler, ROOT, BUNDLE
+from .host_assets import add_profile_client
 
 
 class HostedServer(FixtureServer, Protocol):
@@ -176,7 +177,7 @@ class HostedHandler(HostHandler):
                 require(not length and self.path == path, "Asset request unavailable")
                 bundle = list(BUNDLE)
                 if getattr(self.server, "profile_controls", False) is True:
-                    bundle.insert(bundle.index("host-client.js"), "profile-client.js")
+                    add_profile_client(bundle)
                 return self.send(
                     200,
                     b"\n;\n".join(

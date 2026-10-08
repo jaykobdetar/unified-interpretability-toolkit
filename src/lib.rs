@@ -3,6 +3,7 @@ pub mod comparison;
 pub mod comparison_http;
 pub mod hosted_renderer;
 mod http_status;
+mod page_assets;
 pub mod profile_worker;
 pub mod render;
 pub mod resources;
