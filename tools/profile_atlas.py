@@ -10,17 +10,18 @@ import signal
 import time
 from http.server import HTTPServer
 from pathlib import Path
+from typing import Any, Sequence, cast
 
 from atlas_host.common import digest, require
 from atlas_host.config import load_config
 from atlas_host.hosted_runtime import HostedApplication
-from atlas_host.profile_http import HostedHandler
+from atlas_host.profile_http import HostedHandler, HostedServer
 from atlas_host.registry import Registry
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run(config, binary, expected_sha):
+def run(config: dict[str, Any], binary: str | Path, expected_sha: str) -> None:
     digest(expected_sha)
     require(config["bind"] == "127.0.0.1", "Local profile host requires loopback")
     app = HostedApplication(
@@ -29,15 +30,16 @@ def run(config, binary, expected_sha):
         binary,
         expected_sha,
     )  # No launch_policy: default gate.
-    server = None
+    server: HostedServer | None = None
 
-    def shutdown(*_):
+    def shutdown(*_: object) -> None:
         raise KeyboardInterrupt
 
     try:
         app.start_threads()
-        server = HTTPServer(
-            (config["bind"], config["ports"]["coordinator"]), HostedHandler
+        server = cast(
+            HostedServer,
+            HTTPServer((config["bind"], config["ports"]["coordinator"]), HostedHandler),
         )
         server.application = app
         server.host = app.host
@@ -67,7 +69,7 @@ def run(config, binary, expected_sha):
             time.sleep(0.05)
 
 
-def main(argv=None):
+def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument(

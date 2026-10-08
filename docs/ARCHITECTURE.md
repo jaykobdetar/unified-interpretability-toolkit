@@ -303,3 +303,5 @@ Owner CLI and fixture/inference metadata boundaries have inert contracts for exa
 Owner CLI, descriptor projection and fixture preparation signatures now describe the existing arguments and receipt dictionaries. Explicit option keys and a structural subprocess runner retain the same forwarding, checks, errors and execution order; complete original runtime AST comparison and twelve qualified correctness faults protect these boundaries.
 
 Profile and static owner launchers have inert contracts for loop calls, cleanup retries, shutdown exceptions, announcements and command forwarding. Eighteen matched correctness faults across all six original functions, including nested shutdown callbacks, are caught without opening a listener or starting threads or a native worker.
+
+Profile and static launcher signatures share the existing structural server view, including the trusted profile-controls flag and fixture-server lifecycle. Six original signatures, two local annotations and three identity casts preserve the complete runtime algorithms, signal exceptions and ownership cleanup order; eighteen qualified faults protect the existing behavior.

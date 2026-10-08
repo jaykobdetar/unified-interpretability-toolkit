@@ -15,12 +15,13 @@ from .runtime_adapter import (
 )
 from .hosted_runtime import HostedApplication
 from .static_operation import StaticOperation
-from host_atlas import HostHandler, ROOT, BUNDLE
+from host_atlas import FixtureServer, HostHandler, ROOT, BUNDLE
 
 
-class HostedServer(Protocol):
+class HostedServer(FixtureServer, Protocol):
     application: HostedApplication
     host: FixtureHost
+    profile_controls: bool
 
 
 class HostedHandler(HostHandler):
