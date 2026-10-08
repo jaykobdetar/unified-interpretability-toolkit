@@ -37,6 +37,8 @@ Entrypoint, source, dispatch and numeric-worker functions have private natural s
 
 The native plain-error and coded intake-rejection bodies use private typed records in `server::response`. They convert through the existing sorted JSON value map, preserving field names, escaping and wire bytes. Callers still choose status and code; the bounded full-response and best-effort intake write paths retain their original behavior.
 
+Calibration acknowledgements use the private `server::response::CalibrationReply` variants for checkpoint scope, queued tensor and already-complete results. Their sorted JSON conversion preserves the existing fields and types. The caller retains all request validation, queue admission, lock lifetimes, progress publication and status selection.
+
 ## Python package, architecture and engine boundary
 
 Canonical implementations live in the ordinary `atlas_host` and `analytics` packages under `tools`. Compatibility modules alias the same canonical module objects, mutable defaults and callbacks. The script directory supplies normal imports for documented `python3 tools/...` commands; no package installation is required. Late helper lookup is retained where callers/tests replace module state. Portable tests use the import environment supplied by the existing checker. Some standalone tests, qualification guards and the oracle retain explicit search-path setup; some imports remain deferred for numerical initialization, compatibility cycles or platform-specific use.

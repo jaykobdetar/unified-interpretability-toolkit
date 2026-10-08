@@ -809,7 +809,13 @@ fn reply_calibration(
         json_reply(
             socket,
             202,
-            json!({"api_version":1,"queued":if state.source.tensors.iter().all(|t|t.available){"complete checkpoint"}else{"supported tensors; global calibration unavailable"}}),
+            Value::from(response::CalibrationReply::Checkpoint(
+                if state.source.tensors.iter().all(|t| t.available) {
+                    "complete checkpoint"
+                } else {
+                    "supported tensors; global calibration unavailable"
+                },
+            )),
         );
         return;
     }
@@ -825,9 +831,17 @@ fn reply_calibration(
     }) {
         Ok(id) => {
             if state.stats(id).is_some() {
-                json_reply(socket, 200, json!({"api_version":1,"complete":true}));
+                json_reply(
+                    socket,
+                    200,
+                    Value::from(response::CalibrationReply::Complete),
+                );
             } else if queue_calibration(state, || sender.try_send(Job::Calibrate(id)).is_ok()) {
-                json_reply(socket, 202, json!({"api_version":1,"queued":id}));
+                json_reply(
+                    socket,
+                    202,
+                    Value::from(response::CalibrationReply::Tensor(id)),
+                );
             } else {
                 error(socket, 503, "Numeric queue full; retry shortly")
             }

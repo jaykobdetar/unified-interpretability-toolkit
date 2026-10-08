@@ -120,3 +120,23 @@ impl From<CodedErrorBody<'_>> for Value {
         ]))
     }
 }
+
+pub(super) enum CalibrationReply<'a> {
+    Checkpoint(&'a str),
+    Tensor(usize),
+    Complete,
+}
+
+impl From<CalibrationReply<'_>> for Value {
+    fn from(response: CalibrationReply<'_>) -> Self {
+        let detail = match response {
+            CalibrationReply::Checkpoint(scope) => ("queued".to_owned(), Value::from(scope)),
+            CalibrationReply::Tensor(id) => ("queued".to_owned(), Value::from(id)),
+            CalibrationReply::Complete => ("complete".to_owned(), Value::from(true)),
+        };
+        Value::Object(Map::from_iter([
+            ("api_version".to_owned(), Value::from(1)),
+            detail,
+        ]))
+    }
+}
