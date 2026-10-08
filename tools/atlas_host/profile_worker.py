@@ -5,6 +5,8 @@ scheduled watchdog. Neither status nor HTTP polling drives work. No platform
 provider/default scheduler is installed here. See PROFILE-WORKER-INTERFACE.md.
 """
 
+from atlas_host import limits as _limits
+
 import math
 import secrets
 import threading
@@ -74,8 +76,8 @@ class WorkerPlatform(Protocol):
 
 WALL_MAX = 5.0
 CPU_MAX = 4.0
-FINALIZE_RESERVE = 0.8
-POLL_SLICE = 0.002
+FINALIZE_RESERVE = _limits.PROFILE_FINALIZE_RESERVE_SECONDS
+POLL_SLICE = _limits.PROFILE_POLL_SLICE_SECONDS
 
 
 class ProfileJob:

@@ -80,3 +80,13 @@ HOSTED_STOP_RESERVE_BYTES: Final[int] = 13 * 1024**3 // 4
 HOSTED_TREE_CEILING_BYTES: Final[int] = 768 * 1024**2
 HOSTED_SNAPSHOT_MAX_BYTES: Final[int] = 32 * 1024**2
 HOSTED_DISK_RESERVE_BYTES: Final[int] = 25 * 1024**3
+
+# analytics/svd_summary.py: independent policy bounds.
+SVD_SUMMARY_PREVIEW_AXIS: Final[int] = 16
+
+# atlas_host/profile_snapshot.py: independent policy bounds.
+PROFILE_FIXED_RESERVE_BYTES: Final[int] = 2 * 1024**2 + 128 * 1024
+
+# atlas_host/profile_worker.py: independent policy bounds.
+PROFILE_FINALIZE_RESERVE_SECONDS: Final[float] = 0.8
+PROFILE_POLL_SLICE_SECONDS: Final[float] = 0.002

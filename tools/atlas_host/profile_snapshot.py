@@ -61,7 +61,7 @@ HEADER = struct.Struct("<8sII7Q32s32s32s")
 RECORD = struct.Struct("<ddQ")
 ALGORITHM = b"weight-atlas-strength-snapshot-v1:kahan-f64-abs:swap-or-not-8-v1"
 MAX_STATE = _limits.PROFILE_MAX_STATE
-FIXED_RESERVE = 2 * 1024**2 + 128 * 1024
+FIXED_RESERVE = _limits.PROFILE_FIXED_RESERVE_BYTES
 SEALS = (
     getattr(fcntl, "F_SEAL_WRITE", 8)
     | getattr(fcntl, "F_SEAL_GROW", 4)
