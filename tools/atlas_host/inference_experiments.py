@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeAlias
 
 Request = dict[str, object]
 Record = Callable[[dict[str, object]], None]
@@ -95,10 +95,23 @@ class Kind(Enum):
     GENERATION = "generation"
 
 
+PreparedRequest: TypeAlias = tuple[
+    dict[str, Any] | None, dict[str, Any], dict[str, Any] | None, int | None
+]
+
+
+@dataclass(frozen=True)
+class Preparation:
+    sweep: Callable[[], PreparedRequest]
+    pair: Callable[[], tuple[dict[str, Any], None, int | None]]
+    generation: Callable[[], tuple[dict[str, Any], dict[str, Any] | None, int]]
+
+
 @dataclass(frozen=True)
 class Experiment:
     kind: Kind
     execute: Callable[[Context, Request], None]
+    prepare_request: Callable[[Preparation], PreparedRequest] | None = None
 
 
 def run_preview(context: Context, request: Request) -> None:
@@ -157,13 +170,29 @@ def run_generation(context: Context, request: Request) -> None:
     )
 
 
+def prepare_sweep(context: Preparation) -> PreparedRequest:
+    return context.sweep()
+
+
+def prepare_pair(context: Preparation) -> PreparedRequest:
+    return (None, *context.pair())
+
+
+def prepare_generation(context: Preparation) -> PreparedRequest:
+    return (None, *context.generation())
+
+
 REGISTRY: Mapping[Kind, Experiment] = MappingProxyType(
     {
-        Kind.PREVIEW: Experiment(Kind.PREVIEW, run_preview),
-        Kind.SWEEP: Experiment(Kind.SWEEP, run_sweep),
-        Kind.PROMPT_PAIR: Experiment(Kind.PROMPT_PAIR, run_prompt_pair),
-        Kind.COMPARISON: Experiment(Kind.COMPARISON, run_comparison),
-        Kind.GENERATION: Experiment(Kind.GENERATION, run_generation),
+        Kind.PREVIEW: Experiment(Kind.PREVIEW, run_preview, prepare_pair),
+        Kind.SWEEP: Experiment(Kind.SWEEP, run_sweep, prepare_sweep),
+        Kind.PROMPT_PAIR: Experiment(Kind.PROMPT_PAIR, run_prompt_pair, prepare_pair),
+        Kind.COMPARISON: Experiment(
+            Kind.COMPARISON, run_comparison, prepare_generation
+        ),
+        Kind.GENERATION: Experiment(
+            Kind.GENERATION, run_generation, prepare_generation
+        ),
     }
 )
 

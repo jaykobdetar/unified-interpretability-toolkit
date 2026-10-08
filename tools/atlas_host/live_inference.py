@@ -67,7 +67,12 @@ from atlas_host.inference_observations import (
 )
 from atlas_host import inference_prompt_pair as prompt_pair
 from atlas_host import inference_sweep as sweep
-from atlas_host.inference_experiments import Kind, REGISTRY, for_coordinator
+from atlas_host.inference_experiments import (
+    Kind,
+    REGISTRY,
+    Preparation,
+    for_coordinator,
+)
 from atlas_host.inference_architecture import architecture
 from atlas_host.inference_geometry import (
     Architecture,
@@ -693,18 +698,18 @@ class Session:
         observation: dict[str, Any] | None
         layer: int | None
         request: dict[str, Any]
-        if experiment is REGISTRY[Kind.SWEEP]:
-            sweep_plan, request, observation, layer = self._prepare_sweep_request(
-                data, contracts
-            )
-        elif experiment in (REGISTRY[Kind.PREVIEW], REGISTRY[Kind.PROMPT_PAIR]):
-            request, observation, layer = self._prepare_pair_request(data, contracts)
-        elif experiment in (REGISTRY[Kind.GENERATION], REGISTRY[Kind.COMPARISON]):
-            request, observation, layer = self._prepare_generation_request(
-                data, contracts, value
-            )
-        else:
+        prepare_request = experiment.prepare_request if experiment is not None else None
+        if prepare_request is None:
             raise ValueError("Unknown inference mode")
+        sweep_plan, request, observation, layer = prepare_request(
+            Preparation(
+                sweep=lambda: self._prepare_sweep_request(data, contracts),
+                pair=lambda: self._prepare_pair_request(data, contracts),
+                generation=lambda: self._prepare_generation_request(
+                    data, contracts, value
+                ),
+            )
+        )
         if available() < _limits.MODEL_ADMISSION_GIB * GIB:
             raise ValueError(
                 "Need 4.75 GiB available RAM before loading the inference model"
