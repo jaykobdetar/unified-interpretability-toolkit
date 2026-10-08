@@ -6,7 +6,9 @@ use crate::{
     server::{self, Query},
     Result,
 };
-use serde_json::{json, Value};
+#[cfg(test)]
+use serde_json::json;
+use serde_json::Value;
 use std::{
     io::Write,
     net::{TcpListener, TcpStream},
@@ -170,13 +172,22 @@ fn reply_calibration(
     match result {
         Ok(id) => {
             if state.scales(id).is_some() {
-                let mut v = state.identity_metadata();
-                v["complete"] = json!(true);
-                server::json_reply(socket, 200, v);
+                server::json_reply(
+                    socket,
+                    200,
+                    Value::from(response::CalibrationReply::Complete {
+                        identity: state.identity_metadata(),
+                    }),
+                );
             } else if queue_calibration(state, sender, id) {
-                let mut v = state.identity_metadata();
-                v["queued"] = json!(id);
-                server::json_reply(socket, 202, v);
+                server::json_reply(
+                    socket,
+                    202,
+                    Value::from(response::CalibrationReply::Queued {
+                        identity: state.identity_metadata(),
+                        id,
+                    }),
+                );
             } else {
                 server::error(socket, 503, "Numeric queue full; retry shortly");
             }

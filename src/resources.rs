@@ -165,12 +165,11 @@ pub fn snapshot() -> Result<serde_json::Value> {
     let ledger = LEDGER
         .lock()
         .map_err(|_| "Resource accounting unavailable")?;
-    Ok(
-        serde_json::json!({"configured":policy(),"effective":{"affinity_cpu_count":cpu_count,
-        "cpu_quota_count":cpu_quota()?.min(cpu_count),"address_space_bytes":limit.rlim_cur,
-        "available_bytes":available_bytes()?,"reserved_workspace_bytes":ledger.used,"active_numeric_operations":ledger.active},
-        "scope":"standalone Rust process; hosted/inference/build policies are separate"}),
-    )
+    serde_json::Value::try_from(SnapshotResponse {
+        cpu_count,
+        limit: &limit,
+        ledger: &ledger,
+    })
 }
 
 /// One process-global ledger, shared by every rendering call, including scoped threads.
@@ -298,6 +297,29 @@ impl Drop for Permit {
         let mut ledger = LEDGER.lock().unwrap_or_else(|e| e.into_inner());
         ledger.used -= self.bytes;
         ledger.active -= 1;
+    }
+}
+
+struct SnapshotResponse<'a> {
+    cpu_count: usize,
+    limit: &'a libc::rlimit,
+    ledger: &'a Ledger,
+}
+
+impl TryFrom<SnapshotResponse<'_>> for serde_json::Value {
+    type Error = crate::Error;
+    fn try_from(report: SnapshotResponse<'_>) -> Result<Self> {
+        let SnapshotResponse {
+            cpu_count,
+            limit,
+            ledger,
+        } = report;
+        Ok(
+            serde_json::json!({"configured":policy(),"effective":{"affinity_cpu_count":cpu_count,
+            "cpu_quota_count":cpu_quota()?.min(cpu_count),"address_space_bytes":limit.rlim_cur,
+            "available_bytes":available_bytes()?,"reserved_workspace_bytes":ledger.used,"active_numeric_operations":ledger.active},
+            "scope":"standalone Rust process; hosted/inference/build policies are separate"}),
+        )
     }
 }
 

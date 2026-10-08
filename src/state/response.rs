@@ -332,3 +332,16 @@ impl From<Overview> for Value {
         ])
     }
 }
+
+pub(super) struct CalibrationProgress<'a> {
+    pub id: usize,
+    pub t: &'a crate::source::Tensor,
+    pub seconds: f64,
+}
+
+impl From<CalibrationProgress<'_>> for Value {
+    fn from(report: CalibrationProgress<'_>) -> Self {
+        let CalibrationProgress { id, t, seconds } = report;
+        serde_json::json!({"calibrated":id,"name":t.name,"seconds":seconds,"values":t.count})
+    }
+}

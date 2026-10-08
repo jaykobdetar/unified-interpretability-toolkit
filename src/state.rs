@@ -291,7 +291,7 @@ impl State {
             self.commit_calibration(id, s, |next| self.persist_calibration(next))?;
             eprintln!(
                 "{}",
-                json!({"calibrated":id,"name":t.name,"seconds":seconds,"values":t.count})
+                Value::from(response::CalibrationProgress { id, t, seconds })
             );
             Ok(())
         })();

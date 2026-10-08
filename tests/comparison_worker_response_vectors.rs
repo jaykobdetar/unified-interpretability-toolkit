@@ -401,3 +401,17 @@ fn startup_diagnostic_envelope_keeps_comparison_coordinates() {
         "comparison peak observation assertion"
     );
 }
+
+#[test]
+fn repeated_calibration_reports_complete_without_requeueing() {
+    let fixture = Fixture::new();
+    let queued = fixture.request("POST", "/api/comparison/calibrate?tensor=0");
+    assert_eq!(queued.status, 202);
+    let model = fixture.wait_status(|status| status["catalog"][0]["calibration_complete"] == true);
+    let complete = fixture.request("POST", "/api/comparison/calibrate?tensor=0");
+    assert_eq!(complete.status, 200);
+    let body = complete.json();
+    assert_eq!(body["complete"], true);
+    assert!(body.get("queued").is_none());
+    assert_eq!(body["comparison_identity"], model["comparison_identity"]);
+}
