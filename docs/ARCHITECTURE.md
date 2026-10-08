@@ -39,6 +39,8 @@ The native plain-error and coded intake-rejection bodies use private typed recor
 
 Calibration acknowledgements use the private `server::response::CalibrationReply` variants for checkpoint scope, queued tensor and already-complete results. Their sorted JSON conversion preserves the existing fields and types. The caller retains all request validation, queue admission, lock lifetimes, progress publication and status selection.
 
+Comparison legends use a private typed presentation record in `comparison::response`. The original caller still selects quantities, bounds, signedness, scales, formulas and provenance; conversion retains the same sorted JSON keys and value types. Comparison identities, tile keys and arithmetic remain in their existing paths.
+
 ## Python package, architecture and engine boundary
 
 Canonical implementations live in the ordinary `atlas_host` and `analytics` packages under `tools`. Compatibility modules alias the same canonical module objects, mutable defaults and callbacks. The script directory supplies normal imports for documented `python3 tools/...` commands; no package installation is required. Late helper lookup is retained where callers/tests replace module state. Portable tests use the import environment supplied by the existing checker. Some standalone tests, qualification guards and the oracle retain explicit search-path setup; some imports remain deferred for numerical initialization, compatibility cycles or platform-specific use.

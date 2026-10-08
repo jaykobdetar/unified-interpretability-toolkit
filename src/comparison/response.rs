@@ -107,3 +107,57 @@ impl From<Inspection<'_>> for Value {
         v
     }
 }
+
+pub(super) struct Legend<'a> {
+    pub quantity: &'a str,
+    pub mapping: &'a str,
+    pub original_source_values: bool,
+    pub derived: bool,
+    pub difference_direction: &'static str,
+    pub min: f64,
+    pub max: f64,
+    pub bound: f64,
+    pub s: Option<f64>,
+    pub scope: &'static str,
+    pub calibration_domain: &'static str,
+    pub palette: &'static str,
+    pub formula: &'static str,
+    pub value_definition: &'static str,
+    pub units: &'static str,
+    pub rounding: &'static str,
+}
+
+impl From<Legend<'_>> for Value {
+    fn from(response: Legend<'_>) -> Self {
+        Value::Object(serde_json::Map::from_iter([
+            ("quantity".to_owned(), Value::from(response.quantity)),
+            ("mapping".to_owned(), Value::from(response.mapping)),
+            (
+                "original_source_values".to_owned(),
+                Value::from(response.original_source_values),
+            ),
+            ("derived".to_owned(), Value::from(response.derived)),
+            (
+                "difference_direction".to_owned(),
+                Value::from(response.difference_direction),
+            ),
+            ("min".to_owned(), Value::from(response.min)),
+            ("max".to_owned(), Value::from(response.max)),
+            ("bound".to_owned(), Value::from(response.bound)),
+            ("s".to_owned(), Value::from(response.s)),
+            ("scope".to_owned(), Value::from(response.scope)),
+            (
+                "calibration_domain".to_owned(),
+                Value::from(response.calibration_domain),
+            ),
+            ("palette".to_owned(), Value::from(response.palette)),
+            ("formula".to_owned(), Value::from(response.formula)),
+            (
+                "value_definition".to_owned(),
+                Value::from(response.value_definition),
+            ),
+            ("units".to_owned(), Value::from(response.units)),
+            ("rounding".to_owned(), Value::from(response.rounding)),
+        ]))
+    }
+}

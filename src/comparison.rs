@@ -366,7 +366,41 @@ impl Comparison {
         };
         let unsigned = quantity == "abs_delta" || mapping == "magnitude";
         Ok(
-            json!({"quantity":quantity,"mapping":mapping,"original_source_values":!derived,"derived":derived,"difference_direction":"B-A","min":if unsigned{0.}else{-bound},"max":bound,"bound":bound,"s":if mapping=="asinh"{Some(if bound==0.{1.}else{bound/100.})}else{None},"scope":if derived{"complete paired tensor; shared derived B-A scale"}else{"complete paired tensor; shared original A+B scale"},"calibration_domain":if derived{"difference"}else{"shared_raw"},"palette":if unsigned{"sequential-purple-v1"}else{"signed-blue-red"},"formula":match mapping{"linear"=>"v/bound; bound=0 => 0","asinh"=>"asinh(v/s)/asinh(bound/s); s=bound/100; bound=0 => 0",_=>"abs(v)/bound; bound=0 => 0"},"value_definition":match quantity{"a"=>"original source A weight","b"=>"original source B weight","delta"=>"derived F64 arithmetic B-A; not an original weight",_=>"derived abs(F64 B-A); not an original weight"},"units":"native: selected quantity on labeled scale; pooled: mean of pointwise transformed quantity, not transform of a pooled weight","rounding":"A/B decode exactly to F64; derived subtraction and field arithmetic may round"}),
+            Value::from(response::Legend {
+                quantity,
+                mapping,
+                original_source_values: !derived,
+                derived,
+                difference_direction: "B-A",
+                min: if unsigned { 0. } else { -bound },
+                max: bound,
+                bound,
+                s: if mapping == "asinh" {
+                    Some(if bound == 0. { 1. } else { bound / 100. })
+                } else {
+                    None
+                },
+                scope: if derived {
+                    "complete paired tensor; shared derived B-A scale"
+                } else {
+                    "complete paired tensor; shared original A+B scale"
+                },
+                calibration_domain: if derived { "difference" } else { "shared_raw" },
+                palette: if unsigned { "sequential-purple-v1" } else { "signed-blue-red" },
+                formula: match mapping {
+                    "linear" => "v/bound; bound=0 => 0",
+                    "asinh" => "asinh(v/s)/asinh(bound/s); s=bound/100; bound=0 => 0",
+                    _ => "abs(v)/bound; bound=0 => 0",
+                },
+                value_definition: match quantity {
+                    "a" => "original source A weight",
+                    "b" => "original source B weight",
+                    "delta" => "derived F64 arithmetic B-A; not an original weight",
+                    _ => "derived abs(F64 B-A); not an original weight",
+                },
+                units: "native: selected quantity on labeled scale; pooled: mean of pointwise transformed quantity, not transform of a pooled weight",
+                rounding: "A/B decode exactly to F64; derived subtraction and field arithmetic may round",
+            }),
         )
     }
     pub fn view(&self, id: usize, left: &str, right: &str, mapping: &str) -> Result<Value> {
