@@ -4,6 +4,8 @@ This does not replace the qualified legacy Smol worker or authorize execution.
 Layouts are reviewed against Transformers 4.56.2. No default family guessing.
 """
 
+from atlas_host import limits as _limits
+
 import hashlib
 import json
 import math
@@ -12,7 +14,7 @@ from typing import Any, TypedDict
 
 from atlas_host.registry import content_digest, validate_manifest
 
-MAX_CONFIG_BYTES = 65536
+MAX_CONFIG_BYTES = _limits.MODEL_DESCRIPTOR_MAX_CONFIG_BYTES
 RUNTIME_VERSION = "4.56.2"
 FAMILIES = {
     "llama": "LlamaForCausalLM",

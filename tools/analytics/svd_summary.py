@@ -1,5 +1,7 @@
 """Versioned, bounded window SVD summaries. NumPy is supplied only by the owned worker."""
 
+from atlas_host import limits as _limits
+
 import hashlib
 import json
 import math
@@ -11,9 +13,9 @@ from .core import checked_values, geometry, permutation
 
 SCHEMA = "weight-atlas.svd-window-summary.v2"
 ALGORITHM = "uncentered-independent-svd-xorshift32-v1"
-MAX_AXIS = 128
-MAX_VALUES = 16384
-MAX_BODY = 63488
+MAX_AXIS = _limits.SVD_SUMMARY_MAX_AXIS
+MAX_VALUES = _limits.SVD_SUMMARY_MAX_VALUES
+MAX_BODY = _limits.SVD_SUMMARY_MAX_BODY
 PREVIEW_AXIS = 16
 MAX_BF16 = 3.3895313892515355e38
 

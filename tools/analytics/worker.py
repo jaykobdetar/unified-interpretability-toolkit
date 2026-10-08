@@ -1,5 +1,7 @@
 """One analysis child: bounded source reads and optional NumPy, no inference."""
 
+from atlas_host import limits as _limits
+
 import json
 import math
 import os
@@ -26,8 +28,8 @@ if TYPE_CHECKING:
     from .svd import Available
     from .svd_summary import Summary
 
-MAX_INPUT = 512 * 1024
-MAX_OUTPUT = 2 * 1024 * 1024 - 2048  # Reserve space for HTTP job envelope.
+MAX_INPUT = _limits.ANALYTICS_MAX_INPUT
+MAX_OUTPUT = _limits.ANALYTICS_MAX_OUTPUT  # Reserve space for HTTP job envelope.
 
 
 class RegionReport(TypedDict):

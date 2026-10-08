@@ -1,5 +1,7 @@
 """Pinned SmolLM2 native-coordinate edit contract; no ML imports or file writes."""
 
+from atlas_host import limits as _limits
+
 from dataclasses import replace
 import json
 import math
@@ -18,7 +20,7 @@ SOURCE_MODEL = {
     "revision": MANIFEST["revision"],
     "weights_sha256": MANIFEST["files"]["model.safetensors"],
 }
-MAX_EDITS = 8
+MAX_EDITS = _limits.INFERENCE_MAX_EDITS
 # Built-in Llama Linear weights are [output feature, input feature].
 SHAPES = shapes()
 # lm_head is not a stored/viewer tensor in this checkpoint. Editing the embedding

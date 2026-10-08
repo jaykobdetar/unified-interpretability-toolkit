@@ -4,6 +4,8 @@ Integration must own the heavy slot. A separate interpreter with an existing
 NumPy installation is required. No installs, downloads, models, or source access.
 """
 
+from atlas_host import limits as _limits
+
 import json
 import math
 import os
@@ -19,9 +21,9 @@ from .core import Unavailable, checked_values, integer, permutation
 from atlas_host.memory import available_bytes as _available_bytes
 from .runtime import configure_svd_worker as _configure_worker
 
-MAX_SVD_AXIS = 64
-MAX_SVD_VALUES = 4096
-TIMEOUT_SECONDS = 5
+MAX_SVD_AXIS = _limits.SVD_MAX_AXIS
+MAX_SVD_VALUES = _limits.SVD_MAX_VALUES
+TIMEOUT_SECONDS = _limits.SVD_TIMEOUT_SECONDS
 
 
 class Fit(TypedDict):

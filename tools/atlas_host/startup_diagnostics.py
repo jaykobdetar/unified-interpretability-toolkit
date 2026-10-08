@@ -4,6 +4,8 @@ Only known static errors and OS errno numbers leave the bounded private buffer.
 Unrecognized stderr is represented by byte counts and hashes, never echoed.
 """
 
+from atlas_host import limits as _limits
+
 from copy import deepcopy
 import fcntl
 import hashlib
@@ -167,8 +169,8 @@ _Owner = TypeVar("_Owner")
 _Result = TypeVar("_Result")
 _Arguments = ParamSpec("_Arguments")
 
-STDERR_LIMIT = 16 * 1024
-ATTEMPT_LIMIT = 4
+STDERR_LIMIT = _limits.STARTUP_STDERR_LIMIT
+ATTEMPT_LIMIT = _limits.STARTUP_ATTEMPT_LIMIT
 STATIC_ERRORS = frozenset(
     (
         "Inherited private channel required",
@@ -370,8 +372,8 @@ def sanitized_stderr(raw: bytes | bytearray) -> str:
     return "\n".join(lines)[:STDERR_LIMIT]
 
 
-ERROR_CHAIN_LIMIT = 8
-TRACE_FRAME_LIMIT = 64
+ERROR_CHAIN_LIMIT = _limits.STARTUP_ERROR_CHAIN_LIMIT
+TRACE_FRAME_LIMIT = _limits.STARTUP_TRACE_FRAME_LIMIT
 
 
 def error_chain(

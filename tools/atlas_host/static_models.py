@@ -5,6 +5,8 @@ readiness additionally requires a complete trusted Rust catalog and live reader
 attestation from the parent-owned host. Nothing grants inference permission.
 """
 
+from atlas_host import limits as _limits
+
 from copy import deepcopy
 import hashlib
 import json
@@ -100,10 +102,10 @@ class StaticCatalog(TypedDict):
     downloads_enabled: bool
 
 
-MAX_HEADER_BYTES = 2 * 1024**2
-MAX_ACTIVATION_METADATA = 8 * 1024**2
+MAX_HEADER_BYTES = _limits.STATIC_MAX_HEADER_BYTES
+MAX_ACTIVATION_METADATA = _limits.STATIC_MAX_ACTIVATION_METADATA
 DENSE_BYTES = {"BF16": 2, "F16": 2, "F32": 4}
-DISPLAY_AXIS_LIMIT = 200000
+DISPLAY_AXIS_LIMIT = _limits.STATIC_DISPLAY_AXIS_LIMIT
 PUBLIC_MODEL_KEYS = {
     "api_version",
     "extensions",

@@ -1,5 +1,7 @@
 """One bounded fixed-context sweep: explicit subset, deterministic controls, undo."""
 
+from atlas_host import limits as _limits
+
 from dataclasses import replace
 from typing import Any, cast
 from collections.abc import Callable, Iterable, Iterator
@@ -33,15 +35,15 @@ from atlas_host.inference_architecture import (
     CAPTURE_SITES,
 )
 
-MAX_CELLS = 65536
-MAX_TARGETS = 2
-MAX_CASES = 5
-MAX_PROMPTS = 2
-MAX_RECORDS = 10
-WALL_SECONDS = 120
-CPU_SECONDS = 90
+MAX_CELLS = _limits.SWEEP_MAX_CELLS
+MAX_TARGETS = _limits.SWEEP_MAX_TARGETS
+MAX_CASES = _limits.SWEEP_MAX_CASES
+MAX_PROMPTS = _limits.SWEEP_MAX_PROMPTS
+MAX_RECORDS = _limits.SWEEP_MAX_RECORDS
+WALL_SECONDS = _limits.SWEEP_WALL_SECONDS
+CPU_SECONDS = _limits.SWEEP_CPU_SECONDS
 CONTROL_VERSION = "weight-atlas-sweep-control-v2"
-MAX_TRACE = 32
+MAX_TRACE = _limits.SWEEP_MAX_TRACE
 
 
 def _bindings(value: Architecture | None = None) -> SweepBindings:

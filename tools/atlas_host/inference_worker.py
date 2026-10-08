@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """One bounded offline inference session; JSON lines on stdin/stdout, no HTTP."""
 
+from atlas_host import limits as _limits
+
 from dataclasses import replace
 import json
 import os
@@ -23,8 +25,8 @@ os.environ.update(
     PYTHONDONTWRITEBYTECODE="1",
 )
 
-MAX_PROMPT = 128
-MAX_NEW = 32
+MAX_PROMPT = _limits.INFERENCE_MAX_PROMPT
+MAX_NEW = _limits.INFERENCE_MAX_NEW
 from atlas_host.inference_architecture import (
     ARCH,
     WIDTH,

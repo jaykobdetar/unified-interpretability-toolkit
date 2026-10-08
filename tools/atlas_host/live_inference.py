@@ -77,11 +77,11 @@ from atlas_host.inference_services import InferenceContracts
 
 MANIFEST = json.loads((ROOT / "docs/models/smollm2-135m.json").read_text())
 GIB = 1024**3
-MAX_BODY = 8192
-MAX_TRACE = 32
-REQUEST_DEADLINE = 0.5
-UPSTREAM_DEADLINE = 5.0
-IO_TICK = 0.1
+MAX_BODY = _limits.COORDINATOR_MAX_BODY
+MAX_TRACE = _limits.COORDINATOR_MAX_TRACE
+REQUEST_DEADLINE = _limits.COORDINATOR_REQUEST_DEADLINE
+UPSTREAM_DEADLINE = _limits.COORDINATOR_UPSTREAM_DEADLINE
+IO_TICK = _limits.COORDINATOR_IO_TICK
 
 
 class TickOwner(Protocol):

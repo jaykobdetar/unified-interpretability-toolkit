@@ -1,5 +1,7 @@
 """Owner-managed installed-file receipts. No network or model loading code."""
 
+from atlas_host import limits as _limits
+
 from collections.abc import Callable, Iterator
 import fcntl
 import hashlib
@@ -47,9 +49,9 @@ class RegistryData(TypedDict):
     models: list[RegistryEntry]
 
 
-MAX_REGISTRY_BYTES = 512 * 1024
-MAX_ENTRIES = 128
-MAX_MANIFEST_BYTES = 32768
+MAX_REGISTRY_BYTES = _limits.REGISTRY_MAX_BYTES
+MAX_ENTRIES = _limits.REGISTRY_MAX_ENTRIES
+MAX_MANIFEST_BYTES = _limits.REGISTRY_MAX_MANIFEST_BYTES
 DATA_NAMES = {
     "config.json",
     "tokenizer.json",

@@ -4,6 +4,8 @@ Network work requires a reviewed plan digest and explicit CLI license acceptance
 Tests inject streams. Importing/planning never opens a connection or creates files.
 """
 
+from atlas_host import limits as _limits
+
 from contextlib import contextmanager
 from http.client import HTTPMessage
 from os import PathLike
@@ -40,7 +42,7 @@ from .registry import (
     validate_manifest,
 )
 
-MAX_ACQUIRE_BYTES = 64 * 1024**3
+MAX_ACQUIRE_BYTES = _limits.ACQUISITION_MAX_BYTES
 
 
 class PlanFields(TypedDict):

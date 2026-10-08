@@ -1,5 +1,7 @@
 """Pure raw-value analytics. Inputs are native row-major bounded regions."""
 
+from atlas_host import limits as _limits
+
 import hashlib
 import json
 import math
@@ -8,10 +10,10 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Literal, NotRequired, TypedDict, TypeVar
 
 SCHEMA = "weight-atlas.analytics.v1"
-MAX_VALUES = 65536
-MAX_AXIS = 4096
-MAX_TOP = 32
-MAX_TENSORS = 512
+MAX_VALUES = _limits.ANALYTICS_MAX_VALUES
+MAX_AXIS = _limits.ANALYTICS_MAX_AXIS
+MAX_TOP = _limits.ANALYTICS_MAX_TOP
+MAX_TENSORS = _limits.ANALYTICS_MAX_TENSORS
 
 
 class Unavailable(TypedDict):
