@@ -2,13 +2,29 @@
 
 from pathlib import Path
 import subprocess
+from typing import Any, Protocol, TypedDict
 
 from .common import require
 from .registry import Registry
 from .runtime_adapter import check_fixture
 
 
-def prepare(config, identifier, *, run=subprocess.run):
+class FixtureRunner(Protocol):
+    def __call__(
+        self, args: list[str], *, timeout: int, check: bool
+    ) -> subprocess.CompletedProcess[bytes]: ...
+
+
+class FixtureReceipt(TypedDict):
+    model_id: str
+    fixture_calibrated: bool
+    inference_ready: bool
+    download_enabled: bool
+
+
+def prepare(
+    config: dict[str, Any], identifier: str, *, run: FixtureRunner = subprocess.run
+) -> FixtureReceipt:
     registry = Registry(config["paths"]["registry"])
     entry = registry.owner_receipt(identifier)
     check_fixture(entry, hash_bytes=True)
