@@ -890,10 +890,12 @@ fn reply_view(state: &State, socket: TcpStream, q: &Query) {
         let id = q.int("tensor", "0")?;
         let slice = TensorSlice::new(&state.source, id, &parse_indices(q.get("slice", ""))?)?;
         let t = state.source.tensor(id)?;
-        let mut selected = serde_json::to_value(t)?;
-        selected["slice"] = json!(slice.leading);
-        selected["slice_identity"] = json!(slice.identity);
-        selected["slice_count"] = json!(slice.tensor.count);
+        let selected = Value::from(response::Selection {
+            tensor: serde_json::to_value(t)?,
+            slice: &slice.leading,
+            slice_identity: &slice.identity,
+            slice_count: slice.tensor.count,
+        });
         let l = state.legends(
             t,
             q.get("left", "global_linear"),

@@ -210,3 +210,18 @@ impl From<Scalar<'_>> for Value {
         ]))
     }
 }
+
+pub(super) struct CatalogEntry<'a> {
+    pub pair: Value,
+    pub calibration_complete: bool,
+    pub scales: Option<&'a super::Scales>,
+}
+
+impl From<CatalogEntry<'_>> for Value {
+    fn from(response: CatalogEntry<'_>) -> Self {
+        let mut pair = response.pair;
+        pair["calibration_complete"] = json!(response.calibration_complete);
+        pair["scales"] = json!(response.scales);
+        pair
+    }
+}

@@ -254,10 +254,11 @@ impl Comparison {
             .pairs
             .iter()
             .map(|p| {
-                let mut t = json!(p);
-                t["calibration_complete"] = json!(saved.tensors.contains_key(&p.id));
-                t["scales"] = json!(saved.tensors.get(&p.id));
-                t
+                Value::from(response::CatalogEntry {
+                    pair: json!(p),
+                    calibration_complete: saved.tensors.contains_key(&p.id),
+                    scales: saved.tensors.get(&p.id),
+                })
             })
             .collect::<Vec<_>>();
         let mut v = Value::from(response::Model {

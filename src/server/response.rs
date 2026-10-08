@@ -140,3 +140,20 @@ impl From<CalibrationReply<'_>> for Value {
         ]))
     }
 }
+
+pub(super) struct Selection<'a> {
+    pub tensor: Value,
+    pub slice: &'a [usize],
+    pub slice_identity: &'a str,
+    pub slice_count: usize,
+}
+
+impl From<Selection<'_>> for Value {
+    fn from(response: Selection<'_>) -> Self {
+        let mut tensor = response.tensor;
+        tensor["slice"] = serde_json::json!(response.slice);
+        tensor["slice_identity"] = serde_json::json!(response.slice_identity);
+        tensor["slice_count"] = serde_json::json!(response.slice_count);
+        tensor
+    }
+}
