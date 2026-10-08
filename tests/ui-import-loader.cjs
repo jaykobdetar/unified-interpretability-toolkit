@@ -115,8 +115,17 @@ require("./support/async-completion.cjs").requireCompletion(
       "separate trusted codec has a finite 64 KiB source cap",
     );
     const server = fs.readFileSync("src/server.rs", "utf8");
-    assert(server.includes('"/inference-import.js" => Some(('));
-    assert(server.includes('include_bytes!("../web/inference-import.js")'));
+    // Follow the explicit native leaf call; keep the same route/bytes witnesses.
+    const assetSource =
+      /crate\s*::\s*page_assets\s*::\s*viewer\s*\(\s*path\s*\)/.test(server)
+        ? fs.readFileSync("src/page_assets.rs", "utf8")
+        : server;
+    assert(/"\/inference-import\.js"\s*=>\s*Some\s*\(\s*\(/.test(assetSource));
+    assert(
+      /include_bytes!\s*\(\s*"\.\.\/web\/inference-import\.js"\s*\)/.test(
+        assetSource,
+      ),
+    );
     assert(server.includes("script-src 'self'"));
     const files = [
         "vendor/openseadragon.min.js",
@@ -127,14 +136,19 @@ require("./support/async-completion.cjs").requireCompletion(
       ],
       bytes = files.reduce((n, f) => n + fs.statSync("web/" + f).size, 12);
     assert(bytes < 600 * 1024);
-    assert(
-      !server
-        .slice(
-          server.indexOf("fn viewer_scripts()"),
-          server.indexOf("fn reply_viewer_bundle"),
-        )
-        .includes("inference-import"),
+    const scriptFunction = server.slice(
+      server.indexOf("fn viewer_scripts()"),
+      server.indexOf("fn reply_viewer_bundle"),
     );
+    const scriptSource = /crate\s*::\s*page_assets\s*::\s*VIEWER_SCRIPTS/.test(
+      scriptFunction,
+    )
+      ? fs
+          .readFileSync("src/page_assets.rs", "utf8")
+          .match(/const\s+VIEWER_SCRIPTS[^=]*=\s*\[([\s\S]*?)\];/)?.[1]
+      : scriptFunction;
+    assert(scriptSource, "native startup declaration is readable");
+    assert(!scriptSource.includes("inference-import"));
     const f = fixture();
     await tick();
     const started = f.click("import-log");
@@ -147,11 +161,20 @@ require("./support/async-completion.cjs").requireCompletion(
     f.scripts[0].onerror();
     await started;
     assert(f.get("infer-import-status").textContent.includes("unavailable"));
+    assert.equal(
+      f.get("infer-import-status").textContent,
+      "Archive importer unavailable; existing records unchanged. Retry explicitly. Existing records unchanged.",
+    );
     assert(f.get("infer-log-status").textContent.includes("0 / 8"));
     assert(!f.get("infer-start").disabled);
     assert.equal(f.requests.length, 0);
     const badInit = f.click("import-log");
     await tick();
+    assert.equal(
+      f.scripts.length,
+      2,
+      "explicit retry creates a fresh importer request",
+    );
     f.scripts[1].onload();
     await badInit;
     assert(f.get("infer-import-status").textContent.includes("initialize"));
