@@ -322,3 +322,32 @@ fn failed_worker_publishes_after_accepted_admission() {
         );
     });
 }
+
+#[test]
+fn unsupported_checkpoint_queue_scope_and_progress_are_exact() {
+    let _workspace = crate::resources::test_workspace_guard();
+    let fixture = Fixture::new("I8");
+    let (sender, receiver) = sync_channel(1);
+    assert_eq!(
+        fixture.response(&sender, &[("all", "1")], Some("1")),
+        wire(
+            202,
+            "Accepted",
+            json!({"api_version":1,"queued":"supported tensors; global calibration unavailable"})
+        ),
+        "unsupported checkpoint queue scope reply"
+    );
+    assert!(
+        matches!(receiver.try_recv(), Ok(Job::Wake)),
+        "unsupported checkpoint queue wake"
+    );
+    let progress = fixture.state.progress.lock().unwrap();
+    assert!(
+        progress.all_requested,
+        "unsupported checkpoint all requested"
+    );
+    assert_eq!(
+        progress.error, None,
+        "unsupported checkpoint clears prior error"
+    );
+}
