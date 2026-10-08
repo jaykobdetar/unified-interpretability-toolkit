@@ -4,6 +4,8 @@ The approval digest is an out-of-band owner/reviewer input. A recipe name alone,
 request payload, command label or measured-peak claim cannot enable this policy.
 """
 
+from . import limits as _limits
+
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
@@ -26,11 +28,11 @@ class ValidationBinary(Protocol):
 
 MIB = 1024**2
 GIB = 1024**3
-DEFAULT_START = 5 * GIB
-STOP_RESERVE = 13 * GIB // 4
-TREE_CEILING = 768 * MIB
-SNAPSHOT_MAX = 32 * MIB
-DISK_RESERVE = 25 * GIB
+DEFAULT_START = _limits.HOSTED_DEFAULT_START_BYTES
+STOP_RESERVE = _limits.HOSTED_STOP_RESERVE_BYTES
+TREE_CEILING = _limits.HOSTED_TREE_CEILING_BYTES
+SNAPSHOT_MAX = _limits.HOSTED_SNAPSHOT_MAX_BYTES
+DISK_RESERVE = _limits.HOSTED_DISK_RESERVE_BYTES
 RECIPE = "tiny_bf16_provider_v1"
 BINARY_SHA = "77831afc4288deae1e14d56833dd8bb6ddb5561885ed1ae88bb210934b676dd2"
 FIXTURE_SHA = "c0075bfc55f9e51ccac3c5511ea55a5ca19744b002921e8d2e4ae3f60d321be3"

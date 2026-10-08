@@ -73,3 +73,10 @@ STARTUP_TRACE_FRAME_LIMIT: Final[int] = 64
 STATIC_MAX_HEADER_BYTES: Final[int] = 2 * 1024**2
 STATIC_MAX_ACTIVATION_METADATA: Final[int] = 8 * 1024**2
 STATIC_DISPLAY_AXIS_LIMIT: Final[int] = 200000
+
+# Hosted owner policy: exact integer bytes, independent of floating worker factors.
+HOSTED_DEFAULT_START_BYTES: Final[int] = 5 * 1024**3
+HOSTED_STOP_RESERVE_BYTES: Final[int] = 13 * 1024**3 // 4
+HOSTED_TREE_CEILING_BYTES: Final[int] = 768 * 1024**2
+HOSTED_SNAPSHOT_MAX_BYTES: Final[int] = 32 * 1024**2
+HOSTED_DISK_RESERVE_BYTES: Final[int] = 25 * 1024**3
