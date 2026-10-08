@@ -173,3 +173,23 @@ The native calibration-admission vectors also pin the all-checkpoint acknowledge
 Comparison presentation vectors cover every quantity/mapping combination on a two-element paired fixture. They compare complete sorted legend bytes against independent fixed expectations for original and derived scales, signed and unsigned palettes, formulas and provenance. Earlier identity, model, view and inspection vectors remain unchanged.
 
 Coordinator admission contracts pin generation defaults and request key order, exact refusal wording and priority before model admission, observation-before-edit forwarding, canonical source metadata, and pair/sweep capture state. They use inert child and contract doubles through `Session.start`; all previous tests remain unchanged.
+
+## Optional hosted profile lifecycle qualification
+
+`tests/profile_provider_lifecycle.py` runs the existing exact 244-byte synthetic BF16 fixture through the real hosted provider, resident renderer and disposable profile workers. It uses a fresh output directory and isolated fixture registry, checks full 15-value, partial 5-value and explicit restart 15-value results against independent row/column/control calculations, and verifies snapshot accounting, child reaping and thread cleanup. It does not start HTTP or a browser, enable an installed model, broaden fixture admission, or apply a special launch policy.
+
+Run it only in an assigned sequential slot after the release build, using the existing guard and a compatible Linux Python:
+
+```sh
+PYTHONPATH=tools:tests ATLAS_EVIDENCE_DIR=/tmp/profile-host-guard \
+  python3 -B tools/guarded-core-ui.py python3 -B tests/profile_provider_lifecycle.py \
+  --binary target/release/weight-atlas-rust --fixture fixtures/tiny-bf16 \
+  --output /tmp/profile-host-result
+PYTHONPATH=tools:tests ATLAS_EVIDENCE_DIR=/tmp/profile-ownership-guard \
+  python3 -B tools/guarded-core-ui.py python3 -B tests/profile_runtime_ownership.py \
+  --binary target/release/weight-atlas-rust \
+  --host-result /tmp/profile-host-result/host-result.json \
+  --output /tmp/profile-ownership-result
+```
+
+Use new output/guard directories for each authorized run and retain refusals without retrying or relaxing limits. The second probe checks actual process RSS summation with two quiet owned children, then verifies an independent watchdog deadline while the owner does not tick. Its quiet child is a bounded lifecycle fixture, not a numerical worker; the first probe supplies real worker integration. Both retain the 768-MiB address-space ceiling and ordinary admission, memory, disk and ownership checks. These probes complement the tiny sealed-frame oracle and inert boundary/fault tests. They do not qualify HTTP/browser interactions, real-model profiles, hostile process trees, resource exhaustion or every possible thread interleaving.
