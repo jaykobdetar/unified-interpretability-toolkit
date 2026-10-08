@@ -69,6 +69,7 @@ from atlas_host import inference_sweep as sweep
 from atlas_host.inference_experiments import Kind, REGISTRY, for_coordinator
 from atlas_host.inference_architecture import architecture
 from atlas_host.inference_geometry import (
+    Architecture,
     head_layout_descriptor as bound_head_layout_descriptor,
 )
 from atlas_host.inference_services import InferenceContracts
@@ -744,19 +745,13 @@ class Session:
             ) from None
         return self.snapshot()
 
-    def tick(self) -> None:
-        if self.analytics is not None:
-            self.analytics.tick()
-        if self.process is None:
-            return
-        if self.stop_reason is not None:
-            self.stop()
-            return
-        now = time.monotonic()
+    def _observe_worker_memory(self) -> int:
         mem = available()
         self.minimum_available = min(self.minimum_available, mem)
         try:
-            status = Path(f"/proc/{self.process.pid}/status").read_text()
+            status = Path(
+                f"/proc/{cast(subprocess.Popen[bytes], self.process).pid}/status"
+            ).read_text()
             rss = (
                 int(
                     next(
@@ -773,6 +768,90 @@ class Session:
             self.peak_rss = max(self.peak_rss, rss)
         except OSError:
             pass
+        return mem
+
+    def _accept_step(
+        self, event: dict[str, Any], contracts: InferenceContracts, value: Architecture
+    ) -> None:
+        if len(self.steps) >= MAX_TRACE or event["index"] != len(self.steps):
+            raise ValueError("Invalid step sequence")
+        if len(event["activation"]) != value.width:
+            raise ValueError("Invalid activation width")
+        if "baseline" in event or "edited" in event:
+            contracts.validate_pair(event)
+        if self.mode == "sweep":
+            contracts.validate_sweep_step(event, cast(dict[str, Any], self.sweep_plan))
+        elif self.mode == "prompt_pair":
+            contracts.validate_pair_step(event, cast(dict[str, Any], self.pair_request))
+        elif self.mode == "prompt_pair_preview":
+            raise ValueError("Preview cannot produce activation records")
+        else:
+            contracts.validate_record(event, self.observation, self.capture_layer)
+        self.steps.append(event)
+        if self.mode == "sweep":
+            self.details["sweep_coverage"] = sweep.coverage(
+                cast(dict[str, Any], self.sweep_plan), len(self.steps)
+            )
+        self.status = "running"
+
+    def _complete_sweep(self, event: dict[str, Any]) -> None:
+        if (
+            self.mode != "sweep"
+            or event.get("status") not in ("complete", "time_limit")
+            or event.get("coverage")
+            != sweep.coverage(cast(dict[str, Any], self.sweep_plan), len(self.steps))
+            or (event["status"] == "complete")
+            != (len(self.steps) == cast(dict[str, Any], self.sweep_plan)["records"])
+        ):
+            raise ValueError("Invalid sweep completion/partial coverage")
+        self.status = event.pop("status")
+        self.details.update(event)
+        self.details["sweep_coverage"] = event["coverage"]
+        self.stop(self.status)
+
+    def _complete_preview(
+        self, event: dict[str, Any], contracts: InferenceContracts
+    ) -> None:
+        if (
+            self.mode != "prompt_pair_preview"
+            or self.steps
+            or set(event) != {"preview", "reason"}
+            or event["reason"] != "token_preview"
+        ):
+            raise ValueError("Unexpected tokenizer completion")
+        contracts.validate_preview(event["preview"])
+        self.details.update(event)
+        self.status = "complete"
+        self.stop()
+
+    def _complete_generation(self, event: dict[str, Any]) -> None:
+        if self.mode in ("prompt_pair_preview", "sweep"):
+            raise ValueError("This mode requires its specific completion event")
+        if self.mode == "prompt_pair" and event.get("record_count") != len(
+            cast(dict[str, Any], self.pair_request)["positions"]
+        ):
+            raise ValueError("Prompt-pair coverage incomplete")
+        count = (
+            event.get("record_count")
+            if self.mode == "prompt_pair"
+            else event.get("generated_tokens")
+        )
+        if type(count) is not int or count != len(self.steps) or not self.steps:
+            raise ValueError("Invalid completion count")
+        self.status = "complete"
+        self.details.update(event)
+        self.stop()  # Reap before reporting completion; release model/KV now.
+
+    def tick(self) -> None:
+        if self.analytics is not None:
+            self.analytics.tick()
+        if self.process is None:
+            return
+        if self.stop_reason is not None:
+            self.stop()
+            return
+        now = time.monotonic()
+        mem = self._observe_worker_memory()
         reason = (
             "resource_limit"
             if mem < 3.25 * GIB or self.peak_rss > 1.5 * GIB
@@ -814,99 +893,20 @@ class Session:
                     )
                     kind = event.pop("type")
                     if kind == "step":
-                        if len(self.steps) >= MAX_TRACE or event["index"] != len(
-                            self.steps
-                        ):
-                            raise ValueError("Invalid step sequence")
-                        if len(event["activation"]) != value.width:
-                            raise ValueError("Invalid activation width")
-                        if "baseline" in event or "edited" in event:
-                            contracts.validate_pair(event)
-                        if self.mode == "sweep":
-                            contracts.validate_sweep_step(
-                                event, cast(dict[str, Any], self.sweep_plan)
-                            )
-                        elif self.mode == "prompt_pair":
-                            contracts.validate_pair_step(
-                                event, cast(dict[str, Any], self.pair_request)
-                            )
-                        elif self.mode == "prompt_pair_preview":
-                            raise ValueError(
-                                "Preview cannot produce activation records"
-                            )
-                        else:
-                            contracts.validate_record(
-                                event, self.observation, self.capture_layer
-                            )
-                        self.steps.append(event)
-                        if self.mode == "sweep":
-                            self.details["sweep_coverage"] = sweep.coverage(
-                                cast(dict[str, Any], self.sweep_plan), len(self.steps)
-                            )
-                        self.status = "running"
+                        self._accept_step(event, contracts, value)
                     elif kind == "error":
                         self.status = "error"
                         self.details.update(event)
                         self.stop()
                         return
                     elif kind == "sweep_done":
-                        if (
-                            self.mode != "sweep"
-                            or event.get("status") not in ("complete", "time_limit")
-                            or event.get("coverage")
-                            != sweep.coverage(
-                                cast(dict[str, Any], self.sweep_plan), len(self.steps)
-                            )
-                            or (event["status"] == "complete")
-                            != (
-                                len(self.steps)
-                                == cast(dict[str, Any], self.sweep_plan)["records"]
-                            )
-                        ):
-                            raise ValueError(
-                                "Invalid sweep completion/partial coverage"
-                            )
-                        self.status = event.pop("status")
-                        self.details.update(event)
-                        self.details["sweep_coverage"] = event["coverage"]
-                        self.stop(self.status)
+                        self._complete_sweep(event)
                         return
                     elif kind == "preview_done":
-                        if (
-                            self.mode != "prompt_pair_preview"
-                            or self.steps
-                            or set(event) != {"preview", "reason"}
-                            or event["reason"] != "token_preview"
-                        ):
-                            raise ValueError("Unexpected tokenizer completion")
-                        contracts.validate_preview(event["preview"])
-                        self.details.update(event)
-                        self.status = "complete"
-                        self.stop()
+                        self._complete_preview(event, contracts)
                         return
                     elif kind == "done":
-                        if self.mode in ("prompt_pair_preview", "sweep"):
-                            raise ValueError(
-                                "This mode requires its specific completion event"
-                            )
-                        if self.mode == "prompt_pair" and event.get(
-                            "record_count"
-                        ) != len(cast(dict[str, Any], self.pair_request)["positions"]):
-                            raise ValueError("Prompt-pair coverage incomplete")
-                        count = (
-                            event.get("record_count")
-                            if self.mode == "prompt_pair"
-                            else event.get("generated_tokens")
-                        )
-                        if (
-                            type(count) is not int
-                            or count != len(self.steps)
-                            or not self.steps
-                        ):
-                            raise ValueError("Invalid completion count")
-                        self.status = "complete"
-                        self.details.update(event)
-                        self.stop()  # Reap before reporting completion; release model/KV now.
+                        self._complete_generation(event)
                         return
                     elif kind in ("prefill", "loaded"):
                         self.details.update(event)
