@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import live_inference as live
 import inference_worker as worker
 

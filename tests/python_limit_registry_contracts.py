@@ -11,7 +11,6 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
 import acquisition_contracts
 import host_contracts
 from atlas_host import acquisition, registry

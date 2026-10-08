@@ -5,7 +5,6 @@ from pathlib import Path
 import sys
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import dense_static_contracts as fixture
 from atlas_host import dense_static_admission as admission
 

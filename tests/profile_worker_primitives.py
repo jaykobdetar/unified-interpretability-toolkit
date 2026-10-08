@@ -11,7 +11,6 @@ import types
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from atlas_host import profile_snapshot as snapshot
 from atlas_host.profile_worker import ProfileJob
 

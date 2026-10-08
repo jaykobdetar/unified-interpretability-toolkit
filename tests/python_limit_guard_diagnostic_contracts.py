@@ -13,7 +13,6 @@ import unittest
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
 import live_inference
 from atlas_host import startup_diagnostics as diagnostic
 

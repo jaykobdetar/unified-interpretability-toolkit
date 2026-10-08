@@ -5,7 +5,6 @@ import sys
 import unittest
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from atlas_host import inference_experiments as packaged_experiments
 from atlas_host import inference_generation as packaged_generation
 import inference_experiments as legacy_experiments

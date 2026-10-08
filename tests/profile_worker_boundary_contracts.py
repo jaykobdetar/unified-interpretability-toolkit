@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from atlas_host import profile_worker as worker
 import profile_worker_primitives as primitive
 

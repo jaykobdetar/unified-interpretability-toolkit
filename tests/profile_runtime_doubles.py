@@ -9,7 +9,6 @@ import types
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from atlas_host.profile_service import ProfileService, WatchdogLoop
 from atlas_host.profile_os import OwnedProcess, strict_json, LinuxProfileHooks
 from atlas_host.hosted_runtime import NativeChannel

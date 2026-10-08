@@ -12,7 +12,6 @@ from unittest.mock import Mock, patch
 from email.message import Message
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "tools"))
 from analytics.service import AnalyticsJobs, route
 from analytics.source import fingerprint
 from analytics.worker import analyze_request, catalog_from_payload, validate_request

@@ -11,7 +11,6 @@ import textwrap
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tests/analytics"))
 from analytics import svd_summary as summary
 from test_svd_summary import AnalyticTwoByTwo

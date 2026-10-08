@@ -11,7 +11,6 @@ import unittest
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
 import inference_edits as edits
 import inference_sweep as sweep
 import launch

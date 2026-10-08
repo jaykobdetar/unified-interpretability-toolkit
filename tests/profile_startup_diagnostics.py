@@ -12,7 +12,6 @@ import types
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from atlas_host import profile_os
 from atlas_host.profile_os import OwnedProcess, ProcessBook
 from atlas_host.startup_diagnostics import (

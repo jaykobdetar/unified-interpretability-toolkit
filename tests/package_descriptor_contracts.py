@@ -7,7 +7,6 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
 import inference_model_descriptor as legacy
 from atlas_host import inference_model_descriptor as canonical
 from atlas_host import static_models

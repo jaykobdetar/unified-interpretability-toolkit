@@ -11,7 +11,6 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from atlas_host.common import canonical
 from atlas_host.registry import Registry
 from atlas_host.static_models import StaticPolicy, native_source_identity

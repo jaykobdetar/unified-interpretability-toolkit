@@ -9,7 +9,6 @@ import threading
 import unittest
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import host_contracts as fixture
 import profile_runtime_doubles as runtime
 from atlas_host import profile_os, profile_service, progress

@@ -9,7 +9,6 @@ import sys
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from inference_architecture import architecture
 import inference_edits as edits
 import inference_observations as observations

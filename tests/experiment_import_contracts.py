@@ -5,7 +5,6 @@ from pathlib import Path
 import subprocess
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from inference_sweep import build_plan, coverage
 from inference_edits import SOURCE_MODEL
 

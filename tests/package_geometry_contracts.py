@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import inference_architecture as architecture
 import inference_engine as engine
 import architecture_boundary_contracts as held

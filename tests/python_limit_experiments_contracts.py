@@ -8,7 +8,6 @@ import sys
 from types import SimpleNamespace
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import inference_edits as edits
 import inference_observations as observation
 import inference_prompt_pair as pair

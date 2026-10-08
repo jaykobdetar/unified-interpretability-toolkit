@@ -10,7 +10,6 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import profile_worker_primitives as primitive
 from analytics import core, source, svd_summary as summary
 from atlas_host import profile_snapshot as snapshot

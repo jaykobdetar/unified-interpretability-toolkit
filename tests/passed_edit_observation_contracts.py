@@ -10,7 +10,6 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import inference_edit_contract as edit_core
 import inference_edits as edits
 import inference_observation_contract as observation_core

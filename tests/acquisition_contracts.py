@@ -11,7 +11,6 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from atlas_host.acquisition import acquire, plan, _allowed_url
 from atlas_host.registry import Registry
 import atlas_host.acquisition as acquisition

@@ -14,7 +14,6 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
 from atlas_host import cache, cli, config, progress, registry
 from atlas_host.budget import WorkGrant
 from atlas_host.common import canonical, read_json

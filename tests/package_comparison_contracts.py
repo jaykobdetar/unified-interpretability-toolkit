@@ -5,7 +5,6 @@ import sys
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from atlas_host import inference_comparison as packaged
 import inference_comparison as legacy
 import inference_worker as worker

@@ -9,7 +9,6 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
 
 # The local-v1 policy is a saved interface, rather than a tunable test budget.
 LIMITS = {

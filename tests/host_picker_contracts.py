@@ -13,7 +13,6 @@ import unittest
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
 from atlas_host.common import canonical
 from atlas_host.registry import Registry
 from atlas_host.runtime_adapter import FixtureHost, HostError, dispatch

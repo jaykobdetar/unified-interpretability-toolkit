@@ -10,7 +10,6 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import profile_worker_primitives as primitive
 from atlas_host import (
     dense_static_admission as dense,

@@ -5,7 +5,6 @@ import sys
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from atlas_host import inference_engine as packaged_engine
 from atlas_host import inference_geometry as packaged_geometry
 import inference_engine as legacy_engine

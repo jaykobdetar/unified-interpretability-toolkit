@@ -12,7 +12,6 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
 import viewer_resources as budgets
 
 spec = importlib.util.spec_from_file_location("launch", ROOT / "tools/launch.py")

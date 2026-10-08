@@ -7,7 +7,6 @@ import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
 from atlas_host.profile_adapter import native_progress
 
 BINDING = json.loads((ROOT / "docs/SOURCE-BINDING-V2.json").read_text())

@@ -17,7 +17,6 @@ import unittest
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
 import acquisition_contracts as acquisition_fixture
 import inference_architecture as architecture
 import inference_edits as edits

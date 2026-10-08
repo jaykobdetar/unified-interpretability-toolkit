@@ -8,7 +8,6 @@ import sys
 import unittest
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import inference_pair_contract as pair_core
 import inference_prompt_pair as pair
 import inference_sweep as sweep

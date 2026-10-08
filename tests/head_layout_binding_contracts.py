@@ -6,7 +6,6 @@ import sys
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from inference_architecture import head_layout_descriptor, bind_viewer_head_layout
 import live_inference as live
 

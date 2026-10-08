@@ -9,7 +9,6 @@ from typing import Any
 import unittest
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import inference_prompt_pair as pair
 import inference_sweep as sweep
 import prompt_pair_contracts as pair_tests

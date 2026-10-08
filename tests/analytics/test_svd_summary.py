@@ -9,7 +9,6 @@ import struct
 import sys
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from analytics import svd_summary as summary
 from analytics.core import permutation
 from analytics.worker import validate_request

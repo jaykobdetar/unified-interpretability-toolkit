@@ -11,7 +11,6 @@ from typing import Any
 import unittest
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import inference_edits as edits
 import inference_observations as observations
 import inference_prompt_pair as pair

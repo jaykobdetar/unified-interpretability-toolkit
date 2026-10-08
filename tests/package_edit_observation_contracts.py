@@ -5,7 +5,6 @@ import sys
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from atlas_host import inference_edit_contract as packaged_edit
 from atlas_host import inference_observation_contract as packaged_observation
 import inference_edit_contract as legacy_edit

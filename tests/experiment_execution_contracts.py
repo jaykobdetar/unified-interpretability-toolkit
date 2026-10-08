@@ -6,7 +6,6 @@ from typing import get_type_hints
 import unittest
 from unittest.mock import Mock, call, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import inference_experiments as experiments
 import inference_generation as generation
 

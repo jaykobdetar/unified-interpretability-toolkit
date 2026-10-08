@@ -9,7 +9,6 @@ from types import SimpleNamespace as NS
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
 import host_contracts as fixture
 import profile_worker_primitives as primitive
 from atlas_host.inference import head_layout_metadata

@@ -8,7 +8,6 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "analytics"))
 from analytics import worker
 from analytics.source import Catalog

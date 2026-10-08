@@ -6,7 +6,6 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
 import launch
 import viewer_resources
 from atlas_host import launch as packaged_launch
