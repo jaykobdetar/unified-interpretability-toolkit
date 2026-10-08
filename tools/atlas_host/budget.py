@@ -5,28 +5,35 @@ must keep its independent CPU/memory enforcement, not rely on post-call sampling
 """
 
 import time
+from typing import Callable, TypedDict, cast
 
 from .common import integer, require
+
+
+class RemainingWork(TypedDict):
+    values: int
+    wall_ms: int
+    cpu_ms: int
 
 
 class WorkGrant:
     def __init__(
         self,
-        values,
-        wall_ms,
-        cpu_ms,
+        values: int,
+        wall_ms: int,
+        cpu_ms: int,
         *,
-        clock=time.monotonic,
-        cpu_clock=None,
-        lease_ms=15000,
-    ):
+        clock: Callable[[], float] = time.monotonic,
+        cpu_clock: Callable[[], float] | None = None,
+        lease_ms: int = 15000,
+    ) -> None:
         self.maximum = integer(values, 1)
         self.wall_ms = integer(wall_ms, 1, 5000)
         self.cpu_ms = integer(cpu_ms, 1, 4000)
         integer(lease_ms, 1, 15000)
         require(callable(cpu_clock), "Supply a CPU clock covering all owned job work")
-        self.clock, self.cpu_clock = clock, cpu_clock
-        self.started, self.cpu_started = clock(), cpu_clock()
+        self.clock, self.cpu_clock = clock, cast(Callable[[], float], cpu_clock)
+        self.started, self.cpu_started = clock(), cast(Callable[[], float], cpu_clock)()
         self.deadline = self.started + wall_ms / 1000
         self.lease_seconds = lease_ms / 1000
         self.lease_end = self.started + self.lease_seconds
@@ -34,7 +41,7 @@ class WorkGrant:
         self.failed = False
         self.in_flight = False
 
-    def remaining(self):
+    def remaining(self) -> RemainingWork:
         wall = int(max(0, self.deadline - self.clock()) * 1000)
         cpu = int(max(0, self.cpu_ms - (self.cpu_clock() - self.cpu_started) * 1000))
         require(not self.failed, "Grant failed; explicit new grant required")
@@ -42,12 +49,14 @@ class WorkGrant:
         require(wall > 0 and cpu > 0, "Total profile budget exhausted")
         return {"values": self.maximum - self.visited, "wall_ms": wall, "cpu_ms": cpu}
 
-    def heartbeat(self):
+    def heartbeat(self) -> None:
         # A late heartbeat cannot resurrect an expired grant.
         self.remaining()
         self.lease_end = self.clock() + self.lease_seconds
 
-    def advance(self, chunk_values, advance_chunk):
+    def advance(
+        self, chunk_values: int, advance_chunk: Callable[[int, float], int]
+    ) -> int:
         """Invoke one task15 adapter chunk with (max_values, absolute_deadline).
 
         Wall and CPU include waits/coordinator work since admission. On uncertain
