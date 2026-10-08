@@ -108,10 +108,79 @@ class Preparation:
 
 
 @dataclass(frozen=True)
+class StepValidation:
+    sweep: Callable[[], None]
+    pair: Callable[[], None]
+    generation: Callable[[], None]
+
+
+def validate_sweep_step(context: StepValidation) -> None:
+    context.sweep()
+
+
+def validate_pair_step(context: StepValidation) -> None:
+    context.pair()
+
+
+def validate_generation_step(context: StepValidation) -> None:
+    context.generation()
+
+
+def reject_preview_step(context: StepValidation) -> None:
+    raise ValueError("Preview cannot produce activation records")
+
+
+@dataclass(frozen=True)
+class Completion:
+    sweep: Callable[[], None]
+    preview: Callable[[], None]
+    generation: Callable[[], None]
+
+
+def complete_sweep(context: Completion) -> None:
+    context.sweep()
+
+
+def complete_preview(context: Completion) -> None:
+    context.preview()
+
+
+def complete_generation(context: Completion) -> None:
+    context.generation()
+
+
+@dataclass(frozen=True)
+class Schemas:
+    comparison: Callable[[], dict[str, Any]]
+    observations: Callable[[], dict[str, Any]]
+    pair: Callable[[], dict[str, Any]]
+    sweep: Callable[[], dict[str, Any]]
+
+
+def describe_comparison(context: Schemas) -> dict[str, Any]:
+    return context.comparison()
+
+
+def describe_generation(context: Schemas) -> dict[str, Any]:
+    return context.observations()
+
+
+def describe_pair(context: Schemas) -> dict[str, Any]:
+    return context.pair()
+
+
+def describe_sweep(context: Schemas) -> dict[str, Any]:
+    return context.sweep()
+
+
+@dataclass(frozen=True)
 class Experiment:
     kind: Kind
     execute: Callable[[Context, Request], None]
     prepare_request: Callable[[Preparation], PreparedRequest] | None = None
+    validate_step: Callable[[StepValidation], None] = validate_generation_step
+    complete: Callable[[Completion], None] = complete_generation
+    describe: Callable[[Schemas], dict[str, Any]] = describe_generation
 
 
 def run_preview(context: Context, request: Request) -> None:
@@ -184,14 +253,45 @@ def prepare_generation(context: Preparation) -> PreparedRequest:
 
 REGISTRY: Mapping[Kind, Experiment] = MappingProxyType(
     {
-        Kind.PREVIEW: Experiment(Kind.PREVIEW, run_preview, prepare_pair),
-        Kind.SWEEP: Experiment(Kind.SWEEP, run_sweep, prepare_sweep),
-        Kind.PROMPT_PAIR: Experiment(Kind.PROMPT_PAIR, run_prompt_pair, prepare_pair),
+        Kind.PREVIEW: Experiment(
+            Kind.PREVIEW,
+            run_preview,
+            prepare_pair,
+            validate_step=reject_preview_step,
+            complete=complete_preview,
+            describe=describe_pair,
+        ),
+        Kind.SWEEP: Experiment(
+            Kind.SWEEP,
+            run_sweep,
+            prepare_sweep,
+            validate_step=validate_sweep_step,
+            complete=complete_sweep,
+            describe=describe_sweep,
+        ),
+        Kind.PROMPT_PAIR: Experiment(
+            Kind.PROMPT_PAIR,
+            run_prompt_pair,
+            prepare_pair,
+            validate_step=validate_pair_step,
+            complete=complete_generation,
+            describe=describe_pair,
+        ),
         Kind.COMPARISON: Experiment(
-            Kind.COMPARISON, run_comparison, prepare_generation
+            Kind.COMPARISON,
+            run_comparison,
+            prepare_generation,
+            validate_step=validate_generation_step,
+            complete=complete_generation,
+            describe=describe_comparison,
         ),
         Kind.GENERATION: Experiment(
-            Kind.GENERATION, run_generation, prepare_generation
+            Kind.GENERATION,
+            run_generation,
+            prepare_generation,
+            validate_step=validate_generation_step,
+            complete=complete_generation,
+            describe=describe_generation,
         ),
     }
 )
@@ -225,3 +325,25 @@ def for_coordinator(request: Request, mode: object) -> Experiment | None:
     elif mode == Kind.GENERATION.value:
         return REGISTRY[Kind.COMPARISON if "edits" in request else Kind.GENERATION]
     return None
+
+
+def for_step(mode: object) -> Experiment:
+    if mode == Kind.SWEEP.value:
+        return REGISTRY[Kind.SWEEP]
+    elif mode == Kind.PROMPT_PAIR.value:
+        return REGISTRY[Kind.PROMPT_PAIR]
+    elif mode == Kind.PREVIEW.value:
+        return REGISTRY[Kind.PREVIEW]
+    return REGISTRY[Kind.GENERATION]
+
+
+def complete_event(kind: object, context: Completion) -> bool:
+    if kind == "sweep_done":
+        REGISTRY[Kind.SWEEP].complete(context)
+    elif kind == "preview_done":
+        REGISTRY[Kind.PREVIEW].complete(context)
+    elif kind == "done":
+        REGISTRY[Kind.GENERATION].complete(context)
+    else:
+        return False
+    return True

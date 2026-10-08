@@ -71,6 +71,11 @@ from atlas_host.inference_experiments import (
     Kind,
     REGISTRY,
     Preparation,
+    StepValidation,
+    Completion,
+    Schemas,
+    complete_event,
+    for_step,
     for_coordinator,
 )
 from atlas_host.inference_architecture import architecture
@@ -538,6 +543,19 @@ class Session:
             "stopping",
         )
         analytics_busy = self.analytics is not None and self.analytics.busy
+        presentation = Schemas(
+            comparison=lambda: contracts.comparison_schema(),
+            observations=lambda: contracts.observations_schema(),
+            pair=lambda: {
+                "modes": list(prompt_pair.MODES),
+                "prompts": 2,
+                "max_prompt_bytes_each": 2048,
+                "max_positions": 8,
+                "vector_width": value.width,
+                "max_vector_equivalents": 24,
+            },
+            sweep=lambda: contracts.sweep_schema(),
+        )
         return {
             "model": MANIFEST["repo"],
             "revision": MANIFEST["revision"],
@@ -560,17 +578,10 @@ class Session:
             "queue_capacity": 0,
             "architecture": value.description,
             "head_layout": bound_head_layout_descriptor(value),
-            "comparison": contracts.comparison_schema(),
-            "observations": contracts.observations_schema(),
-            "prompt_pair": {
-                "modes": list(prompt_pair.MODES),
-                "prompts": 2,
-                "max_prompt_bytes_each": 2048,
-                "max_positions": 8,
-                "vector_width": value.width,
-                "max_vector_equivalents": 24,
-            },
-            "sweep": contracts.sweep_schema(),
+            "comparison": REGISTRY[Kind.COMPARISON].describe(presentation),
+            "observations": REGISTRY[Kind.GENERATION].describe(presentation),
+            "prompt_pair": REGISTRY[Kind.PROMPT_PAIR].describe(presentation),
+            "sweep": REGISTRY[Kind.SWEEP].describe(presentation),
         }
 
     def owns(self, capability: object) -> bool:
@@ -810,14 +821,19 @@ class Session:
             raise ValueError("Invalid activation width")
         if "baseline" in event or "edited" in event:
             contracts.validate_pair(event)
-        if self.mode == "sweep":
-            contracts.validate_sweep_step(event, cast(dict[str, Any], self.sweep_plan))
-        elif self.mode == "prompt_pair":
-            contracts.validate_pair_step(event, cast(dict[str, Any], self.pair_request))
-        elif self.mode == "prompt_pair_preview":
-            raise ValueError("Preview cannot produce activation records")
-        else:
-            contracts.validate_record(event, self.observation, self.capture_layer)
+        for_step(self.mode).validate_step(
+            StepValidation(
+                sweep=lambda: contracts.validate_sweep_step(
+                    event, cast(dict[str, Any], self.sweep_plan)
+                ),
+                pair=lambda: contracts.validate_pair_step(
+                    event, cast(dict[str, Any], self.pair_request)
+                ),
+                generation=lambda: contracts.validate_record(
+                    event, self.observation, self.capture_layer
+                ),
+            )
+        )
         self.steps.append(event)
         if self.mode == "sweep":
             self.details["sweep_coverage"] = sweep.coverage(
@@ -930,14 +946,14 @@ class Session:
                         self.details.update(event)
                         self.stop()
                         return
-                    elif kind == "sweep_done":
-                        self._complete_sweep(event)
-                        return
-                    elif kind == "preview_done":
-                        self._complete_preview(event, contracts)
-                        return
-                    elif kind == "done":
-                        self._complete_generation(event)
+                    elif complete_event(
+                        kind,
+                        Completion(
+                            sweep=lambda: self._complete_sweep(event),
+                            preview=lambda: self._complete_preview(event, contracts),
+                            generation=lambda: self._complete_generation(event),
+                        ),
+                    ):
                         return
                     elif kind in ("prefill", "loaded"):
                         self.details.update(event)
