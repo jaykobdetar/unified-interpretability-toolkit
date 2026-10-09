@@ -7,7 +7,7 @@ function enableModules(filename) {
   if (vm.SourceTextModule) return;
   const child = spawnSync(
     process.execPath,
-    ["--experimental-vm-modules", filename],
+    ["--experimental-vm-modules", filename, ...process.argv.slice(2)],
     {
       stdio: "inherit",
     },
@@ -18,7 +18,10 @@ function enableModules(filename) {
 
 async function load(source, context) {
   if (!/^\s*export\s/m.test(source)) {
-    vm.runInContext(source.replace(/initialize\(\);\s*$/, ""), context);
+    vm.runInContext(
+      source.replace(/initialize\s*\(\s*\)\s*;\s*$/, ""),
+      context,
+    );
     return;
   }
   const document = context.document;
