@@ -200,7 +200,7 @@ def format_checks(dev_python: Path) -> None:
     javascript = [
         p
         for p in tracked
-        if Path(p).suffix in (".js", ".cjs", ".mjs", ".css")
+        if Path(p).suffix in (".js", ".cjs", ".mjs", ".css", ".html")
         and "vendor" not in Path(p).parts
     ]
     if not python or not javascript:

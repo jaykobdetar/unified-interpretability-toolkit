@@ -169,6 +169,35 @@ class Sequence(unittest.TestCase):
             ],
         )
 
+        with ExitStack() as stack:
+            _, html_commands = self.formatter_context(stack)
+            stack.enter_context(
+                patch.object(
+                    check,
+                    "formatter_files",
+                    return_value=[
+                        *FILES,
+                        "web/index.html",
+                        "web/comparison.html",
+                        "web/analytics-demo.html",
+                    ],
+                )
+            )
+            check.format_checks(python)
+        self.assertEqual(
+            html_commands,
+            [
+                commands[0],
+                [
+                    *commands[1],
+                    "web/index.html",
+                    "web/comparison.html",
+                    "web/analytics-demo.html",
+                ],
+                commands[2],
+            ],
+        )
+
     def test_rustfmt_pin_refuses_adjacent_and_malformed_versions(self):
         for version in (
             "rustfmt 1.7.0-stable (synthetic)",
