@@ -1,159 +1,995 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="color-scheme" content="light dark">
-  <title>Unified Interpretability Toolkit</title>
-  <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="./style.css">
-  <script defer src="./viewer.js"></script>
-</head>
-<body>
-  <a id="skip-to-view" class="skip" href="#workspace">Skip to tensor views</a>
-  <header class="masthead">
-    <div><p class="eyebrow">EXPLORE A MODEL, ONE WEIGHT AT A TIME</p><h1>Unified Interpretability Toolkit <span id="model-name">Loading model…</span></h1></div>
-    <div class="header-end"><span id="mode-status" class="quiet-pill" role="status">Checking available tools…</span><button id="show-help" type="button" aria-controls="welcome">How to use</button><button id="theme-toggle" type="button" aria-pressed="false">Dark mode</button><button id="calibrate-all" type="button">Calibrate full model</button><button id="refresh-model" type="button">Refresh status</button></div>
-  </header>
-  <section id="host-model-picker" class="host-model-picker" hidden aria-label="Installed model selection">
-    <label>Installed model <select id="host-model-select"></select></label>
-    <button id="host-model-open" type="button">Open selected model</button>
-    <span id="host-model-status" role="status">Loading installed models…</span>
-  </section>
-  <nav class="section-nav" aria-label="Workspace sections"><a id="nav-view" href="#workspace">View weights</a><a id="nav-inspect" href="#scalar-inspector">Selected value</a><a id="nav-experiment" href="#inference-panel" hidden>Experiments</a></nav>
-  <section class="provenance" aria-label="Model provenance">
-    <p id="model-scope">Loading checkpoint catalog…</p>
-    <details><summary>Source provenance</summary><dl class="facts"><dt>Identity / cache checks</dt><dd id="identity-note">—</dd><dt>Representation</dt><dd id="representation">—</dd><dt>Pinned revision</dt><dd><code id="revision">—</code></dd><dt>Source / content identity</dt><dd><code id="source-directory">—</code></dd><dt>Source bytes</dt><dd id="source-bytes">—</dd></dl></details>
-  </section>
-  <details class="coverage-details"><summary>Model readiness &amp; source details <span id="readiness-summary">Reading model headers…</span></summary><section class="coverage" aria-label="Three separate coverage measures">
-    <div><span class="coverage-label">01 / SOURCE</span><strong id="source-coverage">Awaiting metadata</strong></div>
-    <div><span class="coverage-label">02 / STATISTICS</span><strong id="statistics-coverage">Awaiting metadata</strong></div>
-    <div><span class="coverage-label">03 / RENDERED TILES</span><strong id="render-coverage">Awaiting metadata</strong><small id="render-coverage-note">Fine tiles are generated on demand.</small></div>
-  </section>
-  </details>
-  <p id="calibration-progress" class="calibration-progress" role="status"></p>
-  <div id="calibration-note" class="notice" hidden></div>
-  <div id="error" class="error" role="alert" hidden></div>
-  <section id="welcome" class="welcome" aria-labelledby="welcome-title">
-    <div><p class="eyebrow">START HERE</p><h2 id="welcome-title">You’re looking at numbers a model learned.</h2>
-    <p>A weight is a stored number used in the model’s calculations. Blue means negative and red positive; the magnitude rule uses purple for size, and zoomed-out pixels summarize blocks of values. Colors and patterns alone do not tell you what a model knows, which concepts a weight represents, or whether it is important.</p>
-    <p class="small"><strong>1.</strong> Choose a tensor (an array of weights). <strong>2.</strong> Pan or zoom the linked views to compare color rules. <strong>3.</strong> Hover for a raw value; click or enter coordinates to keep it in the inspector.</p></div>
-    <button id="dismiss-help" type="button">Got it</button>
-  </section>
-  <section class="starting-points" aria-label="Verified starting points"><details><summary>Start with a verified finding <span class="small muted">Source-bound examples</span></summary><p class="small muted">These observations describe stored numbers, not learned concepts. Opening one restores a bookmarked native region.</p><div id="guided-examples" class="example-grid"><p class="small muted">Checking this source for verified examples…</p></div></details></section>
-  <main class="layout">
-    <details id="tensor-browser" class="tensor-browser" open>
-      <summary>Browse tensors <span id="tensor-count">—</span></summary>
-      <div class="browser-body">
-        <label for="tensor-search">Find a tensor</label><input id="tensor-search" type="search" placeholder="Name or projection…" autocomplete="off">
-        <label for="layer-filter">Catalog scope</label><select id="layer-filter"><option value="all">All layers and shared tensors</option></select>
-        <p id="filtered-count" class="small muted"></p>
-        <div id="tensor-list" class="tensor-list" aria-label="Tensor catalog"></div>
-        <p class="small muted">One native tensor at a time.<br>No parameter rearrangement.</p>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Unified Interpretability Toolkit</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./style.css" />
+    <script defer src="./viewer.js"></script>
+  </head>
+  <body>
+    <a id="skip-to-view" class="skip" href="#workspace">Skip to tensor views</a>
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">EXPLORE A MODEL, ONE WEIGHT AT A TIME</p>
+        <h1>
+          Unified Interpretability Toolkit
+          <span id="model-name">Loading model…</span>
+        </h1>
+      </div>
+      <div class="header-end">
+        <span id="mode-status" class="quiet-pill" role="status"
+          >Checking available tools…</span
+        ><button id="show-help" type="button" aria-controls="welcome">
+          How to use</button
+        ><button id="theme-toggle" type="button" aria-pressed="false">
+          Dark mode</button
+        ><button id="calibrate-all" type="button">Calibrate full model</button
+        ><button id="refresh-model" type="button">Refresh status</button>
+      </div>
+    </header>
+    <section
+      id="host-model-picker"
+      class="host-model-picker"
+      hidden
+      aria-label="Installed model selection"
+    >
+      <label
+        >Installed model
+        <select id="host-model-select"></select
+      ></label>
+      <button id="host-model-open" type="button">Open selected model</button>
+      <span id="host-model-status" role="status"
+        >Loading installed models…</span
+      >
+    </section>
+    <nav class="section-nav" aria-label="Workspace sections">
+      <a id="nav-view" href="#workspace">View weights</a
+      ><a id="nav-inspect" href="#scalar-inspector">Selected value</a
+      ><a id="nav-experiment" href="#inference-panel" hidden>Experiments</a>
+    </nav>
+    <section class="provenance" aria-label="Model provenance">
+      <p id="model-scope">Loading checkpoint catalog…</p>
+      <details>
+        <summary>Source provenance</summary>
+        <dl class="facts">
+          <dt>Identity / cache checks</dt>
+          <dd id="identity-note">—</dd>
+          <dt>Representation</dt>
+          <dd id="representation">—</dd>
+          <dt>Pinned revision</dt>
+          <dd><code id="revision">—</code></dd>
+          <dt>Source / content identity</dt>
+          <dd><code id="source-directory">—</code></dd>
+          <dt>Source bytes</dt>
+          <dd id="source-bytes">—</dd>
+        </dl>
+      </details>
+    </section>
+    <details class="coverage-details">
+      <summary>
+        Model readiness &amp; source details
+        <span id="readiness-summary">Reading model headers…</span>
+      </summary>
+      <section class="coverage" aria-label="Three separate coverage measures">
+        <div>
+          <span class="coverage-label">01 / SOURCE</span
+          ><strong id="source-coverage">Awaiting metadata</strong>
+        </div>
+        <div>
+          <span class="coverage-label">02 / STATISTICS</span
+          ><strong id="statistics-coverage">Awaiting metadata</strong>
+        </div>
+        <div>
+          <span class="coverage-label">03 / RENDERED TILES</span
+          ><strong id="render-coverage">Awaiting metadata</strong
+          ><small id="render-coverage-note"
+            >Fine tiles are generated on demand.</small
+          >
+        </div>
+      </section>
+    </details>
+    <p id="calibration-progress" class="calibration-progress" role="status"></p>
+    <div id="calibration-note" class="notice" hidden></div>
+    <div id="error" class="error" role="alert" hidden></div>
+    <section id="welcome" class="welcome" aria-labelledby="welcome-title">
+      <div>
+        <p class="eyebrow">START HERE</p>
+        <h2 id="welcome-title">You’re looking at numbers a model learned.</h2>
+        <p>
+          A weight is a stored number used in the model’s calculations. Blue
+          means negative and red positive; the magnitude rule uses purple for
+          size, and zoomed-out pixels summarize blocks of values. Colors and
+          patterns alone do not tell you what a model knows, which concepts a
+          weight represents, or whether it is important.
+        </p>
+        <p class="small">
+          <strong>1.</strong> Choose a tensor (an array of weights).
+          <strong>2.</strong> Pan or zoom the linked views to compare color
+          rules. <strong>3.</strong> Hover for a raw value; click or enter
+          coordinates to keep it in the inspector.
+        </p>
+      </div>
+      <button id="dismiss-help" type="button">Got it</button>
+    </section>
+    <section class="starting-points" aria-label="Verified starting points">
+      <details>
+        <summary>
+          Start with a verified finding
+          <span class="small muted">Source-bound examples</span>
+        </summary>
+        <p class="small muted">
+          These observations describe stored numbers, not learned concepts.
+          Opening one restores a bookmarked native region.
+        </p>
+        <div id="guided-examples" class="example-grid">
+          <p class="small muted">Checking this source for verified examples…</p>
+        </div>
+      </details>
+    </section>
+    <main class="layout">
+      <details id="tensor-browser" class="tensor-browser" open>
+        <summary>Browse tensors <span id="tensor-count">—</span></summary>
+        <div class="browser-body">
+          <label for="tensor-search">Find a tensor</label
+          ><input
+            id="tensor-search"
+            type="search"
+            placeholder="Name or projection…"
+            autocomplete="off"
+          />
+          <label for="layer-filter">Catalog scope</label
+          ><select id="layer-filter">
+            <option value="all">All layers and shared tensors</option>
+          </select>
+          <p id="filtered-count" class="small muted"></p>
+          <div
+            id="tensor-list"
+            class="tensor-list"
+            aria-label="Tensor catalog"
+          ></div>
+          <p class="small muted">
+            One native tensor at a time.<br />No parameter rearrangement.
+          </p>
+        </div>
+      </details>
+      <section
+        id="workspace"
+        class="workspace"
+        aria-label="Synchronized tensor views"
+        tabindex="-1"
+      >
+        <div class="workspace-heading">
+          <div>
+            <p class="eyebrow">SAME VALUES · SAME COORDINATES</p>
+            <h2 id="tensor-name">Choose a tensor</h2>
+            <p id="tensor-shape" class="small muted">
+              Native rows ↓ · columns →
+            </p>
+            <p id="tensor-description" class="tensor-description"></p>
+          </div>
+          <div
+            class="view-actions"
+            role="group"
+            aria-label="Synchronized view controls"
+          >
+            <button id="fit" disabled>Fit tensor</button
+            ><button id="zoom-out" disabled aria-label="Zoom both views out">
+              −</button
+            ><button id="zoom-in" disabled aria-label="Zoom both views in">
+              +</button
+            ><button id="scalar-zoom" disabled>Screen 1:1</button>
+          </div>
+        </div>
+        <div id="slice-picker" class="slice-picker" hidden></div>
+        <div class="explore-readout">
+          <div class="overview-wrap">
+            <span class="small">Selected 2D view · A</span>
+            <div
+              id="tensor-overview"
+              class="tensor-overview"
+              role="img"
+              aria-label="Selected 2D view overview; highlighted box is the current viewport"
+            >
+              <img id="overview-image" alt="" hidden />
+              <div id="overview-viewport" hidden></div>
+            </div>
+            <span id="overview-status" class="small muted"
+              >Waiting for a tensor</span
+            >
+          </div>
+          <div class="hover-wrap">
+            <strong>Under your pointer</strong>
+            <p id="hover-readout" role="status" aria-live="polite">
+              Hover over either image to read one original value.
+            </p>
+            <p class="small">
+              <span id="pinned-readout">No pinned value yet.</span>
+              <a href="#scalar-inspector">Selection details</a>
+            </p>
+            <p class="small muted">
+              Raw source value, not the pooled pixel. Click to keep a selection.
+              Keyboard: arrows inspect, Shift + arrows pan, + / − zoom, Home
+              fits.
+            </p>
+          </div>
+        </div>
+        <p id="viewport-bounds" class="viewport-bounds">
+          Native viewport bounds appear when the view is ready.
+        </p>
+        <div
+          class="mobile-comparison-switch"
+          role="group"
+          aria-label="Compare color rules at the same coordinates"
+        >
+          <button id="show-left" type="button" aria-pressed="true">
+            A · left rule</button
+          ><button id="show-right" type="button" aria-pressed="false">
+            B · right rule</button
+          ><span>Same weights and viewport · switch to compare</span>
+        </div>
+        <div
+          class="comparison"
+          id="comparison"
+          data-mobile-side="left"
+          aria-busy="true"
+        >
+          <article class="panel" id="left-panel">
+            <div class="panel-heading">
+              <span class="panel-letter">A</span
+              ><label for="left-rule"
+                >Left color rule<select id="left-rule" disabled></select
+              ></label>
+            </div>
+            <div
+              id="left-canvas"
+              class="canvas-host"
+              role="region"
+              aria-label="Left tensor image. Arrow keys inspect neighboring values; Shift plus arrows pan; plus or minus zoom; Home fits. Drag to pan, pinch or scroll to zoom, tap to inspect."
+              tabindex="0"
+            >
+              <div class="canvas-message">Loading…</div>
+            </div>
+            <div class="resolution-row">
+              <span id="left-resolution">Awaiting image</span
+              ><span id="left-magnification">—</span>
+            </div>
+            <div class="legend" aria-label="Left exact numeric legend">
+              <div id="left-gradient" class="gradient">
+                <i class="zero-marker"></i>
+              </div>
+              <div class="legend-values">
+                <code id="left-min">—</code><span id="left-mid">0</span
+                ><code id="left-max">—</code>
+              </div>
+              <details class="scale-details">
+                <summary>Scale &amp; formula details</summary>
+                <p id="left-scope" class="legend-scope">—</p>
+                <p id="left-parameter" class="small"></p>
+                <code id="left-formula" class="formula">Formula pending</code>
+                <p id="left-units" class="small muted"></p>
+              </details>
+            </div>
+          </article>
+          <article class="panel" id="right-panel">
+            <div class="panel-heading">
+              <span class="panel-letter">B</span
+              ><label for="right-rule"
+                >Right color rule<select id="right-rule" disabled></select
+              ></label>
+            </div>
+            <div
+              id="right-canvas"
+              class="canvas-host"
+              role="region"
+              aria-label="Right tensor image. Arrow keys inspect neighboring values; Shift plus arrows pan; plus or minus zoom; Home fits. Drag to pan, pinch or scroll to zoom, tap to inspect."
+              tabindex="0"
+            >
+              <div class="canvas-message">Loading…</div>
+            </div>
+            <div class="resolution-row">
+              <span id="right-resolution">Awaiting image</span
+              ><span id="right-magnification">—</span>
+            </div>
+            <div class="legend" aria-label="Right exact numeric legend">
+              <div id="right-gradient" class="gradient">
+                <i class="zero-marker"></i>
+              </div>
+              <div class="legend-values">
+                <code id="right-min">—</code><span id="right-mid">0</span
+                ><code id="right-max">—</code>
+              </div>
+              <details class="scale-details">
+                <summary>Scale &amp; formula details</summary>
+                <p id="right-scope" class="legend-scope">—</p>
+                <p id="right-parameter" class="small"></p>
+                <code id="right-formula" class="formula">Formula pending</code>
+                <p id="right-units" class="small muted"></p>
+              </details>
+            </div>
+          </article>
+        </div>
+        <div class="workspace-foot">
+          <p id="status" role="status" aria-live="polite">
+            Loading model metadata…
+          </p>
+          <span class="sync-label"><i></i>Pan and zoom linked</span>
+        </div>
+        <details
+          class="workspace-tools"
+          aria-label="Bookmarks, private notes and native region export"
+        >
+          <summary>Save, annotate &amp; export a region</summary>
+          <p id="read-retry" role="status" aria-live="polite"></p>
+          <div class="tool-actions">
+            <button id="bookmark-save" type="button">
+              Bookmark current view</button
+            ><button id="bookmark-reset" type="button">Reset view link</button>
+          </div>
+          <p id="bookmark-status" class="small" role="status">
+            View links contain only source identity, tensor, native region, zoom
+            and rules.
+          </p>
+          <fieldset id="region-controls" disabled>
+            <legend>Native region · inclusive bounds</legend>
+            <div class="region-inputs">
+              <label
+                >First row<input
+                  id="region-r0"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value="0" /></label
+              ><label
+                >First column<input
+                  id="region-c0"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value="0" /></label
+              ><label
+                >Last row<input
+                  id="region-r1"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value="0" /></label
+              ><label
+                >Last column<input
+                  id="region-c1"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value="0"
+              /></label>
+            </div>
+            <div class="tool-actions">
+              <button id="region-use-cell" type="button">
+                Use inspected cell</button
+              ><button id="region-focus" type="button">Focus region</button
+              ><label
+                >Format<select id="region-format">
+                  <option value="csv">Raw CSV</option>
+                  <option value="npy">Numeric NumPy + metadata</option>
+                </select></label
+              ><button id="region-export" type="button">
+                Export original values</button
+              ><button id="region-cancel" type="button" disabled>
+                Cancel export
+              </button>
+            </div>
+            <p class="small muted">
+              At most 256 cells / 256 KiB per file. CSV retains exact original
+              decimals and BF16/F16/F32 bytes. NumPy downloads a numeric .npy
+              and a .metadata.json sidecar with source identity, native region,
+              slice and original bytes; keep both files. BF16 widens exactly to
+              float32; F16/F32 retain storage bits. No color transformation or
+              pickle.
+            </p>
+            <p id="region-status" class="small" role="status"></p>
+          </fieldset>
+          <fieldset id="note-controls" disabled>
+            <legend>Private local notes</legend>
+            <p id="note-scope" class="small"></p>
+            <p class="small muted">
+              Stored only in this browser profile on this origin, scoped to this
+              exact source revision and tensor. Not sent to the server or
+              included in view links. Export a backup before clearing browser
+              storage. Maximum 100 notes per tensor, 500 characters each.
+            </p>
+            <label
+              >Pin note to<select id="note-kind">
+                <option value="region">Selected region</option>
+                <option value="row">First selected row</option>
+                <option value="column">First selected column</option>
+              </select></label
+            >
+            <label
+              >Note text<textarea
+                id="note-text"
+                rows="3"
+                maxlength="500"
+              ></textarea>
+            </label>
+            <div class="tool-actions">
+              <button id="note-new" type="button">New note</button
+              ><button id="note-save" type="button">Save note</button
+              ><button id="note-export" type="button">Export notes JSON</button>
+            </div>
+            <p id="note-status" class="small" role="status"></p>
+            <div id="note-list"></div>
+          </fieldset>
+        </details>
+        <p class="reading-note">
+          Screen 1:1 sets one CSS pixel per source value; it does not force the
+          native scalar level. The numerical badge shows actual pooling. The
+          inspector reads one original scalar.
+        </p>
+        <p class="reading-note">
+          Signed palette: blue for negative, red for positive; zero maps to
+          neutral. Magnitude palettes run from light to dark purple. Tensor
+          magnitude uses the exact maximum |weight|; tensor typical magnitude
+          uses the median-nonzero asinh scale and clips at Q99 (zero-Q99
+          fallback 1), as labeled in its legend. Finite colors do not prove an
+          exact zero. Both panels retain the same original weights and
+          placement.
+        </p>
+        <p id="global-scale-note" class="reading-note"></p>
+      </section>
+      <aside
+        id="scalar-inspector"
+        class="inspector"
+        tabindex="-1"
+        aria-label="Exact original scalar inspector"
+      >
+        <p class="eyebrow">ONE ORIGINAL ADDRESS</p>
+        <h2>Exact scalar</h2>
+        <p class="small muted">
+          Click either image to keep a selection, or type a row and column. All
+          indices start at 0; a vector has one display row.
+        </p>
+        <form id="inspect-form">
+          <div class="address-inputs">
+            <label for="row"
+              >Row<input
+                id="row"
+                type="number"
+                inputmode="numeric"
+                min="0"
+                value="0"
+                step="1"
+                required
+                disabled /></label
+            ><label for="col"
+              >Column<input
+                id="col"
+                type="number"
+                inputmode="numeric"
+                min="0"
+                value="0"
+                step="1"
+                required
+                disabled
+            /></label>
+          </div>
+          <button id="inspect-submit" type="submit" disabled>
+            Inspect original address
+          </button>
+        </form>
+        <div id="inspection" class="inspection" aria-live="polite">
+          <p class="empty-state">Tap either image or enter an address.</p>
+        </div>
+        <div class="edit-next">
+          <p id="edit-readiness" class="small">Checking edit availability…</p>
+          <button id="prepare-edit" type="button" disabled>
+            Review edit target
+          </button>
+        </div>
+        <details class="guide">
+          <summary>How to read this view</summary>
+          <p>
+            Each full-resolution image cell addresses one stored source value. A
+            lower pyramid level averages the selected transformed field over
+            aligned source blocks. Transformation is applied before averaging;
+            opposite signs can cancel in signed rules. Magnitude averages
+            absolute weights, so signs never cancel. Edge blocks contain only
+            actual addresses.
+          </p>
+          <p>
+            Numerical pooling and screen magnification are separate.
+            Fit-to-screen can hide individual cells even when scalar-level tiles
+            are loaded.
+          </p>
+          <p>
+            Global rules use the completed checkpoint calibration. Tensor rules
+            enhance local contrast; the same color in another tensor can
+            represent a different number. Exact bounds and formulas above come
+            from the backend.
+          </p>
+          <p>
+            Vectors keep their native shape: one row, with no wrapping or padded
+            weight cells. Zoom in or enter an address when a fitted vector looks
+            thin.
+          </p>
+          <p>
+            Patterns in weights or colors alone do not establish learned
+            concepts, circuits, or functional importance.
+          </p>
+          <p id="render-semantics"></p>
+        </details>
+      </aside>
+    </main>
+    <section
+      id="profile-panel"
+      class="profile-panel"
+      hidden
+      aria-label="Whole-slice strengths"
+    ></section>
+    <details
+      id="inference-panel"
+      class="inference"
+      tabindex="-1"
+      aria-label="Experimental live inference"
+      hidden
+    >
+      <summary>
+        Experiment with this model
+        <span class="small muted"
+          >Optional · baseline and edited inference</span
+        >
+      </summary>
+      <div class="experiment-body">
+        <div class="inference-heading">
+          <div>
+            <p class="eyebrow">EXPERIMENTAL / IN-MEMORY EDITS</p>
+            <h2>Compare baseline and edited inference.</h2>
+            <p id="infer-model" class="small muted">
+              SmolLM2-135M · optional local CPU inference
+            </p>
+          </div>
+          <span class="quiet-pill">Disk weights stay unchanged</span>
+        </div>
+        <p class="small">
+          <button id="infer-check" type="button">Check readiness</button> One
+          local worker; no waiting queue. If busy, wait and check again. Load
+          percentage and finish-time estimates are unavailable.
+        </p>
+        <p class="small muted">
+          Prompts stay on localhost. Up to 128 prompt tokens and 32 new tokens.
+          Generation runs independently of playback; pausing playback does not
+          pause computation. Cancel stops computation. The weight views below
+          never change.
+        </p>
+        <p id="infer-target-summary" class="target-summary" role="status"></p>
+        <div class="inference-grid">
+          <form id="infer-form">
+            <label
+              >Experiment<select id="infer-task">
+                <option value="generation">Baseline / edited generation</option>
+                <option value="prompt_pair">
+                  Two prompts · selected activation differences
+                </option>
+                <option value="sweep">
+                  Bounded head ablation / query intervention
+                </option>
+              </select></label
+            >
+            <fieldset class="edit-draft">
+              <legend>In-memory edit draft</legend>
+              <p id="infer-selection" class="small">
+                Inspect a native 2-D weight above to select an edit target.
+              </p>
+              <div class="inference-options">
+                <label
+                  >Target<select id="infer-kind">
+                    <option value="element">Inspected element</option>
+                    <option value="rows">Row range</option>
+                    <option value="columns">Column range</option>
+                  </select></label
+                ><label
+                  >Operation<select id="infer-operation">
+                    <option value="zero">Zero</option>
+                    <option value="scale">Scale</option>
+                  </select></label
+                >
+              </div>
+              <div class="inference-options">
+                <label
+                  >Start (inclusive)<input
+                    id="infer-range-start"
+                    type="number"
+                    min="0"
+                    step="1"
+                    value="0" /></label
+                ><label
+                  >End (exclusive)<input
+                    id="infer-range-end"
+                    type="number"
+                    min="1"
+                    step="1"
+                    value="1" /></label
+                ><label
+                  >Scale<input
+                    id="infer-factor"
+                    type="number"
+                    min="-100"
+                    max="100"
+                    step="any"
+                    value="0.5"
+                /></label>
+              </div>
+              <p id="infer-range-preview" class="small" role="status"></p>
+              <button id="infer-add" type="button" disabled>
+                Add inspected edit</button
+              ><button id="infer-head" type="button" disabled>
+                Zero inspected head block
+              </button>
+              <p class="small muted">
+                Native ranges are [start,end), end exclusive. At most 8 edits,
+                applied in list order. Overlaps compose. Empty list compares two
+                identical runs.
+              </p>
+              <ol id="infer-edits"></ol>
+              <button id="infer-clear-edits" type="button">
+                Clear draft edits
+              </button>
+            </fieldset>
+            <label for="infer-prompt"
+              >Prompt · base language model, no chat template</label
+            ><textarea id="infer-prompt" rows="3" maxlength="4096" required>
+The capital of France is</textarea>
+            <section id="infer-pair-controls" hidden>
+              <label
+                >Prompt B<textarea
+                  id="infer-prompt-b"
+                  rows="3"
+                  maxlength="2048"
+                >
+The capital of Italy is</textarea></label
+              ><button id="infer-pair-preview" type="button">
+                Preview both token lists
+              </button>
+              <p id="infer-preview-status" class="small"></p>
+              <div class="comparison-outputs">
+                <pre id="infer-preview-a"></pre>
+                <pre id="infer-preview-b"></pre>
+              </div>
+              <label
+                >Explicit zero-based token position pairs · A,B, one pair per
+                line<textarea
+                  id="infer-pairs"
+                  rows="3"
+                  maxlength="256"
+                ></textarea>
+              </label>
+              <p class="small muted">
+                Two uncached prefills, one selected layer/output, up to 8 pairs.
+                No generation, edits or extra observation. Preview and
+                comparison share the unchanged worker ownership and resource
+                limits.
+              </p>
+            </section>
+            <section id="infer-sweep-controls" hidden>
+              <label
+                >Targets · 1–2 lines, or layer L for all output heads<textarea
+                  id="infer-sweep-targets"
+                  rows="3"
+                  maxlength="256"
+                >
+head 0 0</textarea>
+              </label>
+              <p id="infer-sweep-help" class="small">
+                Awaiting verified architecture. Use layer L for all output heads
+                in one layer.
+              </p>
+              <button id="infer-sweep-use-inspected" type="button">
+                Use inspected projection head
+              </button>
+              <div class="inference-options">
+                <label
+                  >Operation<select id="infer-sweep-operation">
+                    <option value="zero">Zero</option>
+                    <option value="scale">Scale</option>
+                  </select></label
+                ><label
+                  >Scale<input
+                    id="infer-sweep-scale"
+                    type="number"
+                    min="-100"
+                    max="100"
+                    step="any"
+                    value="0.5" /></label
+                ><label
+                  >Seed<input
+                    id="infer-sweep-seed"
+                    type="number"
+                    min="0"
+                    max="4294967295"
+                    step="1"
+                    value="0"
+                /></label>
+              </div>
+              <label class="log-choice"
+                ><input id="infer-sweep-second" type="checkbox" />Include a
+                second explicit prompt</label
+              ><textarea id="infer-sweep-prompt-b" rows="3" maxlength="2048">
+The capital of Italy is</textarea
+              ><button id="infer-sweep-preview" type="button">
+                Review expanded plan and matched controls
+              </button>
+              <p id="infer-sweep-plan-status" class="small"></p>
+              <pre id="infer-sweep-plan"></pre>
+              <p class="small muted">
+                Output-head ablation zeros an o_proj column block. Query
+                interventions edit q_proj rows. Matched controls preserve
+                geometry and operation and are comparison interventions, not
+                assumed null effects. In full-layer mode they may coincide with
+                another target; each case restores before the next. This is one
+                bounded job, with no automatic retry/resume or free-running
+                continuation.
+              </p>
+            </section>
+            <div class="inference-options">
+              <label
+                >New tokens<input
+                  id="infer-limit"
+                  type="number"
+                  min="1"
+                  max="32"
+                  value="16"
+                  required /></label
+              ><label>Capture layer<select id="infer-layer"></select></label>
+            </div>
+            <label>Capture output<select id="infer-site"></select></label>
+            <div class="inference-options">
+              <label
+                >Optional observation<select id="infer-observation">
+                  <option value="none">None</option>
+                  <option value="attention">Selected attention head</option>
+                  <option value="logit_lens">Intermediate logit lens</option>
+                </select></label
+              ><label
+                >Query head<input
+                  id="infer-head-index"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value="0"
+              /></label>
+            </div>
+            <p class="small muted">
+              Attention fixes the capture output to attention; the logit lens
+              uses the post-block residual. One selected layer and one
+              observation only.
+            </p>
+            <div class="inference-options">
+              <label
+                >Start playback<select id="infer-mode">
+                  <option value="auto">Automatic</option>
+                  <option value="step">Step by step</option>
+                </select></label
+              ><label
+                >Playback steps/s<select id="infer-rate">
+                  <option>0.5</option>
+                  <option>1</option>
+                  <option selected>2</option>
+                  <option>4</option>
+                  <option>8</option>
+                </select></label
+              >
+            </div>
+            <button id="infer-start" type="submit" disabled>
+              Run comparison locally
+            </button>
+          </form>
+          <div class="inference-trace">
+            <p id="infer-status" role="status"></p>
+            <p id="infer-timing" class="small muted"></p>
+            <div class="comparison-outputs">
+              <div>
+                <h3 id="infer-left-title">Baseline</h3>
+                <pre id="infer-baseline-output">
+Baseline text will appear here.</pre>
+                <p id="infer-baseline-ids" class="small"></p>
+              </div>
+              <div>
+                <h3 id="infer-right-title">Edited</h3>
+                <pre id="infer-output"></pre>
+                <p id="infer-edited-ids" class="small"></p>
+              </div>
+            </div>
+            <p class="small muted">
+              Outputs belong to the last accepted run. Draft or prompt changes
+              require a new comparison.
+            </p>
+            <details>
+              <summary>Accepted run inputs (kept in this tab only)</summary>
+              <pre id="infer-run-inputs">No accepted run.</pre>
+            </details>
+            <p id="infer-score-context" class="small"></p>
+            <div class="score-scroll">
+              <table class="score-table">
+                <thead>
+                  <tr>
+                    <th>Token / ID</th>
+                    <th>Baseline logit</th>
+                    <th>Edited logit</th>
+                    <th>Δ edited − baseline</th>
+                  </tr>
+                </thead>
+                <tbody id="infer-scores"></tbody>
+              </table>
+            </div>
+            <div class="inference-controls">
+              <button id="infer-pause" type="button">Pause playback</button
+              ><button id="infer-step" type="button">Single step</button
+              ><button id="infer-replay" type="button">
+                Rewind recorded trace</button
+              ><button id="infer-cancel" type="button">Cancel compute</button
+              ><button id="infer-reset" type="button">Reset / clear</button>
+            </div>
+            <p id="infer-error" role="alert" hidden></p>
+          </div>
+          <div class="inference-activation">
+            <h3 id="infer-activation-title">
+              Actual activation · edited branch (baseline after edited EOS)
+            </h3>
+            <canvas
+              id="infer-activation"
+              width="512"
+              height="288"
+              aria-label="Selected activation vector, wrapped into display rows"
+            ></canvas>
+            <p id="infer-scale" class="small muted"></p>
+            <label
+              >Vector index<input
+                id="infer-index"
+                type="number"
+                min="0"
+                value="0" /></label
+            ><code id="infer-value"></code>
+          </div>
+        </div>
+        <p id="infer-alignment" class="small"></p>
+        <section id="infer-sweep-results-section" hidden>
+          <h3>Computed sweep cases · independent of playback</h3>
+          <p id="infer-sweep-progress" class="small"></p>
+          <div class="score-scroll">
+            <table class="score-table">
+              <thead>
+                <tr>
+                  <th>Case / prompt</th>
+                  <th>Role</th>
+                  <th>All-vocabulary RMS logit Δ</th>
+                  <th>Softmax TV</th>
+                  <th>Baseline-argmax logit Δ</th>
+                </tr>
+              </thead>
+              <tbody id="infer-sweep-results"></tbody>
+            </table>
+          </div>
+        </section>
+        <section
+          id="infer-observation-result"
+          class="observation-result"
+          hidden
+        >
+          <h3 id="infer-observation-title"></h3>
+          <p id="infer-observation-context" class="small"></p>
+          <p id="infer-observation-columns" class="small"></p>
+          <div class="score-scroll">
+            <table class="score-table">
+              <tbody id="infer-observation-values"></tbody>
+            </table>
+          </div>
+        </section>
+        <fieldset class="experiment-log">
+          <legend>Private experiment log · opt in</legend>
+          <label class="log-choice"
+            ><input id="infer-logging" type="checkbox" />Enable private
+            experiment logging for new accepted runs</label
+          >
+          <label class="log-choice"
+            ><input id="infer-include-prompt" type="checkbox" />Include prompt
+            text and prompt token IDs in new logs and downloads</label
+          >
+          <p class="small muted">
+            Generated outputs are private and may reveal prompt content even
+            when the prompt is omitted. Unchecking prompt inclusion redacts
+            prompts from downloads; existing in-memory records keep their
+            original consent. Logging starts in this tab's memory. Choose
+            browser persistence or a supported file journal below to save
+            terminal records automatically; otherwise reload/close loses unsaved
+            records. Maximum 8 runs / 1 MiB; overflow blocks new runs and
+            visibly holds one pending record until explicitly exported or
+            discarded. Failed/cancelled runs retain their status and available
+            trace.
+          </p>
+          <label class="log-choice"
+            ><input id="infer-persist" type="checkbox" />I consent to save
+            private logs in this browser profile, scoped to this tab (up to 8
+            runs / 1 MiB per archive, 8 archive slots)</label
+          >
+          <label class="log-choice"
+            ><input id="infer-durable-prompts" type="checkbox" />Also retain
+            explicitly captured prompts and prompt token IDs in browser storage
+            / the selected journal file</label
+          >
+          <p class="small muted">
+            Browser data stays on this origin in this profile; other people with
+            this profile may access it. It can be evicted or cleared, so export
+            a backup. Reload keeps this tab's saved slot but never restores it
+            or re-enables logging automatically. File journal writes require an
+            explicit file choice on a compatible browser; permission and write
+            failures pause new runs. File handles are forgotten on reload.
+            Private generated outputs remain sensitive even with prompts
+            omitted.
+          </p>
+          <div class="tool-actions">
+            <button id="infer-restore-log" type="button">
+              Restore this tab's saved log</button
+            ><button id="infer-delete-saved-log" type="button">
+              Delete this tab's saved log</button
+            ><button id="infer-choose-journal" type="button">
+              Choose file for automatic private log updates</button
+            ><button id="infer-detach-journal" type="button">
+              Stop file journal updates</button
+            ><button id="infer-save-durable" type="button">
+              Save now / retry persistence
+            </button>
+          </div>
+          <div class="tool-actions">
+            <button id="infer-find-archives" type="button">
+              Find saved private archives on this origin</button
+            ><label
+              >Saved archive<select
+                id="infer-archive-select"
+                aria-label="Saved private archive"
+              ></select></label
+            ><button id="infer-restore-archive" type="button">
+              Restore selected archive into this tab</button
+            ><button id="infer-delete-archive" type="button">
+              Delete selected saved archive
+            </button>
+          </div>
+          <p id="infer-durable-status" class="small" role="status"></p>
+          <label
+            >Import an archived experiment / session log (up to 1 MiB)<input
+              id="infer-import-file"
+              type="file"
+              accept=".json,application/json"
+          /></label>
+          <label class="log-choice"
+            ><input id="infer-import-prompts" type="checkbox" />Retain private
+            prompt fields while importing / restoring (otherwise redact
+            them)</label
+          >
+          <button id="infer-import-log" type="button">
+            Import into this tab's log</button
+          ><button id="infer-cancel-import" type="button" disabled>
+            Cancel archive import / restore
+          </button>
+          <p id="infer-import-status" class="small" role="status">
+            Imported records are unverified local archives. Imported data never
+            starts a model run, restores a worker session or changes the run
+            inputs. Existing records are retained; overflow refuses the import.
+          </p>
+          <p id="infer-log-status" class="small" role="status"></p>
+          <button id="infer-export-run" type="button">
+            Download current / pending experiment JSON</button
+          ><button id="infer-export-log" type="button">
+            Download session log JSON</button
+          ><button id="infer-clear-log" type="button">Clear session log</button>
+        </fieldset>
       </div>
     </details>
-    <section id="workspace" class="workspace" aria-label="Synchronized tensor views" tabindex="-1">
-      <div class="workspace-heading"><div><p class="eyebrow">SAME VALUES · SAME COORDINATES</p><h2 id="tensor-name">Choose a tensor</h2><p id="tensor-shape" class="small muted">Native rows ↓ · columns →</p><p id="tensor-description" class="tensor-description"></p></div>
-        <div class="view-actions" role="group" aria-label="Synchronized view controls"><button id="fit" disabled>Fit tensor</button><button id="zoom-out" disabled aria-label="Zoom both views out">−</button><button id="zoom-in" disabled aria-label="Zoom both views in">+</button><button id="scalar-zoom" disabled>Screen 1:1</button></div>
-      </div>
-      <div id="slice-picker" class="slice-picker" hidden></div>
-      <div class="explore-readout"><div class="overview-wrap"><span class="small">Selected 2D view · A</span><div id="tensor-overview" class="tensor-overview" role="img" aria-label="Selected 2D view overview; highlighted box is the current viewport"><img id="overview-image" alt="" hidden><div id="overview-viewport" hidden></div></div><span id="overview-status" class="small muted">Waiting for a tensor</span></div><div class="hover-wrap"><strong>Under your pointer</strong><p id="hover-readout" role="status" aria-live="polite">Hover over either image to read one original value.</p><p class="small"><span id="pinned-readout">No pinned value yet.</span> <a href="#scalar-inspector">Selection details</a></p><p class="small muted">Raw source value, not the pooled pixel. Click to keep a selection. Keyboard: arrows inspect, Shift + arrows pan, + / − zoom, Home fits.</p></div></div>
-      <p id="viewport-bounds" class="viewport-bounds">Native viewport bounds appear when the view is ready.</p>
-      <div class="mobile-comparison-switch" role="group" aria-label="Compare color rules at the same coordinates"><button id="show-left" type="button" aria-pressed="true">A · left rule</button><button id="show-right" type="button" aria-pressed="false">B · right rule</button><span>Same weights and viewport · switch to compare</span></div>
-      <div class="comparison" id="comparison" data-mobile-side="left" aria-busy="true">
-        <article class="panel" id="left-panel">
-          <div class="panel-heading"><span class="panel-letter">A</span><label for="left-rule">Left color rule<select id="left-rule" disabled></select></label></div>
-          <div id="left-canvas" class="canvas-host" role="region" aria-label="Left tensor image. Arrow keys inspect neighboring values; Shift plus arrows pan; plus or minus zoom; Home fits. Drag to pan, pinch or scroll to zoom, tap to inspect." tabindex="0"><div class="canvas-message">Loading…</div></div>
-          <div class="resolution-row"><span id="left-resolution">Awaiting image</span><span id="left-magnification">—</span></div>
-          <div class="legend" aria-label="Left exact numeric legend"><div id="left-gradient" class="gradient"><i class="zero-marker"></i></div><div class="legend-values"><code id="left-min">—</code><span id="left-mid">0</span><code id="left-max">—</code></div><details class="scale-details"><summary>Scale &amp; formula details</summary><p id="left-scope" class="legend-scope">—</p><p id="left-parameter" class="small"></p><code id="left-formula" class="formula">Formula pending</code><p id="left-units" class="small muted"></p></details></div>
-        </article>
-        <article class="panel" id="right-panel">
-          <div class="panel-heading"><span class="panel-letter">B</span><label for="right-rule">Right color rule<select id="right-rule" disabled></select></label></div>
-          <div id="right-canvas" class="canvas-host" role="region" aria-label="Right tensor image. Arrow keys inspect neighboring values; Shift plus arrows pan; plus or minus zoom; Home fits. Drag to pan, pinch or scroll to zoom, tap to inspect." tabindex="0"><div class="canvas-message">Loading…</div></div>
-          <div class="resolution-row"><span id="right-resolution">Awaiting image</span><span id="right-magnification">—</span></div>
-          <div class="legend" aria-label="Right exact numeric legend"><div id="right-gradient" class="gradient"><i class="zero-marker"></i></div><div class="legend-values"><code id="right-min">—</code><span id="right-mid">0</span><code id="right-max">—</code></div><details class="scale-details"><summary>Scale &amp; formula details</summary><p id="right-scope" class="legend-scope">—</p><p id="right-parameter" class="small"></p><code id="right-formula" class="formula">Formula pending</code><p id="right-units" class="small muted"></p></details></div>
-        </article>
-      </div>
-      <div class="workspace-foot"><p id="status" role="status" aria-live="polite">Loading model metadata…</p><span class="sync-label"><i></i>Pan and zoom linked</span></div>
-      <details class="workspace-tools" aria-label="Bookmarks, private notes and native region export"><summary>Save, annotate &amp; export a region</summary>
-        <p id="read-retry" role="status" aria-live="polite"></p>
-        <div class="tool-actions"><button id="bookmark-save" type="button">Bookmark current view</button><button id="bookmark-reset" type="button">Reset view link</button></div>
-        <p id="bookmark-status" class="small" role="status">View links contain only source identity, tensor, native region, zoom and rules.</p>
-        <fieldset id="region-controls" disabled><legend>Native region · inclusive bounds</legend>
-          <div class="region-inputs"><label>First row<input id="region-r0" type="number" min="0" step="1" value="0"></label><label>First column<input id="region-c0" type="number" min="0" step="1" value="0"></label><label>Last row<input id="region-r1" type="number" min="0" step="1" value="0"></label><label>Last column<input id="region-c1" type="number" min="0" step="1" value="0"></label></div>
-          <div class="tool-actions"><button id="region-use-cell" type="button">Use inspected cell</button><button id="region-focus" type="button">Focus region</button><label>Format<select id="region-format"><option value="csv">Raw CSV</option><option value="npy">Numeric NumPy + metadata</option></select></label><button id="region-export" type="button">Export original values</button><button id="region-cancel" type="button" disabled>Cancel export</button></div>
-          <p class="small muted">At most 256 cells / 256 KiB per file. CSV retains exact original decimals and BF16/F16/F32 bytes. NumPy downloads a numeric .npy and a .metadata.json sidecar with source identity, native region, slice and original bytes; keep both files. BF16 widens exactly to float32; F16/F32 retain storage bits. No color transformation or pickle.</p>
-          <p id="region-status" class="small" role="status"></p>
-        </fieldset>
-        <fieldset id="note-controls" disabled><legend>Private local notes</legend>
-          <p id="note-scope" class="small"></p><p class="small muted">Stored only in this browser profile on this origin, scoped to this exact source revision and tensor. Not sent to the server or included in view links. Export a backup before clearing browser storage. Maximum 100 notes per tensor, 500 characters each.</p>
-          <label>Pin note to<select id="note-kind"><option value="region">Selected region</option><option value="row">First selected row</option><option value="column">First selected column</option></select></label>
-          <label>Note text<textarea id="note-text" rows="3" maxlength="500"></textarea></label>
-          <div class="tool-actions"><button id="note-new" type="button">New note</button><button id="note-save" type="button">Save note</button><button id="note-export" type="button">Export notes JSON</button></div>
-          <p id="note-status" class="small" role="status"></p><div id="note-list"></div>
-        </fieldset>
-      </details>
-      <p class="reading-note">Screen 1:1 sets one CSS pixel per source value; it does not force the native scalar level. The numerical badge shows actual pooling. The inspector reads one original scalar.</p>
-      <p class="reading-note">Signed palette: blue for negative, red for positive; zero maps to neutral. Magnitude palettes run from light to dark purple. Tensor magnitude uses the exact maximum |weight|; tensor typical magnitude uses the median-nonzero asinh scale and clips at Q99 (zero-Q99 fallback 1), as labeled in its legend. Finite colors do not prove an exact zero. Both panels retain the same original weights and placement.</p>
-      <p id="global-scale-note" class="reading-note"></p>
-    </section>
-    <aside id="scalar-inspector" class="inspector" tabindex="-1" aria-label="Exact original scalar inspector">
-      <p class="eyebrow">ONE ORIGINAL ADDRESS</p><h2>Exact scalar</h2><p class="small muted">Click either image to keep a selection, or type a row and column. All indices start at 0; a vector has one display row.</p>
-      <form id="inspect-form"><div class="address-inputs"><label for="row">Row<input id="row" type="number" inputmode="numeric" min="0" value="0" step="1" required disabled></label><label for="col">Column<input id="col" type="number" inputmode="numeric" min="0" value="0" step="1" required disabled></label></div><button id="inspect-submit" type="submit" disabled>Inspect original address</button></form>
-      <div id="inspection" class="inspection" aria-live="polite"><p class="empty-state">Tap either image or enter an address.</p></div><div class="edit-next"><p id="edit-readiness" class="small">Checking edit availability…</p><button id="prepare-edit" type="button" disabled>Review edit target</button></div>
-      <details class="guide"><summary>How to read this view</summary><p>Each full-resolution image cell addresses one stored source value. A lower pyramid level averages the selected transformed field over aligned source blocks. Transformation is applied before averaging; opposite signs can cancel in signed rules. Magnitude averages absolute weights, so signs never cancel. Edge blocks contain only actual addresses.</p><p>Numerical pooling and screen magnification are separate. Fit-to-screen can hide individual cells even when scalar-level tiles are loaded.</p><p>Global rules use the completed checkpoint calibration. Tensor rules enhance local contrast; the same color in another tensor can represent a different number. Exact bounds and formulas above come from the backend.</p><p>Vectors keep their native shape: one row, with no wrapping or padded weight cells. Zoom in or enter an address when a fitted vector looks thin.</p><p>Patterns in weights or colors alone do not establish learned concepts, circuits, or functional importance.</p><p id="render-semantics"></p></details>
-    </aside>
-  </main>
-  <section id="profile-panel" class="profile-panel" hidden aria-label="Whole-slice strengths"></section>
-  <details id="inference-panel" class="inference" tabindex="-1" aria-label="Experimental live inference" hidden><summary>Experiment with this model <span class="small muted">Optional · baseline and edited inference</span></summary><div class="experiment-body">
-    <div class="inference-heading"><div><p class="eyebrow">EXPERIMENTAL / IN-MEMORY EDITS</p><h2>Compare baseline and edited inference.</h2><p id="infer-model" class="small muted">SmolLM2-135M · optional local CPU inference</p></div><span class="quiet-pill">Disk weights stay unchanged</span></div>
-    <p class="small"><button id="infer-check" type="button">Check readiness</button> One local worker; no waiting queue. If busy, wait and check again. Load percentage and finish-time estimates are unavailable.</p>
-    <p class="small muted">Prompts stay on localhost. Up to 128 prompt tokens and 32 new tokens. Generation runs independently of playback; pausing playback does not pause computation. Cancel stops computation. The weight views below never change.</p>
-    <p id="infer-target-summary" class="target-summary" role="status"></p>
-    <div class="inference-grid">
-      <form id="infer-form">
-        <label>Experiment<select id="infer-task"><option value="generation">Baseline / edited generation</option><option value="prompt_pair">Two prompts · selected activation differences</option><option value="sweep">Bounded head ablation / query intervention</option></select></label>
-        <fieldset class="edit-draft"><legend>In-memory edit draft</legend>
-          <p id="infer-selection" class="small">Inspect a native 2-D weight above to select an edit target.</p>
-          <div class="inference-options"><label>Target<select id="infer-kind"><option value="element">Inspected element</option><option value="rows">Row range</option><option value="columns">Column range</option></select></label><label>Operation<select id="infer-operation"><option value="zero">Zero</option><option value="scale">Scale</option></select></label></div>
-          <div class="inference-options"><label>Start (inclusive)<input id="infer-range-start" type="number" min="0" step="1" value="0"></label><label>End (exclusive)<input id="infer-range-end" type="number" min="1" step="1" value="1"></label><label>Scale<input id="infer-factor" type="number" min="-100" max="100" step="any" value="0.5"></label></div>
-          <p id="infer-range-preview" class="small" role="status"></p>
-          <button id="infer-add" type="button" disabled>Add inspected edit</button><button id="infer-head" type="button" disabled>Zero inspected head block</button>
-          <p class="small muted">Native ranges are [start,end), end exclusive. At most 8 edits, applied in list order. Overlaps compose. Empty list compares two identical runs.</p>
-          <ol id="infer-edits"></ol><button id="infer-clear-edits" type="button">Clear draft edits</button>
-        </fieldset>
-        <label for="infer-prompt">Prompt · base language model, no chat template</label><textarea id="infer-prompt" rows="3" maxlength="4096" required>The capital of France is</textarea>
-        <section id="infer-pair-controls" hidden><label>Prompt B<textarea id="infer-prompt-b" rows="3" maxlength="2048">The capital of Italy is</textarea></label><button id="infer-pair-preview" type="button">Preview both token lists</button><p id="infer-preview-status" class="small"></p><div class="comparison-outputs"><pre id="infer-preview-a"></pre><pre id="infer-preview-b"></pre></div><label>Explicit zero-based token position pairs · A,B, one pair per line<textarea id="infer-pairs" rows="3" maxlength="256"></textarea></label><p class="small muted">Two uncached prefills, one selected layer/output, up to 8 pairs. No generation, edits or extra observation. Preview and comparison share the unchanged worker ownership and resource limits.</p></section>
-        <section id="infer-sweep-controls" hidden><label>Targets · 1–2 lines, or layer L for all output heads<textarea id="infer-sweep-targets" rows="3" maxlength="256">head 0 0</textarea></label><p id="infer-sweep-help" class="small">Awaiting verified architecture. Use layer L for all output heads in one layer.</p><button id="infer-sweep-use-inspected" type="button">Use inspected projection head</button><div class="inference-options"><label>Operation<select id="infer-sweep-operation"><option value="zero">Zero</option><option value="scale">Scale</option></select></label><label>Scale<input id="infer-sweep-scale" type="number" min="-100" max="100" step="any" value="0.5"></label><label>Seed<input id="infer-sweep-seed" type="number" min="0" max="4294967295" step="1" value="0"></label></div><label class="log-choice"><input id="infer-sweep-second" type="checkbox">Include a second explicit prompt</label><textarea id="infer-sweep-prompt-b" rows="3" maxlength="2048">The capital of Italy is</textarea><button id="infer-sweep-preview" type="button">Review expanded plan and matched controls</button><p id="infer-sweep-plan-status" class="small"></p><pre id="infer-sweep-plan"></pre><p class="small muted">Output-head ablation zeros an o_proj column block. Query interventions edit q_proj rows. Matched controls preserve geometry and operation and are comparison interventions, not assumed null effects. In full-layer mode they may coincide with another target; each case restores before the next. This is one bounded job, with no automatic retry/resume or free-running continuation.</p></section>
-        <div class="inference-options"><label>New tokens<input id="infer-limit" type="number" min="1" max="32" value="16" required></label><label>Capture layer<select id="infer-layer"></select></label></div>
-        <label>Capture output<select id="infer-site"></select></label>
-        <div class="inference-options"><label>Optional observation<select id="infer-observation"><option value="none">None</option><option value="attention">Selected attention head</option><option value="logit_lens">Intermediate logit lens</option></select></label><label>Query head<input id="infer-head-index" type="number" min="0" step="1" value="0"></label></div>
-        <p class="small muted">Attention fixes the capture output to attention; the logit lens uses the post-block residual. One selected layer and one observation only.</p>
-        <div class="inference-options"><label>Start playback<select id="infer-mode"><option value="auto">Automatic</option><option value="step">Step by step</option></select></label><label>Playback steps/s<select id="infer-rate"><option>0.5</option><option>1</option><option selected>2</option><option>4</option><option>8</option></select></label></div>
-        <button id="infer-start" type="submit" disabled>Run comparison locally</button>
-      </form>
-      <div class="inference-trace"><p id="infer-status" role="status"></p><p id="infer-timing" class="small muted"></p><div class="comparison-outputs"><div><h3 id="infer-left-title">Baseline</h3><pre id="infer-baseline-output">Baseline text will appear here.</pre><p id="infer-baseline-ids" class="small"></p></div><div><h3 id="infer-right-title">Edited</h3><pre id="infer-output"></pre><p id="infer-edited-ids" class="small"></p></div></div><p class="small muted">Outputs belong to the last accepted run. Draft or prompt changes require a new comparison.</p><details><summary>Accepted run inputs (kept in this tab only)</summary><pre id="infer-run-inputs">No accepted run.</pre></details><p id="infer-score-context" class="small"></p><div class="score-scroll"><table class="score-table"><thead><tr><th>Token / ID</th><th>Baseline logit</th><th>Edited logit</th><th>Δ edited − baseline</th></tr></thead><tbody id="infer-scores"></tbody></table></div><div class="inference-controls"><button id="infer-pause" type="button">Pause playback</button><button id="infer-step" type="button">Single step</button><button id="infer-replay" type="button">Rewind recorded trace</button><button id="infer-cancel" type="button">Cancel compute</button><button id="infer-reset" type="button">Reset / clear</button></div><p id="infer-error" role="alert" hidden></p></div>
-      <div class="inference-activation"><h3 id="infer-activation-title">Actual activation · edited branch (baseline after edited EOS)</h3><canvas id="infer-activation" width="512" height="288" aria-label="Selected activation vector, wrapped into display rows"></canvas><p id="infer-scale" class="small muted"></p><label>Vector index<input id="infer-index" type="number" min="0"  value="0"></label><code id="infer-value"></code></div>
-    </div><p id="infer-alignment" class="small"></p>
-    <section id="infer-sweep-results-section" hidden><h3>Computed sweep cases · independent of playback</h3><p id="infer-sweep-progress" class="small"></p><div class="score-scroll"><table class="score-table"><thead><tr><th>Case / prompt</th><th>Role</th><th>All-vocabulary RMS logit Δ</th><th>Softmax TV</th><th>Baseline-argmax logit Δ</th></tr></thead><tbody id="infer-sweep-results"></tbody></table></div></section>
-    <section id="infer-observation-result" class="observation-result" hidden><h3 id="infer-observation-title"></h3><p id="infer-observation-context" class="small"></p><p id="infer-observation-columns" class="small"></p><div class="score-scroll"><table class="score-table"><tbody id="infer-observation-values"></tbody></table></div></section>
-    <fieldset class="experiment-log"><legend>Private experiment log · opt in</legend>
-      <label class="log-choice"><input id="infer-logging" type="checkbox">Enable private experiment logging for new accepted runs</label>
-      <label class="log-choice"><input id="infer-include-prompt" type="checkbox">Include prompt text and prompt token IDs in new logs and downloads</label>
-      <p class="small muted">Generated outputs are private and may reveal prompt content even when the prompt is omitted. Unchecking prompt inclusion redacts prompts from downloads; existing in-memory records keep their original consent. Logging starts in this tab's memory. Choose browser persistence or a supported file journal below to save terminal records automatically; otherwise reload/close loses unsaved records. Maximum 8 runs / 1 MiB; overflow blocks new runs and visibly holds one pending record until explicitly exported or discarded. Failed/cancelled runs retain their status and available trace.</p>
-      <label class="log-choice"><input id="infer-persist" type="checkbox">I consent to save private logs in this browser profile, scoped to this tab (up to 8 runs / 1 MiB per archive, 8 archive slots)</label>
-      <label class="log-choice"><input id="infer-durable-prompts" type="checkbox">Also retain explicitly captured prompts and prompt token IDs in browser storage / the selected journal file</label>
-      <p class="small muted">Browser data stays on this origin in this profile; other people with this profile may access it. It can be evicted or cleared, so export a backup. Reload keeps this tab's saved slot but never restores it or re-enables logging automatically. File journal writes require an explicit file choice on a compatible browser; permission and write failures pause new runs. File handles are forgotten on reload. Private generated outputs remain sensitive even with prompts omitted.</p>
-      <div class="tool-actions"><button id="infer-restore-log" type="button">Restore this tab's saved log</button><button id="infer-delete-saved-log" type="button">Delete this tab's saved log</button><button id="infer-choose-journal" type="button">Choose file for automatic private log updates</button><button id="infer-detach-journal" type="button">Stop file journal updates</button><button id="infer-save-durable" type="button">Save now / retry persistence</button></div>
-      <div class="tool-actions"><button id="infer-find-archives" type="button">Find saved private archives on this origin</button><label>Saved archive<select id="infer-archive-select" aria-label="Saved private archive"></select></label><button id="infer-restore-archive" type="button">Restore selected archive into this tab</button><button id="infer-delete-archive" type="button">Delete selected saved archive</button></div>
-      <p id="infer-durable-status" class="small" role="status"></p>
-      <label>Import an archived experiment / session log (up to 1 MiB)<input id="infer-import-file" type="file" accept=".json,application/json"></label>
-      <label class="log-choice"><input id="infer-import-prompts" type="checkbox">Retain private prompt fields while importing / restoring (otherwise redact them)</label>
-      <button id="infer-import-log" type="button">Import into this tab's log</button><button id="infer-cancel-import" type="button" disabled>Cancel archive import / restore</button><p id="infer-import-status" class="small" role="status">Imported records are unverified local archives. Imported data never starts a model run, restores a worker session or changes the run inputs. Existing records are retained; overflow refuses the import.</p>
-      <p id="infer-log-status" class="small" role="status"></p>
-      <button id="infer-export-run" type="button">Download current / pending experiment JSON</button><button id="infer-export-log" type="button">Download session log JSON</button><button id="infer-clear-log" type="button">Clear session log</button>
-    </fieldset>
-  </div></details>
-  <footer><span>BF16 / F16 / F32 source → pointwise color → numeric block means</span><span id="first-paint">Waiting for first numeric tile</span><span id="api-note">API v1 + progressive calibration · Rust</span></footer>
-</body>
+    <footer>
+      <span
+        >BF16 / F16 / F32 source → pointwise color → numeric block means</span
+      ><span id="first-paint">Waiting for first numeric tile</span
+      ><span id="api-note">API v1 + progressive calibration · Rust</span>
+    </footer>
+  </body>
 </html>

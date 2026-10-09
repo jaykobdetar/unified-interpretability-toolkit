@@ -1,8 +1,8 @@
-"use strict";
+import shared from "./viewer-context.js";
 // Derived from validated reference frontend. Progressive extension; frozen API SHA256: 665f2e600fd22676f757f4ee59f3603d92bd3811a4444551bab062ffe057ffd7
 const $ = (id) => document.getElementById(id);
 const SIDES = ["left", "right"];
-const RULE_IDS = [
+const RULE_IDS = /* rule-ids */ [
   "global_linear",
   "global_asinh",
   "tensor_linear",
@@ -11,7 +11,11 @@ const RULE_IDS = [
   "tensor_magnitude_asinh",
   "tensor_robust99",
   "tensor_signed_percentile",
-];
+]; /* end-rule-ids */
+const MAGNITUDE_RULE_IDS = /* magnitude-rule-ids */ [
+  "tensor_magnitude",
+  "tensor_magnitude_asinh",
+]; /* end-magnitude-rule-ids */
 const state = {
   model: null,
   tensor: null,
@@ -63,12 +67,12 @@ function assert(condition, message) {
   if (!condition) throw new Error("API contract: " + message);
 }
 async function json(url, signal) {
-  if (globalThis.AtlasTools)
-    return AtlasTools.readJSON(url, {
+  if (shared.AtlasTools)
+    return shared.AtlasTools.readJSON(url, {
       signal,
-      onState: (event) => globalThis.atlasWorkspace?.retry(event, url, signal),
+      onState: (event) => shared.atlasWorkspace?.retry(event, url, signal),
     });
-  const bound = globalThis.AtlasHost?.bindRead(url);
+  const bound = shared.AtlasHost?.bindRead(url);
   const response = await fetch(bound?.url || url, {
     signal,
     cache: "no-store",
@@ -90,7 +94,7 @@ async function json(url, signal) {
   bound?.check(data);
   return data;
 }
-const apiURL = (url) => (globalThis.AtlasHost ? AtlasHost.url(url) : url);
+const apiURL = (url) => (shared.AtlasHost ? shared.AtlasHost.url(url) : url);
 function settings() {
   return {
     tensor: state.tensor?.id,
@@ -156,10 +160,10 @@ function validateTensor(t) {
 }
 function validateView(data, s) {
   validateTensor(data.tensor);
-  if (globalThis.AtlasTools)
-    AtlasTools.requireBinding(
+  if (shared.AtlasTools)
+    shared.AtlasTools.requireBinding(
       data.source_binding,
-      AtlasTools.sourceBinding(state.model, state.tensor),
+      shared.AtlasTools.sourceBinding(state.model, state.tensor),
     );
   assert(data.tensor.id === s.tensor, "view returned a different tensor.");
   assert(
@@ -192,7 +196,7 @@ function validateView(data, s) {
         typeof l.units === "string",
       "formula, scope and units required.",
     );
-    if (["tensor_magnitude", "tensor_magnitude_asinh"].includes(s[side]))
+    if (MAGNITUDE_RULE_IDS.includes(s[side]))
       assert(
         l.min === 0 && l.palette === "sequential-purple-v1",
         "unsigned magnitude bounds and palette required.",
@@ -214,8 +218,8 @@ function setInteraction(enabled) {
     $(id).disabled = !enabled;
 }
 function publishInferenceSelection(selection) {
-  window.atlasInferenceSelection = selection;
-  window.atlasInferenceSelectionChanged?.(selection);
+  shared.atlasInferenceSelection = selection;
+  shared.atlasInferenceSelectionChanged?.(selection);
 }
 function clearInspection(keep = false) {
   publishInferenceSelection(null);
@@ -257,7 +261,7 @@ function deactivate(keep = false) {
   clearOverview();
   state.pollController?.abort();
   state.viewFailed = false;
-  globalThis.atlasWorkspace?.changed("deactivate");
+  shared.atlasWorkspace?.changed("deactivate");
   state.viewEpoch++;
   state.viewController?.abort();
   state.viewController = null;
@@ -510,7 +514,7 @@ function refuseUnsupportedView() {
     return false;
   deactivate();
   allowRawInspection();
-  globalThis.atlasWorkspace?.rawReady();
+  shared.atlasWorkspace?.rawReady();
   describeTensor();
   text("tensor-name", state.tensor.name);
   text("tensor-shape", `${state.tensor.shape.join(" × ")} native shape · F32`);
@@ -528,7 +532,7 @@ function refuseUnsupportedView() {
   }
   return true;
 }
-function populateModel(model, prior) {
+function validateModelCatalog(model) {
   assert(
     Array.isArray(model.catalog) && model.catalog.length > 0,
     "nonempty full tensor catalog required.",
@@ -548,8 +552,9 @@ function populateModel(model, prior) {
     rules.length >= 7 && new Set(rules.map((r) => r.id)).size === rules.length,
     "all supported pointwise rules required.",
   );
-  state.model = model;
-  drawExamples();
+  return rules;
+}
+function drawModelSummary(model) {
   text("model-name", model.name);
   document.title = `Unified Interpretability Toolkit · ${model.name}`;
   text(
@@ -585,6 +590,8 @@ function populateModel(model, prior) {
             : "") +
           " This can make global matrix colors pale. Tensor asinh uses separately labeled calibration to show local detail.",
   );
+}
+function populateModelFilters(model, rules, prior) {
   const layers = [
     ...new Set(model.catalog.map(layerKey).filter((v) => v !== "shared")),
   ].sort((a, b) => Number(a) - Number(b));
@@ -616,6 +623,8 @@ function populateModel(model, prior) {
       $("" + side + "-rule").value =
         side === "left" ? "tensor_linear" : "tensor_asinh";
   }
+}
+function selectModelTensor(model, prior) {
   const candidates = model.catalog
     .filter((t) => t.available !== false && t.shape.length <= 2)
     .sort(
@@ -632,18 +641,26 @@ function populateModel(model, prior) {
       ...state.tensor,
       slice: prior.slice ? prior.slice.split(",").map(Number) : [],
     };
+}
+function populateModel(model, prior) {
+  const rules = validateModelCatalog(model);
+  state.model = model;
+  drawExamples();
+  drawModelSummary(model);
+  populateModelFilters(model, rules, prior);
+  selectModelTensor(model, prior);
   updateRuleAvailability();
   drawCatalog();
-  globalThis.atlasWorkspace?.model(model);
+  shared.atlasWorkspace?.model(model);
 }
 async function refreshModel() {
   try {
-    await globalThis.AtlasHost?.prepareProfileChange?.();
+    await shared.AtlasHost?.prepareProfileChange?.();
   } catch (e) {
     showError(e.message);
     return;
   }
-  globalThis.AtlasHost?.setProfileSelection?.(null);
+  shared.AtlasHost?.setProfileSelection?.(null);
   if (typeof window.CustomEvent === "function")
     window.dispatchEvent(new CustomEvent("atlas:tensor", { detail: null }));
   const prior = state.tensor ? settings() : null,
@@ -686,15 +703,15 @@ async function selectTensor(id) {
   if (!tensor) return;
   const selectedModel = state.model;
   try {
-    await globalThis.AtlasHost?.prepareProfileChange?.();
+    await shared.AtlasHost?.prepareProfileChange?.();
   } catch (e) {
     showError(e.message);
     return;
   }
   if (state.model !== selectedModel) return;
-  globalThis.AtlasHost?.setProfileSelection?.(null);
+  shared.AtlasHost?.setProfileSelection?.(null);
   state.tensor = tensor;
-  globalThis.atlasWorkspace?.changed("tensor");
+  shared.atlasWorkspace?.changed("tensor");
   deactivate();
   drawCatalog();
   const epoch = state.modelEpoch,
@@ -753,7 +770,19 @@ function createViewer(side, view, s, id, signal) {
     stage = node("div", "canvas-stage");
   stage.id = `${side}-stage-${id}`;
   host.replaceChildren(stage);
-  const viewer = OpenSeadragon({
+  const viewer = createNativeViewer(stage);
+  state.viewers[side] = viewer;
+  viewer.setMouseNavEnabled(false);
+  const valid = () => id === state.viewEpoch && state.viewers[side] === viewer;
+  const opened = waitForViewerOpen(viewer, signal, valid);
+  bindViewerDrawing(viewer, side, valid);
+  bindViewerInspection(viewer, host, view, signal, valid);
+  viewer.open(tileSource(view.tensor, s[side], view.tile_bindings?.[side]));
+  return { viewer, stage, opened };
+}
+
+function createNativeViewer(stage) {
+  return OpenSeadragon({
     element: stage,
     drawer: "canvas",
     showNavigationControl: false,
@@ -782,10 +811,10 @@ function createViewer(side, view, s, id, signal) {
       pinchToZoom: true,
     },
   });
-  state.viewers[side] = viewer;
-  viewer.setMouseNavEnabled(false);
-  const valid = () => id === state.viewEpoch && state.viewers[side] === viewer;
-  const opened = new Promise((resolve, reject) => {
+}
+
+function waitForViewerOpen(viewer, signal, valid) {
+  return new Promise((resolve, reject) => {
     const abort = () => reject(new DOMException("Cancelled", "AbortError"));
     signal.addEventListener("abort", abort, { once: true });
     viewer.addHandler("open", () => {
@@ -801,6 +830,9 @@ function createViewer(side, view, s, id, signal) {
       reject(new Error(event.message || "Tensor image could not open."));
     });
   });
+}
+
+function bindViewerDrawing(viewer, side, valid) {
   viewer.addHandler("tile-drawn", () => {
     if (valid() && !document.body.dataset.firstTileMs) {
       document.body.dataset.firstTileMs = String(
@@ -817,7 +849,7 @@ function createViewer(side, view, s, id, signal) {
       cancelHover();
       synchronize(side);
       updateOverview();
-      globalThis.atlasWorkspace?.changed("viewport");
+      shared.atlasWorkspace?.changed("viewport");
     }
     scheduleResolution();
   });
@@ -839,6 +871,9 @@ function createViewer(side, view, s, id, signal) {
     );
     status("Tile request failed · requested view may be incomplete.");
   });
+}
+
+function bindViewerInspection(viewer, host, view, signal, valid) {
   viewer.addHandler("canvas-click", (event) => {
     if (
       !valid() ||
@@ -890,30 +925,28 @@ function createViewer(side, view, s, id, signal) {
     { signal },
   );
   host.addEventListener("pointerleave", () => cancelHover(), { signal });
-  viewer.open(tileSource(view.tensor, s[side], view.tile_bindings?.[side]));
-  return { viewer, stage, opened };
 }
+
+function legendParameter(l, magnitude) {
+  return ["tensor_robust99", "tensor_magnitude_asinh"].includes(l.id)
+    ? `${l.id === "tensor_magnitude_asinh" ? "Median nonzero |x| s = " + exact(l.s) + "; " : ""}Q99 = ${exact(l.q99)}; effective divisor D = ${exact(l.effective_divisor)}${l.zero_quantile_fallback ? " (Q99=0 fallback)" : ""}. ${number(l.clipped_count)} original values clipped (${(100 * l.clipped_fraction).toFixed(3)}%).`
+    : l.id === "tensor_signed_percentile"
+      ? "Signed absolute-magnitude mid-CDF; ties share ranks; zeros map to zero."
+      : magnitude
+        ? `Unsigned magnitude; exact tensor M = ${exact(l.max)}`
+        : l.s === null || l.s === undefined
+          ? "Linear mapping; raw bounds shown."
+          : `Exact asinh scale s = ${exact(l.s)}`;
+}
+
 function drawLegend(side, l) {
   text(side + "-min", exact(l.min));
   text(side + "-max", exact(l.max));
   text(side + "-scope", `${l.title} · ${l.scope}`);
-  const magnitude = ["tensor_magnitude", "tensor_magnitude_asinh"].includes(
-    l.id,
-  );
+  const magnitude = MAGNITUDE_RULE_IDS.includes(l.id);
   $(side + "-gradient").classList.toggle("magnitude", magnitude);
   text(side + "-mid", magnitude ? "" : "0");
-  text(
-    side + "-parameter",
-    ["tensor_robust99", "tensor_magnitude_asinh"].includes(l.id)
-      ? `${l.id === "tensor_magnitude_asinh" ? "Median nonzero |x| s = " + exact(l.s) + "; " : ""}Q99 = ${exact(l.q99)}; effective divisor D = ${exact(l.effective_divisor)}${l.zero_quantile_fallback ? " (Q99=0 fallback)" : ""}. ${number(l.clipped_count)} original values clipped (${(100 * l.clipped_fraction).toFixed(3)}%).`
-      : l.id === "tensor_signed_percentile"
-        ? "Signed absolute-magnitude mid-CDF; ties share ranks; zeros map to zero."
-        : magnitude
-          ? `Unsigned magnitude; exact tensor M = ${exact(l.max)}`
-          : l.s === null || l.s === undefined
-            ? "Linear mapping; raw bounds shown."
-            : `Exact asinh scale s = ${exact(l.s)}`,
-  );
+  text(side + "-parameter", legendParameter(l, magnitude));
   text(side + "-formula", l.formula);
   text(
     side + "-units",
@@ -948,6 +981,51 @@ async function loadView() {
   if (refuseUnavailableTensor()) return;
   if (refuseUnsupportedView()) return;
   if (!state.model || !state.tensor?.calibration_complete) return;
+  rememberViewContext();
+  // Carry the last active viewport through consecutive rule changes, even while
+  // an earlier recoloring request is still opening and state.current is null.
+  const remembered = state.recolor,
+    prior = remembered?.bounds;
+  deactivate(!!remembered);
+  const id = state.viewEpoch,
+    restoreInspectionEpoch = state.inspectEpoch;
+  state.viewController = new AbortController();
+  const signal = state.viewController.signal,
+    s = settings();
+  const started = performance.now();
+  drawViewLoading();
+  try {
+    assert(
+      RULE_IDS.includes(s.left) && RULE_IDS.includes(s.right),
+      "unsupported color rule.",
+    );
+    const view = await json("/api/view?" + new URLSearchParams(s), signal);
+    if (id !== state.viewEpoch) return;
+    validateView(view, s);
+    const pair = SIDES.map((side) => createViewer(side, view, s, id, signal));
+    await Promise.all(pair.map((p) => p.opened));
+    if (
+      id !== state.viewEpoch ||
+      signal.aborted ||
+      !sameSettings(s, settings())
+    )
+      return;
+    activateLoadedView(view, s, pair, prior);
+    // An explicit inspection begun after recolor invalidation owns the pin,
+    // whether its source read has completed or is still pending.
+    if (remembered?.selected && state.inspectEpoch === restoreInspectionEpoch)
+      inspectAt(...remembered.selected, true);
+    if (state.model.coverage?.all_requested) pollStatus();
+    if (!state.viewFailed)
+      status(
+        `Same tensor active · metadata and viewer setup ${(performance.now() - started).toFixed(0)} ms. Numeric tiles load separately.`,
+      );
+  } catch (e) {
+    refuseViewLoad(e, id);
+  }
+}
+
+function rememberViewContext() {
   const contextKey = tensorContextKey();
   const pendingRaw =
     state.pendingInspection?.key === contextKey
@@ -980,17 +1058,9 @@ async function loadView() {
       selected: [...(pendingRaw || state.selected)],
     };
   } else if (state.recolor?.key !== contextKey) state.recolor = null;
-  // Carry the last active viewport through consecutive rule changes, even while
-  // an earlier recoloring request is still opening and state.current is null.
-  const remembered = state.recolor,
-    prior = remembered?.bounds;
-  deactivate(!!remembered);
-  const id = state.viewEpoch,
-    restoreInspectionEpoch = state.inspectEpoch;
-  state.viewController = new AbortController();
-  const signal = state.viewController.signal,
-    s = settings();
-  const started = performance.now();
+}
+
+function drawViewLoading() {
   showError("");
   status("Loading both color rules for the same tensor…");
   describeTensor();
@@ -1007,78 +1077,58 @@ async function loadView() {
     text(side + "-parameter", "");
     text(side + "-units", "");
   }
+}
+
+function activateLoadedView(view, s, pair, prior) {
+  state.current = { ...view, settings: s };
+  state.loading = false;
+  state.syncing = true;
   try {
-    assert(
-      RULE_IDS.includes(s.left) && RULE_IDS.includes(s.right),
-      "unsupported color rule.",
-    );
-    const view = await json("/api/view?" + new URLSearchParams(s), signal);
-    if (id !== state.viewEpoch) return;
-    validateView(view, s);
-    const pair = SIDES.map((side) => createViewer(side, view, s, id, signal));
-    await Promise.all(pair.map((p) => p.opened));
-    if (
-      id !== state.viewEpoch ||
-      signal.aborted ||
-      !sameSettings(s, settings())
-    )
-      return;
-    state.current = { ...view, settings: s };
-    state.loading = false;
-    state.syncing = true;
-    try {
-      for (const p of pair) {
-        if (prior) p.viewer.viewport.fitBounds(prior, true);
-        else p.viewer.viewport.goHome(true);
-        p.stage.classList.add("active");
-        p.viewer.setMouseNavEnabled(true);
-      }
-    } finally {
-      state.syncing = false;
+    for (const p of pair) {
+      if (prior) p.viewer.viewport.fitBounds(prior, true);
+      else p.viewer.viewport.goHome(true);
+      p.stage.classList.add("active");
+      p.viewer.setMouseNavEnabled(true);
     }
-    for (const side of SIDES) drawLegend(side, view.legends[side]);
-    $("row").max = String(view.tensor.rows - 1);
-    $("col").max = String(view.tensor.cols - 1);
-    for (const key of ["row", "col"])
-      $(key).value = String(
-        Math.min(Number($(key).max), Math.max(0, Number($(key).value) || 0)),
+  } finally {
+    state.syncing = false;
+  }
+  for (const side of SIDES) drawLegend(side, view.legends[side]);
+  $("row").max = String(view.tensor.rows - 1);
+  $("col").max = String(view.tensor.cols - 1);
+  for (const key of ["row", "col"])
+    $(key).value = String(
+      Math.min(Number($(key).max), Math.max(0, Number($(key).value) || 0)),
+    );
+  $("comparison").setAttribute("aria-busy", "false");
+  setInteraction(true);
+  drawCatalog();
+  scheduleResolution();
+  shared.atlasWorkspace?.loaded();
+  loadOverview();
+  if (state.selected) markers();
+}
+
+function refuseViewLoad(e, id) {
+  if (e.name !== "AbortError" && id === state.viewEpoch) {
+    state.current = null;
+    state.loading = false;
+    setInteraction(false);
+    stopViews();
+    if (e.status === 503 && !e.code) {
+      text(
+        "calibration-note",
+        "Initializing: completed numeric statistics are unavailable. Refresh status to retry.",
       );
-    $("comparison").setAttribute("aria-busy", "false");
-    setInteraction(true);
-    drawCatalog();
-    scheduleResolution();
-    globalThis.atlasWorkspace?.loaded();
-    loadOverview();
-    if (state.selected) markers();
-    // An explicit inspection begun after recolor invalidation owns the pin,
-    // whether its source read has completed or is still pending.
-    if (remembered?.selected && state.inspectEpoch === restoreInspectionEpoch)
-      inspectAt(...remembered.selected, true);
-    if (state.model.coverage?.all_requested) pollStatus();
-    if (!state.viewFailed)
-      status(
-        `Same tensor active · metadata and viewer setup ${(performance.now() - started).toFixed(0)} ms. Numeric tiles load separately.`,
-      );
-  } catch (e) {
-    if (e.name !== "AbortError" && id === state.viewEpoch) {
-      state.current = null;
-      state.loading = false;
-      setInteraction(false);
-      stopViews();
-      if (e.status === 503 && !e.code) {
-        text(
-          "calibration-note",
-          "Initializing: completed numeric statistics are unavailable. Refresh status to retry.",
-        );
-        $("calibration-note").hidden = false;
-        status("Initializing · no active color view.");
-      } else {
-        showError(e.message);
-        status("View unavailable · previous images are inactive.");
-      }
+      $("calibration-note").hidden = false;
+      status("Initializing · no active color view.");
+    } else {
+      showError(e.message);
+      status("View unavailable · previous images are inactive.");
     }
   }
 }
+
 function synchronize(side) {
   if (state.syncing || state.loading || !state.current) return;
   const a = state.viewers[side],
@@ -1218,10 +1268,10 @@ function showInspection(data) {
   );
 }
 function validateInspection(data, t, row, col) {
-  if (globalThis.AtlasTools)
-    AtlasTools.requireBinding(
+  if (shared.AtlasTools)
+    shared.AtlasTools.requireBinding(
       data.source_binding,
-      AtlasTools.sourceBinding(state.model, t),
+      shared.AtlasTools.sourceBinding(state.model, t),
     );
   assert(
     data.tensor === t.id && data.row === row && data.col === col,
@@ -1387,7 +1437,7 @@ function focusView() {
 }
 function bind() {
   bindWelcomeAndTheme();
-  window.atlasFocusView = focusView;
+  shared.atlasFocusView = focusView;
   for (const [id, target] of [
     ["skip-to-view", "workspace"],
     ["nav-inspect", "scalar-inspector"],
@@ -1422,7 +1472,7 @@ function bind() {
   });
   $("refresh-model").addEventListener("click", () => {
     refreshModel();
-    window.atlasRefreshAvailability?.();
+    shared.atlasRefreshAvailability?.();
   });
   $("tensor-search").addEventListener("input", drawCatalog);
   $("layer-filter").addEventListener("change", drawCatalog);
@@ -1442,96 +1492,92 @@ function bind() {
   });
   for (const side of SIDES)
     $(side + "-canvas").addEventListener("keydown", (event) => {
-      if (event.key === "Home") {
-        event.preventDefault();
-        fitView();
-      }
-      if (
-        event.shiftKey &&
-        ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(
-          event.key,
-        ) &&
-        state.current
-      ) {
-        event.preventDefault();
-        const v = state.viewers.left,
-          b = v.viewport.getBounds(true);
-        v.viewport.panTo(
-          new OpenSeadragon.Point(
-            b.x +
-              b.width *
-                (0.5 +
-                  (event.key === "ArrowRight"
-                    ? 0.2
-                    : event.key === "ArrowLeft"
-                      ? -0.2
-                      : 0)),
-            b.y +
-              b.height *
-                (0.5 +
-                  (event.key === "ArrowDown"
-                    ? 0.2
-                    : event.key === "ArrowUp"
-                      ? -0.2
-                      : 0)),
-          ),
-          true,
-        );
-        v.viewport.applyConstraints(true);
-        synchronize("left");
-        scheduleResolution();
-        return;
-      }
-      if (
-        ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(
-          event.key,
-        ) &&
-        state.tensor &&
-        !state.loading
-      ) {
-        event.preventDefault();
-        const t = state.tensor,
-          [r, c] = state.selected || [
-            Math.floor(t.rows / 2),
-            Math.floor(t.cols / 2),
-          ];
-        inspectAt(
-          Math.max(
-            0,
-            Math.min(
-              t.rows - 1,
-              r +
-                (event.key === "ArrowDown"
-                  ? 1
-                  : event.key === "ArrowUp"
-                    ? -1
-                    : 0),
-            ),
-          ),
-          Math.max(
-            0,
-            Math.min(
-              t.cols - 1,
-              c +
-                (event.key === "ArrowRight"
-                  ? 1
-                  : event.key === "ArrowLeft"
-                    ? -1
-                    : 0),
-            ),
-          ),
-        );
-      }
-      if (event.key === "+" || event.key === "=") {
-        event.preventDefault();
-        zoomBy(2);
-      }
-      if (event.key === "-") {
-        event.preventDefault();
-        zoomBy(0.5);
-      }
+      handleViewKey(event);
     });
   if (window.innerWidth <= 760) $("tensor-browser").open = false;
+}
+
+function panViewKey(event) {
+  event.preventDefault();
+  const v = state.viewers.left,
+    b = v.viewport.getBounds(true);
+  v.viewport.panTo(
+    new OpenSeadragon.Point(
+      b.x +
+        b.width *
+          (0.5 +
+            (event.key === "ArrowRight"
+              ? 0.2
+              : event.key === "ArrowLeft"
+                ? -0.2
+                : 0)),
+      b.y +
+        b.height *
+          (0.5 +
+            (event.key === "ArrowDown"
+              ? 0.2
+              : event.key === "ArrowUp"
+                ? -0.2
+                : 0)),
+    ),
+    true,
+  );
+  v.viewport.applyConstraints(true);
+  synchronize("left");
+  scheduleResolution();
+}
+
+function inspectViewKey(event) {
+  event.preventDefault();
+  const t = state.tensor,
+    [r, c] = state.selected || [Math.floor(t.rows / 2), Math.floor(t.cols / 2)];
+  inspectAt(
+    Math.max(
+      0,
+      Math.min(
+        t.rows - 1,
+        r + (event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0),
+      ),
+    ),
+    Math.max(
+      0,
+      Math.min(
+        t.cols - 1,
+        c +
+          (event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0),
+      ),
+    ),
+  );
+}
+
+function handleViewKey(event) {
+  if (event.key === "Home") {
+    event.preventDefault();
+    fitView();
+  }
+  if (
+    event.shiftKey &&
+    ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key) &&
+    state.current
+  ) {
+    panViewKey(event);
+    return;
+  }
+  if (
+    ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key) &&
+    state.tensor &&
+    !state.loading
+  ) {
+    inspectViewKey(event);
+  }
+  if (event.key === "+" || event.key === "=") {
+    event.preventDefault();
+    zoomBy(2);
+  }
+  if (event.key === "-") {
+    event.preventDefault();
+    zoomBy(0.5);
+  }
 }
 
 function refuseUnavailableTensor() {
@@ -1591,12 +1637,12 @@ function drawSlicePicker() {
       const leading = inputs.map((input) =>
         /^\d+$/.test(input.value) ? Number(input.value) : NaN,
       );
-      await globalThis.AtlasHost?.prepareProfileChange?.();
+      await shared.AtlasHost?.prepareProfileChange?.();
       if (state.tensor !== t) return;
-      globalThis.AtlasHost?.setProfileSelection?.(null);
-      state.tensor = AtlasTools.withSlice(t, leading);
+      shared.AtlasHost?.setProfileSelection?.(null);
+      state.tensor = shared.AtlasTools.withSlice(t, leading);
       deactivate();
-      globalThis.atlasWorkspace?.changed("tensor");
+      shared.atlasWorkspace?.changed("tensor");
       prepareTensor();
     } catch (e) {
       showError(e.message);
@@ -1605,7 +1651,7 @@ function drawSlicePicker() {
   host.append(button);
 }
 async function calibrationAction(query) {
-  if (globalThis.AtlasHost)
+  if (shared.AtlasHost)
     throw new Error("Fixture preparation is an owner CLI action.");
   const r = await fetch("/api/calibrate?" + query, {
     method: "POST",
@@ -1634,12 +1680,12 @@ function allowRawInspection() {
   $("inspect-submit").disabled = false;
 }
 async function prepareTensor() {
-  if (globalThis.AtlasHost?.setProfileSelection) {
+  if (shared.AtlasHost?.setProfileSelection) {
     let selected = null;
     try {
-      selected = AtlasTools.sourceBinding(state.model, state.tensor);
+      selected = shared.AtlasTools.sourceBinding(state.model, state.tensor);
     } catch {}
-    await AtlasHost.setProfileSelection(selected);
+    await shared.AtlasHost.setProfileSelection(selected);
   }
   if (typeof window.CustomEvent === "function")
     window.dispatchEvent(
@@ -1657,7 +1703,7 @@ async function prepareTensor() {
   const id = state.viewEpoch,
     t = state.tensor;
   allowRawInspection();
-  globalThis.atlasWorkspace?.rawReady();
+  shared.atlasWorkspace?.rawReady();
   describeTensor();
   text("tensor-name", t.name);
   text(
@@ -1672,7 +1718,7 @@ async function prepareTensor() {
     text(side + "-parameter", "");
     text(side + "-units", "");
   }
-  if (globalThis.AtlasHost) {
+  if (shared.AtlasHost) {
     status(
       "Raw inspection ready. Color scales require separately reviewed owner preparation before reopening this model.",
     );
@@ -1770,7 +1816,7 @@ async function pollStatus() {
   try {
     while (state.model && !signal.aborted) {
       const ms = state.tensor?.calibration_complete ? 1000 : 250;
-      if (globalThis.AtlasTools) await AtlasTools.delay(ms, signal);
+      if (shared.AtlasTools) await shared.AtlasTools.delay(ms, signal);
       else await new Promise((resolve) => setTimeout(resolve, ms));
       if (
         signal.aborted ||
@@ -1875,7 +1921,7 @@ function queueHover(row, col) {
       assert(data.api_version === 1, "expected api_version 1.");
       validateInspection(data, t, row, col);
       const head =
-        globalThis.AtlasTools?.hoverHead(state.model, t, row, col) ||
+        shared.AtlasTools?.hoverHead(state.model, t, row, col) ||
         "Head unavailable · no verified layout for this source";
       text(
         "hover-readout",
@@ -2035,8 +2081,8 @@ function bindWelcomeAndTheme() {
 }
 function drawExamples() {
   const box = $("guided-examples");
-  if (!globalThis.AtlasTools?.guidedExamples) return;
-  const examples = AtlasTools.guidedExamples(state.model);
+  if (!shared.AtlasTools?.guidedExamples) return;
+  const examples = shared.AtlasTools.guidedExamples(state.model);
   box.replaceChildren();
   for (const example of examples) {
     const card = node("a", "example-card");
@@ -2060,12 +2106,12 @@ function drawExamples() {
 
 async function initialize() {
   bind();
-  if (globalThis.AtlasHost) {
-    if (globalThis.AtlasProfiles && AtlasHost.mountProfiles)
-      AtlasHost.mountProfiles($("profile-panel"), AtlasProfiles);
+  if (shared.AtlasHost) {
+    if (shared.AtlasProfiles && shared.AtlasHost.mountProfiles)
+      shared.AtlasHost.mountProfiles($("profile-panel"), shared.AtlasProfiles);
     $("calibrate-all").hidden = true;
     try {
-      await AtlasHost.initialize(
+      await shared.AtlasHost.initialize(
         async () => {
           state.tensor = null;
           await refreshModel();
@@ -2088,7 +2134,7 @@ async function initialize() {
 }
 
 // Small additive bridge for optional analytics UI; original state stays private.
-window.atlasAnalyticsBridge = {
+shared.atlasAnalyticsBridge = {
   selected: () => (state.model ? state.tensor : null),
   jump: ({ axis, index }) => {
     const t = state.tensor;
@@ -2130,4 +2176,46 @@ window.atlasAnalyticsBridge = {
   },
 };
 
-initialize();
+export {
+  $,
+  SIDES,
+  state,
+  settings,
+  sameSettings,
+  validateView,
+  clearInspection,
+  deactivate,
+  calibrationScope,
+  tensorDescription,
+  drawCatalog,
+  updateRuleAvailability,
+  refuseUnsupportedView,
+  populateModel,
+  refreshModel,
+  selectTensor,
+  tileSource,
+  drawLegend,
+  tensorContextKey,
+  loadView,
+  synchronize,
+  scheduleResolution,
+  updateResolution,
+  inspectAt,
+  scalarZoom,
+  bind,
+  drawSlicePicker,
+  calibrationAction,
+  allowRawInspection,
+  prepareTensor,
+  applyStatus,
+  pollStatus,
+  hover,
+  cancelHover,
+  queueHover,
+  clearOverview,
+  loadOverview,
+  updateViewportBounds,
+  updateOverview,
+  bindWelcomeAndTheme,
+  initialize,
+};

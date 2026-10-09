@@ -42,6 +42,8 @@ def lint() -> None:
             if file.suffix in (".js", ".cjs", ".mjs") and "vendor" not in file.parts:
                 run(["node", "--check", str(file.relative_to(ROOT))])
     run(["bash", "-n", "run-atlas.sh"])
+    run([sys.executable, "-B", "tools/generate_experiment_schema.py", "--check"])
+    run([sys.executable, "-B", "tools/generate_rule_catalog.py", "--check"])
 
 
 def contracts() -> None:
@@ -198,7 +200,7 @@ def format_checks(dev_python: Path) -> None:
     javascript = [
         p
         for p in tracked
-        if Path(p).suffix in (".js", ".cjs", ".mjs", ".css")
+        if Path(p).suffix in (".js", ".cjs", ".mjs", ".css", ".html")
         and "vendor" not in Path(p).parts
     ]
     if not python or not javascript:

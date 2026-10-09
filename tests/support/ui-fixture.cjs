@@ -1,6 +1,6 @@
 "use strict";
 // Fresh deterministic DOM/OSD/transport state for each test invocation.
-function createFixture({
+async function createFixture({
   appSource = require("node:path").join(__dirname, "../../web/app.js"),
 } = {}) {
   // Real frontend state machine + deterministic DOM/OSD/transport doubles.
@@ -185,7 +185,7 @@ function createFixture({
         }),
       ),
   });
-  vm.runInContext(source.replace(/initialize\s*\(\s*\)\s*;\s*$/, ""), context);
+  await require("./comparison-controller.cjs").load(source, context, appSource);
   const run = (s) => vm.runInContext(s, context),
     copy = (x) => JSON.parse(JSON.stringify(x)),
     tick = async () => {

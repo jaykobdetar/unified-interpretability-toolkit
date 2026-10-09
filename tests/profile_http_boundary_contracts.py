@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 from atlas_host import profile_http as module
 from atlas_host.common import canonical
 import profile_http_integration as fixtures
+from page_startup_fixture import expected_bundle
 
 
 class ProfileHttpBoundaryTests(unittest.TestCase):
@@ -125,9 +126,7 @@ class ProfileHttpBoundaryTests(unittest.TestCase):
                 bundle = list(module.BUNDLE)
                 if enabled:
                     bundle.insert(bundle.index("host-client.js"), "profile-client.js")
-                expected = b"\n;\n".join(
-                    (module.ROOT / "web" / name).read_bytes() for name in bundle
-                )
+                expected = expected_bundle(module.ROOT, bundle)
                 self.assertEqual(case.sent, [(200, expected, "text/javascript")])
 
     def test_existing_ordinary_read_failure_keeps_refusal_record(self):

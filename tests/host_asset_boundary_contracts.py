@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import host_atlas
 from atlas_host import dense_static_admission as admission
+from page_startup_fixture import native_viewer
 
 ASSET_ITEMS = [
     ("/style.css", ("style.css", "text/css")),
@@ -16,6 +17,13 @@ ASSET_ITEMS = [
     ("/app.js", ("app.js", "text/javascript")),
     ("/host-client.js", ("host-client.js", "text/javascript")),
 ]
+if native_viewer(host_atlas.ROOT):
+    ASSET_ITEMS.extend(
+        [
+            ("/profile-client.js", ("profile-client.js", "text/javascript")),
+            ("/viewer-context.js", ("viewer-context.js", "text/javascript")),
+        ]
+    )
 BUNDLE_ITEMS = [
     "vendor/openseadragon.min.js",
     "atlas-tools.js",

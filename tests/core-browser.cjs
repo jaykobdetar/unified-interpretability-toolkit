@@ -44,19 +44,38 @@ fs.mkdirSync(out, { recursive: true });
       "aria-busy",
       "false",
     );
-    await page.waitForFunction(() =>
-      ["left", "right"].every((s) =>
-        state.viewers[s]?.world.getItemAt(0)?.getFullyLoaded(),
-      ),
+    await page.waitForFunction(
+      (__atlasController) => {
+        return ["left", "right"].every((s) =>
+          __atlasController.state.viewers[s]?.world
+            .getItemAt(0)
+            ?.getFullyLoaded(),
+        );
+      },
+      await page.evaluateHandle(async () => {
+        const __atlasController =
+          typeof state === "undefined" ? await import("/app.js") : { state };
+        return __atlasController;
+      }),
     );
   };
   const pairReady = async () => {
     await page.waitForFunction(
-      () =>
-        state.view &&
-        ["left", "right"].every((s) =>
-          state.viewers[s]?.world.getItemAt(0)?.getFullyLoaded(),
-        ),
+      (current) => {
+        return (
+          current.view &&
+          ["left", "right"].every((s) =>
+            current.viewers[s]?.world.getItemAt(0)?.getFullyLoaded(),
+          )
+        );
+      },
+      await page.evaluateHandle(async () => {
+        const current =
+          typeof state === "undefined"
+            ? (await import("/comparison.js")).state
+            : state;
+        return current;
+      }),
     );
     await expect(page.locator("#fit")).toBeEnabled();
   };
@@ -171,15 +190,35 @@ fs.mkdirSync(out, { recursive: true });
     await page.goto(urls[1]);
     await page.setViewportSize({ width: 1100, height: 850 });
     await pairReady();
-    const matrix = await page.evaluate(
-      () => state.model.catalog.find((p) => p.name === "matrix").id,
-    );
+    const moduleBoundary = await page.evaluate(async () => ({
+      scriptType: document.querySelector('script[src="/comparison.js"]').type,
+      globalState: typeof state,
+      exportedViewReady: !!(await import("/comparison.js")).state.view,
+    }));
+    assert.deepEqual(moduleBoundary, {
+      scriptType: "module",
+      globalState: "undefined",
+      exportedViewReady: true,
+    });
+    const matrix = await page.evaluate(async () => {
+      const current =
+        typeof state === "undefined"
+          ? (await import("/comparison.js")).state
+          : state;
+      return current.model.catalog.find((p) => p.name === "matrix").id;
+    });
     await page.locator("#tensor").selectOption(String(matrix));
     await pairReady();
-    const raw = await page.evaluate(() => ({
-      left: state.view.legends.left,
-      right: state.view.legends.right,
-    }));
+    const raw = await page.evaluate(async () => {
+      const current =
+        typeof state === "undefined"
+          ? (await import("/comparison.js")).state
+          : state;
+      return {
+        left: current.view.legends.left,
+        right: current.view.legends.right,
+      };
+    });
     assert.equal(raw.left.bound, raw.right.bound);
     assert.equal(raw.left.calibration_domain, "shared_raw");
     for (const side of ["left", "right"]) {
@@ -203,10 +242,16 @@ fs.mkdirSync(out, { recursive: true });
     await pairReady();
     await painted("left", true);
     await painted("right", true);
-    const geometry = await page.evaluate(() => ({
-      left: state.viewers.left.viewport.getBounds(true),
-      right: state.viewers.right.viewport.getBounds(true),
-    }));
+    const geometry = await page.evaluate(async () => {
+      const current =
+        typeof state === "undefined"
+          ? (await import("/comparison.js")).state
+          : state;
+      return {
+        left: current.viewers.left.viewport.getBounds(true),
+        right: current.viewers.right.viewport.getBounds(true),
+      };
+    });
     for (const key of ["x", "y", "width", "height"])
       assert(Math.abs(geometry.left[key] - geometry.right[key]) < 1e-9);
     await page

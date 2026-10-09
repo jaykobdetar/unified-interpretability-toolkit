@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import check
+from page_startup_fixture import native_viewer
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = [
@@ -134,7 +135,11 @@ class Sequence(unittest.TestCase):
                     ],
                     "3.12.0",
                 ),
-                ("Node", ["node", "--version"], "22.0.0"),
+                (
+                    "Node",
+                    ["node", "--version"],
+                    "22.16.0" if native_viewer(ROOT) else "22.0.0",
+                ),
                 ("rustc", ["rustc", "--version"], "1.92.0"),
                 ("cargo", ["cargo", "--version"], "1.92.0"),
             ],
@@ -161,6 +166,35 @@ class Sequence(unittest.TestCase):
                     "web/style.css",
                 ],
                 ["cargo", "fmt", "--all", "--check"],
+            ],
+        )
+
+        with ExitStack() as stack:
+            _, html_commands = self.formatter_context(stack)
+            stack.enter_context(
+                patch.object(
+                    check,
+                    "formatter_files",
+                    return_value=[
+                        *FILES,
+                        "web/index.html",
+                        "web/comparison.html",
+                        "web/analytics-demo.html",
+                    ],
+                )
+            )
+            check.format_checks(python)
+        self.assertEqual(
+            html_commands,
+            [
+                commands[0],
+                [
+                    *commands[1],
+                    "web/index.html",
+                    "web/comparison.html",
+                    "web/analytics-demo.html",
+                ],
+                commands[2],
             ],
         )
 

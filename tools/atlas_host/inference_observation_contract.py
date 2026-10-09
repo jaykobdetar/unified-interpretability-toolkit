@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import math
 from typing import Any
 
+from atlas_host import experiment_schema as _record_schema
 from atlas_host.inference_geometry import Architecture
 
 
@@ -45,7 +46,7 @@ def validate_observation(
     kind = value.get("kind")
     if kind == "attention":
         if (
-            set(value) != {"kind", "head"}
+            set(value) != set(_record_schema.FIELD_GROUPS["observation_request"])
             or type(value["head"]) is not int
             or not 0 <= value["head"] < HEADS
         ):
@@ -173,13 +174,9 @@ def validate_record(
             raise ValueError("Invalid lens candidate count")
         seen = set()
         for candidate in candidates:
-            if type(candidate) is not dict or set(candidate) != {
-                "id",
-                "piece",
-                "lens_logit",
-                "final_logit",
-                "delta_lens_minus_final",
-            }:
+            if type(candidate) is not dict or set(candidate) != set(
+                _record_schema.FIELD_GROUPS["lens_candidate"]
+            ):
                 raise ValueError("Invalid lens candidate fields")
             token = candidate["id"]
             if (

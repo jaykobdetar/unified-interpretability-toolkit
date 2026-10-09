@@ -6,6 +6,7 @@ const fs = require("fs"),
   assert = require("assert/strict"),
   crypto = require("crypto"),
   path = require("path");
+require("./support/comparison-controller.cjs").enableModules(__filename);
 const source = fs.readFileSync(
   path.join(__dirname, "../web/comparison.js"),
   "utf8",
@@ -159,7 +160,7 @@ const context = vm.createContext({
       }),
     ),
 });
-vm.runInContext(source.replace(/initialize\(\);\s*$/, ""), context);
+
 const run = (s) => vm.runInContext(s, context),
   copy = (x) => JSON.parse(JSON.stringify(x)),
   tick = async () => {
@@ -304,6 +305,7 @@ async function activate() {
 const passed = [];
 require("./support/async-completion.cjs").requireCompletion(
   (async () => {
+    await require("./support/comparison-controller.cjs").load(source, context);
     run("bind()");
     const init = run("refresh()");
     take("/model").resolve(model);
@@ -371,6 +373,11 @@ require("./support/async-completion.cjs").requireCompletion(
     r2.resolve(inspection(0, 1, 1));
     await p2;
     const nodes = get("inspection").children;
+    assert.equal(
+      nodes.length,
+      6,
+      "both original scalars and the derived result are rendered",
+    );
     assert.equal(nodes[0].textContent, "Original A · BF16");
     assert(nodes[1].textContent.startsWith("-0.0"));
     assert.equal(nodes[4].textContent, "Derived B − A · F64 arithmetic");

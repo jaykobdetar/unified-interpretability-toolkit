@@ -1,21 +1,61 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Unified Interpretability Toolkit analytics — synthetic fixtures</title><link rel="stylesheet" href="analytics-panel.css">
-<style>body { margin: 16px auto; padding: 0 12px; max-width: 1100px; background: #0b1420; color: #e3ebf2; font: 16px/1.5 system-ui; } select { font: inherit; padding: 8px; }</style></head>
-<body><h1>Analytics component fixture preview</h1>
-<p>Synthetic data only. No source model, server route, or SVD worker is connected. Fixture seed is fixed at 42. Use the component's production load adapter to change seeds.</p>
-<label>Fixture <select id="fixture"><option value="matrix">4 × 4 synthetic head-layout matrix</option><option value="vector">Signed vector</option></select></label>
-<p id="jump" role="status">Native viewport jumps will be displayed here.</p><main id="panel"></main>
-<script type="module">
-import {mountAnalytics} from './analytics-panel.js';
-const fixtures = await (await fetch('./analytics-examples.json')).json();
-const selected = document.querySelector('#fixture');
-const widget = mountAnalytics(document.querySelector('#panel'), {
-  load: async ({seed}) => { if (seed !== 42) throw new Error('Synthetic preview supports seed 42 only'); return fixtures[selected.value]; },
-  jump: ({axis, index}) => { document.querySelector('#jump').textContent = `Requested native ${axis} ${index}; source geometry is unchanged.`; }
-});
-document.querySelector('input[type=number]').value = '42';
-selected.onchange = () => widget.setReport(fixtures[selected.value]);
-widget.setReport(fixtures.matrix);
-</script></body></html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>
+      Unified Interpretability Toolkit analytics — synthetic fixtures
+    </title>
+    <link rel="stylesheet" href="analytics-panel.css" />
+    <style>
+      body {
+        margin: 16px auto;
+        padding: 0 12px;
+        max-width: 1100px;
+        background: #0b1420;
+        color: #e3ebf2;
+        font: 16px/1.5 system-ui;
+      }
+      select {
+        font: inherit;
+        padding: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Analytics component fixture preview</h1>
+    <p>
+      Synthetic data only. No source model, server route, or SVD worker is
+      connected. Fixture seed is fixed at 42. Use the component's production
+      load adapter to change seeds.
+    </p>
+    <label
+      >Fixture
+      <select id="fixture">
+        <option value="matrix">4 × 4 synthetic head-layout matrix</option>
+        <option value="vector">Signed vector</option>
+      </select></label
+    >
+    <p id="jump" role="status">Native viewport jumps will be displayed here.</p>
+    <main id="panel"></main>
+    <script type="module">
+      import { mountAnalytics } from "./analytics-panel.js";
+      const fixtures = await (await fetch("./analytics-examples.json")).json();
+      const selected = document.querySelector("#fixture");
+      const widget = mountAnalytics(document.querySelector("#panel"), {
+        load: async ({ seed }) => {
+          if (seed !== 42)
+            throw new Error("Synthetic preview supports seed 42 only");
+          return fixtures[selected.value];
+        },
+        jump: ({ axis, index }) => {
+          document.querySelector("#jump").textContent =
+            `Requested native ${axis} ${index}; source geometry is unchanged.`;
+        },
+      });
+      document.querySelector("input[type=number]").value = "42";
+      selected.onchange = () => widget.setReport(fixtures[selected.value]);
+      widget.setReport(fixtures.matrix);
+    </script>
+  </body>
+</html>

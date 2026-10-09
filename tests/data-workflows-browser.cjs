@@ -196,7 +196,16 @@ const fixture = JSON.parse(
           .getByRole("button", { name: "Apply 2D slice", exact: true })
           .click();
         await settle();
-        assert.deepEqual(await page.evaluate(() => state.tensor.slice), [0]);
+        assert.deepEqual(
+          await page.evaluate(async () => {
+            const __atlasController =
+              typeof state === "undefined"
+                ? await import("/app.js")
+                : { state };
+            return __atlasController.state.tensor.slice;
+          }),
+          [0],
+        );
         await control("row").fill("2");
         await control("col").fill("3");
         await control("inspect-submit").click();

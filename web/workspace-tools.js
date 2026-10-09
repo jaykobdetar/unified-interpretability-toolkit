@@ -1,8 +1,18 @@
-"use strict";
-// Browser adapter. app.js owns model/view epochs; this module owns local-only tools.
-(() => {
-  const A = globalThis.AtlasTools;
+import shared from "./viewer-context.js";
+export function mount(controller) {
+  const A = shared.AtlasTools;
   if (!A) return;
+  const {
+    SIDES,
+    state,
+    settings,
+    synchronize,
+    scheduleResolution,
+    drawCatalog,
+    refreshModel,
+    deactivate,
+  } = controller;
+
   const el = (id) => document.getElementById(id),
     say = (id, msg) => {
       el(id).textContent = msg;
@@ -213,7 +223,7 @@
         `Native rows ${b[0]}–${b[2]}, columns ${b[1]}–${b[3]} selected.`,
       );
       scheduleBookmark();
-      window.atlasFocusView?.();
+      shared.atlasFocusView?.();
     } catch (e) {
       say("region-status", e.message);
     }
@@ -285,7 +295,7 @@
     }
     refreshModel();
   }
-  globalThis.atlasWorkspace = {
+  shared.atlasWorkspace = {
     changed(reason) {
       if (reason === "viewport") {
         scheduleBookmark();
@@ -417,7 +427,7 @@
             A.readJSON(url, {
               signal,
               onState: (event) =>
-                globalThis.atlasWorkspace.retry(event, url, signal, "export"),
+                shared.atlasWorkspace.retry(event, url, signal, "export"),
             }),
           onProgress: (n, total) =>
             say("region-status", `Reading original values: ${n}/${total}.`),
@@ -525,4 +535,4 @@
     state.modelController?.abort();
     deactivate();
   });
-})();
+}

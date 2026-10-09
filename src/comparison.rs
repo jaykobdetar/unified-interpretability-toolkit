@@ -99,7 +99,11 @@ fn compatible(a: &Source, b: &Source) -> Result<Vec<Pair>> {
         missing.is_empty() && extra.is_empty() && shape.is_empty(),
         &format!(
             "Complete named-shape compatibility failed: {}",
-            json!({"missing_in_b_count":missing.len(),"extra_in_b_count":extra.len(),"shape_mismatch_count":shape.len(),"missing_in_b":missing.iter().take(20).collect::<Vec<_>>(),"extra_in_b":extra.iter().take(20).collect::<Vec<_>>(),"shape_mismatch":shape.iter().take(20).collect::<Vec<_>>() })
+            Value::from(response::CompatibilityDiagnostic {
+                missing: &missing,
+                extra: &extra,
+                shape: &shape
+            })
         ),
     )?;
     a.tensors
@@ -254,10 +258,11 @@ impl Comparison {
             .pairs
             .iter()
             .map(|p| {
-                let mut t = json!(p);
-                t["calibration_complete"] = json!(saved.tensors.contains_key(&p.id));
-                t["scales"] = json!(saved.tensors.get(&p.id));
-                t
+                Value::from(response::CatalogEntry {
+                    pair: json!(p),
+                    calibration_complete: saved.tensors.contains_key(&p.id),
+                    scales: saved.tensors.get(&p.id),
+                })
             })
             .collect::<Vec<_>>();
         let mut v = Value::from(response::Model {
@@ -408,8 +413,10 @@ impl Comparison {
         let p = self.pair(id)?;
         let v = self.identity_metadata();
         let pair = json!(p);
-        let legends =
-            json!({"left":self.legend(id,left,mapping)?,"right":self.legend(id,right,mapping)?});
+        let legends = Value::from(response::Legends {
+            left: self.legend(id, left, mapping)?,
+            right: self.legend(id, right, mapping)?,
+        });
         Ok(Value::from(response::View {
             identity: v,
             pair,
@@ -571,7 +578,22 @@ fn scalar(source: &Source, t: &Tensor, row: usize, col: usize) -> Result<(Value,
         .map(|b| format!("{b:02x}"))
         .collect::<String>();
     Ok((
-        json!({"raw_exact":exact_decimal_for(dtype,bits),"raw_hex_le":raw,"dtype":dtype.name(),"element_bytes":dtype.bytes(),"shard":t.shard,"byte_offset":offset,"classification":if value.is_nan(){"nan"}else if value.is_infinite(){"infinity"}else{"finite"},"original_source_value":true}),
+        Value::from(response::Scalar {
+            raw_exact: exact_decimal_for(dtype, bits),
+            raw_hex_le: raw,
+            dtype: dtype.name(),
+            element_bytes: dtype.bytes(),
+            shard: &t.shard,
+            byte_offset: offset,
+            classification: if value.is_nan() {
+                "nan"
+            } else if value.is_infinite() {
+                "infinity"
+            } else {
+                "finite"
+            },
+            original_source_value: true,
+        }),
         value,
     ))
 }

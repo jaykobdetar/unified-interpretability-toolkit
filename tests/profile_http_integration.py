@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 from atlas_host.profile_http import HostedHandler
 from atlas_host.profile_api import production_capabilities
 import profile_atlas
+from page_startup_fixture import native_viewer
 
 
 class Integration(unittest.TestCase):
@@ -100,11 +101,13 @@ class Integration(unittest.TestCase):
             h = self.handler("/viewer.js", enabled=enabled)
             h.handle_action()
             script = self.sent[-1][1]
-            self.assertEqual(
-                re.search(rb"\broot\s*\.\s*AtlasProfiles\s*=\s*api\b", script)
-                is not None,
-                enabled,
+            pattern = (
+                rb"\bshared\s*\.\s*AtlasProfiles\s*=\s*"
+                rb'\(\s*await\s+import\(\s*"\./profile-client\.js"\s*\)\s*\)\s*\.\s*default\b'
+                if native_viewer(Path(__file__).resolve().parents[1])
+                else rb"\broot\s*\.\s*AtlasProfiles\s*=\s*api\b"
             )
+            self.assertEqual(re.search(pattern, script) is not None, enabled)
         self.assertEqual(
             production_capabilities(),
             {"profiles_enabled": False, "resume_available": False},

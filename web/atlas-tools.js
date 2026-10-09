@@ -1,11 +1,6 @@
-"use strict";
-// Pure, bounded workspace contracts. No inference APIs, storage globals, or DOM.
-(function (root, factory) {
-  const api = factory();
-  if (typeof module === "object" && module.exports) module.exports = api;
-  else root.AtlasTools = api;
-})(globalThis, () => {
-  const RULES = [
+import shared from "./viewer-context.js";
+const api = (() => {
+  const RULES = /* rule-ids */ [
     "global_linear",
     "global_asinh",
     "tensor_linear",
@@ -14,7 +9,7 @@
     "tensor_magnitude_asinh",
     "tensor_robust99",
     "tensor_signed_percentile",
-  ];
+  ]; /* end-rule-ids */
   const MAX_CELLS = 256,
     MAX_BYTES = 262144,
     MAX_NOTES = 100,
@@ -278,7 +273,7 @@
         ),
       "Read-only atlas route required",
     );
-    const bound = globalThis.AtlasHost?.bindRead(url),
+    const bound = shared.AtlasHost?.bindRead(url),
       requestURL = bound?.url || url;
     const request = {},
       emit = (event) => onState({ ...event, request });
@@ -765,7 +760,7 @@
   const STARTERS = [
     {
       name: "model.layers.0.self_attn.q_proj.weight",
-      shape: [576, 576],
+      shape: /* layout-fact: q_projection */ [576, 576] /* end-layout-fact */,
       region: [64, 0, 71, 7],
       title: "Positive and negative share a head",
       description:
@@ -774,7 +769,7 @@
     },
     {
       name: "model.layers.0.self_attn.k_proj.weight",
-      shape: [192, 576],
+      shape: /* layout-fact: k_projection */ [192, 576] /* end-layout-fact */,
       region: [0, 0, 7, 7],
       title: "Keys have fewer head groups",
       description:
@@ -783,7 +778,7 @@
     },
     {
       name: "model.layers.0.input_layernorm.weight",
-      shape: [576],
+      shape: /* layout-fact: norm_vector */ [576] /* end-layout-fact */,
       region: [0, 0, 0, 31],
       title: "A vector stays a vector",
       description:
@@ -966,4 +961,6 @@
     boundedNPY,
     collectRegion,
   };
-});
+})();
+export default api;
+export { api as "module.exports" };

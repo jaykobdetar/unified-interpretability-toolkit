@@ -1,12 +1,146 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Unified Interpretability Toolkit · Checkpoint comparison</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/comparison.css"><script defer src="/vendor/openseadragon.min.js"></script><script defer src="/comparison.js"></script></head>
-<body><header><p class="eyebrow">UNIFIED INTERPRETABILITY TOOLKIT / READ-ONLY COMPARISON</p><h1>Two checkpoints. One native coordinate.</h1><p>Original A and B share a raw scale. Differences use a separate scale and always mean B − A.</p><button id="refresh">Refresh status</button></header>
-<details><summary>Ordered sources and compatibility</summary><pre id="provenance">Loading…</pre></details>
-<p id="error" role="alert" hidden></p>
-<main><section class="controls" aria-label="Comparison selection"><label>Find a tensor<input id="search" type="search" placeholder="Tensor name"></label><label>Compatible tensor<select id="tensor" disabled></select></label><p id="catalog-note"></p><label>Common color mapping<select id="mapping"><option value="linear">Linear</option><option value="asinh">Asinh · scale = bound/100</option><option value="magnitude">Magnitude · unsigned</option></select></label><button id="calibrate" disabled>Calibrate selected pair</button><p id="calibration">No payload scan until requested.</p></section>
-<section aria-label="Synchronized comparison views"><h2 id="name">Choose a tensor</h2><p id="shape"></p><div class="actions"><button id="fit" disabled>Fit both</button><button id="zoom-out" disabled>Zoom out</button><button id="zoom-in" disabled>Zoom in</button></div><div class="panels">
-<article><label>Left quantity<select id="left"><option value="a">Original A</option><option value="b">Original B</option><option value="delta">Derived B − A</option><option value="abs_delta">Derived |B − A|</option></select></label><div id="left-canvas" class="canvas" tabindex="0" aria-label="Left native tensor view"></div><p id="left-resolution">No active view</p><div id="left-gradient" class="gradient"></div><p id="left-bounds"></p><p id="left-scope"></p><code id="left-formula"></code><p id="left-units"></p></article>
-<article><label>Right quantity<select id="right"><option value="b">Original B</option><option value="a">Original A</option><option value="delta">Derived B − A</option><option value="abs_delta">Derived |B − A|</option></select></label><div id="right-canvas" class="canvas" tabindex="0" aria-label="Right native tensor view"></div><p id="right-resolution">No active view</p><div id="right-gradient" class="gradient"></div><p id="right-bounds"></p><p id="right-scope"></p><code id="right-formula"></code><p id="right-units"></p></article>
-</div><p id="status" role="status">Loading compatible headers…</p><p>Native coordinates stay aligned; vectors remain one unwrapped row. Coarse pixels average the pointwise transformed quantity. Signed differences can cancel; |B − A| is calculated before pooling. Finite colors merge nearby values.</p></section>
-<aside><h2>Originals and arithmetic difference</h2><p>This is a comparison address. It is never an inference edit target.</p><form id="inspect-form"><label>Native row<input id="row" type="number" min="0" step="1" value="0" required disabled></label><label>Native column<input id="col" type="number" min="0" step="1" value="0" required disabled></label><button id="inspect" disabled>Inspect A, B and B − A</button></form><div id="inspection" aria-live="polite">Choose a native coordinate.</div></aside></main>
-<footer>Explicit local sources · no model execution · comparison scales are tensor-scoped. Robust and percentile comparison mappings await exact paired-distribution support.</footer></body></html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Unified Interpretability Toolkit · Checkpoint comparison</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/comparison.css" />
+    <script defer src="/vendor/openseadragon.min.js"></script>
+    <script type="module" src="/comparison.js"></script>
+  </head>
+  <body>
+    <header>
+      <p class="eyebrow">
+        UNIFIED INTERPRETABILITY TOOLKIT / READ-ONLY COMPARISON
+      </p>
+      <h1>Two checkpoints. One native coordinate.</h1>
+      <p>
+        Original A and B share a raw scale. Differences use a separate scale and
+        always mean B − A.
+      </p>
+      <button id="refresh">Refresh status</button>
+    </header>
+    <details>
+      <summary>Ordered sources and compatibility</summary>
+      <pre id="provenance">Loading…</pre>
+    </details>
+    <p id="error" role="alert" hidden></p>
+    <main>
+      <section class="controls" aria-label="Comparison selection">
+        <label
+          >Find a tensor<input
+            id="search"
+            type="search"
+            placeholder="Tensor name" /></label
+        ><label>Compatible tensor<select id="tensor" disabled></select></label>
+        <p id="catalog-note"></p>
+        <label
+          >Common color mapping<select id="mapping">
+            <option value="linear">Linear</option>
+            <option value="asinh">Asinh · scale = bound/100</option>
+            <option value="magnitude">Magnitude · unsigned</option>
+          </select></label
+        ><button id="calibrate" disabled>Calibrate selected pair</button>
+        <p id="calibration">No payload scan until requested.</p>
+      </section>
+      <section aria-label="Synchronized comparison views">
+        <h2 id="name">Choose a tensor</h2>
+        <p id="shape"></p>
+        <div class="actions">
+          <button id="fit" disabled>Fit both</button
+          ><button id="zoom-out" disabled>Zoom out</button
+          ><button id="zoom-in" disabled>Zoom in</button>
+        </div>
+        <div class="panels">
+          <article>
+            <label
+              >Left quantity<select id="left">
+                <option value="a">Original A</option>
+                <option value="b">Original B</option>
+                <option value="delta">Derived B − A</option>
+                <option value="abs_delta">Derived |B − A|</option>
+              </select></label
+            >
+            <div
+              id="left-canvas"
+              class="canvas"
+              tabindex="0"
+              aria-label="Left native tensor view"
+            ></div>
+            <p id="left-resolution">No active view</p>
+            <div id="left-gradient" class="gradient"></div>
+            <p id="left-bounds"></p>
+            <p id="left-scope"></p>
+            <code id="left-formula"></code>
+            <p id="left-units"></p>
+          </article>
+          <article>
+            <label
+              >Right quantity<select id="right">
+                <option value="b">Original B</option>
+                <option value="a">Original A</option>
+                <option value="delta">Derived B − A</option>
+                <option value="abs_delta">Derived |B − A|</option>
+              </select></label
+            >
+            <div
+              id="right-canvas"
+              class="canvas"
+              tabindex="0"
+              aria-label="Right native tensor view"
+            ></div>
+            <p id="right-resolution">No active view</p>
+            <div id="right-gradient" class="gradient"></div>
+            <p id="right-bounds"></p>
+            <p id="right-scope"></p>
+            <code id="right-formula"></code>
+            <p id="right-units"></p>
+          </article>
+        </div>
+        <p id="status" role="status">Loading compatible headers…</p>
+        <p>
+          Native coordinates stay aligned; vectors remain one unwrapped row.
+          Coarse pixels average the pointwise transformed quantity. Signed
+          differences can cancel; |B − A| is calculated before pooling. Finite
+          colors merge nearby values.
+        </p>
+      </section>
+      <aside>
+        <h2>Originals and arithmetic difference</h2>
+        <p>
+          This is a comparison address. It is never an inference edit target.
+        </p>
+        <form id="inspect-form">
+          <label
+            >Native row<input
+              id="row"
+              type="number"
+              min="0"
+              step="1"
+              value="0"
+              required
+              disabled /></label
+          ><label
+            >Native column<input
+              id="col"
+              type="number"
+              min="0"
+              step="1"
+              value="0"
+              required
+              disabled /></label
+          ><button id="inspect" disabled>Inspect A, B and B − A</button>
+        </form>
+        <div id="inspection" aria-live="polite">
+          Choose a native coordinate.
+        </div>
+      </aside>
+    </main>
+    <footer>
+      Explicit local sources · no model execution · comparison scales are
+      tensor-scoped. Robust and percentile comparison mappings await exact
+      paired-distribution support.
+    </footer>
+  </body>
+</html>

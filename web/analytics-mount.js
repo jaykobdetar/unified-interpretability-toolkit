@@ -1,3 +1,4 @@
+import shared from "./viewer-context.js";
 import { mountAnalytics, renderModelOutliers } from "./analytics-panel.js";
 
 // Coordinator-only mount. No inference session adoption, source paths or tokens
@@ -148,7 +149,7 @@ async function run(data) {
 }
 const widget = mountAnalytics(regionHost, {
   load: ({ seed, svd, scope }) => {
-    const tensor = window.atlasAnalyticsBridge?.selected();
+    const tensor = shared.atlasAnalyticsBridge?.selected();
     if (!tensor) throw new Error("Select a native tensor first.");
     if (tensor.available === false || tensor.shape.length > 2)
       throw new Error(
@@ -176,7 +177,7 @@ const widget = mountAnalytics(regionHost, {
     }
     return run({ tensor: tensor.id, region, seed, svd });
   },
-  jump: (data) => window.atlasAnalyticsBridge?.jump(data),
+  jump: (data) => shared.atlasAnalyticsBridge?.jump(data),
 });
 function select(tensor) {
   ++generation;
@@ -198,7 +199,7 @@ function select(tensor) {
       : `Selected ${tensor.name} (${tensor.dtype}). Analytics supports original BF16 sources only; use the viewer for F16/F32.`;
 }
 button("128 window", () => {
-  const t = window.atlasAnalyticsBridge?.selected();
+  const t = shared.atlasAnalyticsBridge?.selected();
   if (t) {
     inputs.row.value = "0";
     inputs.col.value = "0";
@@ -207,7 +208,7 @@ button("128 window", () => {
   }
 });
 button("Tall band", () => {
-  const t = window.atlasAnalyticsBridge?.selected();
+  const t = shared.atlasAnalyticsBridge?.selected();
   if (t) {
     inputs.row.value = "0";
     inputs.col.value = "0";
@@ -216,7 +217,7 @@ button("Tall band", () => {
   }
 });
 button("Wide band", () => {
-  const t = window.atlasAnalyticsBridge?.selected();
+  const t = shared.atlasAnalyticsBridge?.selected();
   if (t) {
     inputs.row.value = "0";
     inputs.col.value = "0";
@@ -229,9 +230,9 @@ button("Rank bounded model prefix", async () => {
   try {
     modelHost.replaceChildren();
     const seed = Number(regionHost.querySelector("input[type=number]").value);
-    const selection = window.atlasAnalyticsBridge?.selected()?.id;
+    const selection = shared.atlasAnalyticsBridge?.selected()?.id;
     const result = await run({ scope: "model", seed });
-    if (selection === window.atlasAnalyticsBridge?.selected()?.id)
+    if (selection === shared.atlasAnalyticsBridge?.selected()?.id)
       renderModelOutliers(modelHost, result);
   } catch (error) {
     note.textContent = error.message;
@@ -248,7 +249,7 @@ window.addEventListener("pagehide", () => {
       keepalive: true,
     }).catch(() => {});
 });
-select(window.atlasAnalyticsBridge?.selected());
+select(shared.atlasAnalyticsBridge?.selected());
 api("").catch(() => {
   note.textContent =
     "Analytics unavailable. Launch the local analytics-enabled coordinator to use this panel.";

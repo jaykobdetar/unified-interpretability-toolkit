@@ -3,7 +3,7 @@ mod reuse;
 mod reuse_transport;
 use crate::{
     api, headroom, render, require,
-    slice::{parse_indices, TensorSlice},
+    slice::TensorSlice,
     source::{exact_decimal_for, Dtype},
     state::State,
     Result,
@@ -24,6 +24,12 @@ use std::{
 #[derive(Clone)]
 pub struct Query(BTreeMap<String, String>);
 impl Query {
+    pub fn field<T>(&self, parameter: &crate::parameter::Parameter<T>) -> &str {
+        parameter.value(&self.0)
+    }
+    pub fn read<T>(&self, parameter: &crate::parameter::Parameter<T>) -> Result<T> {
+        parameter.read(&self.0)
+    }
     pub fn get<'a>(&'a self, key: &str, default: &'a str) -> &'a str {
         self.0.get(key).map(String::as_str).unwrap_or(default)
     }
@@ -148,20 +154,11 @@ pub fn reply(mut socket: TcpStream, status: u16, mime: &str, body: &[u8], header
     }
 }
 // One fixed startup resource keeps the normal page below the unchanged four
-// header-admission slots. Preserve script order without eval, loaders or copies.
-fn viewer_scripts() -> [&'static [u8]; 9] {
-    [
-        include_bytes!("../web/vendor/openseadragon.min.js"),
-        b"\n;\n",
-        include_bytes!("../web/atlas-tools.js"),
-        b"\n;\n",
-        include_bytes!("../web/app.js"),
-        b"\n;\n",
-        include_bytes!("../web/workspace-tools.js"),
-        b"\n;\n",
-        include_bytes!("../web/inference.js"),
-    ]
+// header-admission slots. Derive the part count from the ordered asset catalogue.
+fn viewer_scripts() -> [&'static [u8]; crate::page_assets::VIEWER_SCRIPTS.len()] {
+    crate::page_assets::VIEWER_SCRIPTS
 }
+
 fn reply_viewer_bundle(mut socket: TcpStream) {
     let scripts = viewer_scripts();
     let head = response_head(
@@ -219,11 +216,11 @@ pub(crate) fn disconnected(s: &TcpStream) -> bool {
     matches!(r, Ok(0))
 }
 pub fn inspect(state: &State, q: &Query) -> Result<Value> {
-    let id = q.int("tensor", "0")?;
-    let slice = TensorSlice::new(&state.source, id, &parse_indices(q.get("slice", ""))?)?;
+    let id = q.read(&api::argument::TENSOR)?;
+    let slice = TensorSlice::new(&state.source, id, &q.read(&api::argument::SLICE)?)?;
     let t = &slice.tensor;
-    let row = q.int("row", "0")?;
-    let col = q.int("col", "0")?;
+    let row = q.read(&api::argument::ROW)?;
+    let col = q.read(&api::argument::COL)?;
     let (bits, offset) = state.source.scalar_bits(t, row, col)?;
     let dtype = Dtype::parse(&t.dtype)?;
     let value = dtype.value(bits);
@@ -231,8 +228,8 @@ pub fn inspect(state: &State, q: &Query) -> Result<Value> {
     let mut transform_errors = serde_json::Map::new();
     let mut ready = true;
     for (side, rule) in [
-        ("left", q.get("left", "global_linear")),
-        ("right", q.get("right", "global_asinh")),
+        ("left", q.field(&api::argument::LEFT)),
+        ("right", q.field(&api::argument::RIGHT)),
     ] {
         render::rule_info(rule)?;
         let result = (|| -> Result<Value> {
@@ -438,14 +435,14 @@ fn numeric_worker(
                 }
                 let start = Instant::now();
                 let result = (|| {
-                    let binding = q.get("binding", "");
+                    let binding = q.field(&api::argument::BINDING);
                     worker.tile_slice_bound(
-                        q.int("tensor", "0")?,
-                        &parse_indices(q.get("slice", ""))?,
-                        q.get("rule", "global_linear"),
-                        q.int("level", "0")?.try_into()?,
-                        q.int("x", "0")?,
-                        q.int("y", "0")?,
+                        q.read(&api::argument::TENSOR)?,
+                        &q.read(&api::argument::SLICE)?,
+                        q.field(&api::argument::RULE),
+                        q.read(&api::argument::LEVEL)?,
+                        q.read(&api::argument::X)?,
+                        q.read(&api::argument::Y)?,
                         (!binding.is_empty()).then_some(binding),
                     )
                 })();
@@ -453,7 +450,7 @@ fn numeric_worker(
                     Ok((png, cached, metrics)) => {
                         let mut headers = format!("X-Atlas-Factor: {}\r\nX-Atlas-Cache: {}\r\nX-Atlas-Seconds: {:.6}\r\nX-Atlas-Source-Bytes: {}\r\n",
                             metrics.factor, if cached { "hit" } else { "miss" }, start.elapsed().as_secs_f64(), metrics.source_bytes_read);
-                        if !q.get("binding", "").is_empty() {
+                        if !q.field(&api::argument::BINDING).is_empty() {
                             headers
                                 .push_str("Cache-Control: private, max-age=86400, immutable\r\n");
                         }
@@ -501,7 +498,10 @@ pub fn serve(state: Arc<State>, port: u16) -> Result<()> {
         })?;
     println!(
         "{}",
-        json!({"listening":format!("http://127.0.0.1:{port}"),"metadata_ready_seconds":state.started.elapsed().as_secs_f64(),"header_bytes":state.source.header_bytes,"tensors":state.source.tensors.len(),"peak_rss_mib":crate::peak_rss_mib(),"resources":crate::resources::snapshot()?})
+        Value::try_from(response::Startup {
+            state: &state,
+            port
+        })?
     );
     std::io::stdout().flush()?;
     reuse_transport::run(listener, dispatch_sender, reuse)
@@ -710,7 +710,7 @@ fn dispatch(
         raw,
         &method,
         &path,
-        q.get(api::parameter::BINDING, ""),
+        q.field(&api::argument::BINDING),
         headers.get("connection").map(String::as_str).unwrap_or(""),
     );
     let Connection {
@@ -718,11 +718,11 @@ fn dispatch(
         lease,
         eligible,
     } = connection;
-    if method == "POST" && path == api::viewer::CALIBRATION {
+    if method == api::viewer::methods::CALIBRATION && path == api::viewer::CALIBRATION {
         reply_calibration(state, sender, socket, &q, &headers);
         return;
     }
-    if method != "GET" {
+    if method != api::viewer::methods::MODEL {
         error(
             socket,
             400,
@@ -793,7 +793,7 @@ fn reply_calibration(
         error(socket, 400, "Local action header required");
         return;
     }
-    if q.get("all", "0") == "1" {
+    if q.field(&api::argument::ALL) == "1" {
         let mut p = state.progress.lock().unwrap();
         // Wake a sleeping worker without recurring polling. A full queue
         // already wakes it; disconnected transport cannot accept work.
@@ -819,7 +819,7 @@ fn reply_calibration(
         );
         return;
     }
-    match q.int("tensor", "0").and_then(|id| {
+    match q.read(&api::argument::TENSOR).and_then(|id| {
         let t = state.source.tensor(id)?;
         require(
             t.available,
@@ -866,13 +866,13 @@ fn enqueue_tile(sender: &SyncSender<Job>, connection: Connection, q: Query) {
 fn reply_status(state: &State, socket: TcpStream, path: &str, q: &Query) {
     let result = (|| -> Result<Value> {
         let selected = if path == api::viewer::TENSOR_STATUS
-            || !q.get(api::parameter::TENSOR, "").is_empty()
+            || !q.field(&api::argument::SELECTED_TENSOR).is_empty()
         {
             require(
-                !q.get(api::parameter::TENSOR, "").is_empty(),
+                !q.field(&api::argument::SELECTED_TENSOR).is_empty(),
                 "Selected tensor required",
             )?;
-            Some(q.int(api::parameter::TENSOR, "0")?)
+            Some(q.read(&api::argument::TENSOR)?)
         } else {
             None
         };
@@ -887,29 +887,27 @@ fn reply_status(state: &State, socket: TcpStream, path: &str, q: &Query) {
 fn reply_view(state: &State, socket: TcpStream, q: &Query) {
     let result = (|| -> Result<Value> {
         state.source.check()?;
-        let id = q.int("tensor", "0")?;
-        let slice = TensorSlice::new(&state.source, id, &parse_indices(q.get("slice", ""))?)?;
+        let id = q.read(&api::argument::TENSOR)?;
+        let slice = TensorSlice::new(&state.source, id, &q.read(&api::argument::SLICE)?)?;
         let t = state.source.tensor(id)?;
-        let mut selected = serde_json::to_value(t)?;
-        selected["slice"] = json!(slice.leading);
-        selected["slice_identity"] = json!(slice.identity);
-        selected["slice_count"] = json!(slice.tensor.count);
+        let selected = Value::from(response::Selection {
+            tensor: serde_json::to_value(t)?,
+            slice: &slice.leading,
+            slice_identity: &slice.identity,
+            slice_count: slice.tensor.count,
+        });
         let l = state.legends(
             t,
-            q.get("left", "global_linear"),
-            q.get("right", "global_asinh"),
+            q.field(&api::argument::LEFT),
+            q.field(&api::argument::RIGHT),
         )?;
         Ok(response::View {
             tensor: selected,
             source_binding: state.slice_binding(&slice),
-            left_binding: state.tile_binding_for(
-                &slice,
-                q.get("left", "global_linear"),
-                &l["left"],
-            ),
+            left_binding: state.tile_binding_for(&slice, q.field(&api::argument::LEFT), &l["left"]),
             right_binding: state.tile_binding_for(
                 &slice,
-                q.get("right", "global_asinh"),
+                q.field(&api::argument::RIGHT),
                 &l["right"],
             ),
             legends: l,
@@ -926,33 +924,7 @@ fn reply_view(state: &State, socket: TcpStream, q: &Query) {
 }
 
 fn reply_static(socket: TcpStream, path: &str) {
-    let static_file: Option<(&str, &[u8])> = match path {
-        "/" | "/index.html" => Some((
-            "text/html; charset=utf-8",
-            include_bytes!("../web/index.html"),
-        )),
-        "/inference.js" => Some(("text/javascript", include_bytes!("../web/inference.js"))),
-        "/inference-import.js" => Some((
-            "text/javascript",
-            include_bytes!("../web/inference-import.js"),
-        )),
-        "/atlas-tools.js" => Some(("text/javascript", include_bytes!("../web/atlas-tools.js"))),
-        "/workspace-tools.js" => Some((
-            "text/javascript",
-            include_bytes!("../web/workspace-tools.js"),
-        )),
-        "/app.js" => Some(("text/javascript", include_bytes!("../web/app.js"))),
-        "/style.css" => Some(("text/css", include_bytes!("../web/style.css"))),
-        "/vendor/openseadragon.min.js" => Some((
-            "text/javascript",
-            include_bytes!("../web/vendor/openseadragon.min.js"),
-        )),
-        "/vendor/OpenSeadragon-LICENSE.txt" => Some((
-            "text/plain",
-            include_bytes!("../web/vendor/OpenSeadragon-LICENSE.txt"),
-        )),
-        _ => None,
-    };
+    let static_file = crate::page_assets::viewer(path);
     if let Some((mime, body)) = static_file {
         reply(socket, 200, mime, body, "")
     } else {
@@ -1008,17 +980,33 @@ mod query_tests {
     #[test]
     fn startup_script_bundle_is_fixed_order_bounded_and_single_request() {
         let parts = viewer_scripts();
+        let parts = parts.as_slice();
         assert!(parts.iter().map(|s| s.len()).sum::<usize>() < 600 * 1024);
         assert_eq!(
             parts[0],
             include_bytes!("../web/vendor/openseadragon.min.js")
         );
-        assert_eq!(parts[2], include_bytes!("../web/atlas-tools.js"));
-        assert_eq!(parts[4], include_bytes!("../web/app.js"));
-        assert_eq!(parts[6], include_bytes!("../web/workspace-tools.js"));
-        assert_eq!(parts[8], include_bytes!("../web/inference.js"));
-        for part in [parts[1], parts[3], parts[5], parts[7]] {
-            assert_eq!(part, b"\n;\n");
+        if include_str!("../web/app.js")
+            .lines()
+            .any(|line| matches!(line.split_whitespace().next(), Some("import" | "export")))
+        {
+            let fixtures: serde_json::Value =
+                serde_json::from_str(include_str!("../tests/fixtures/viewer-startup.json"))
+                    .unwrap();
+            let expected: [&[u8]; 3] = [
+                include_bytes!("../web/vendor/openseadragon.min.js"),
+                b"\n;\n",
+                fixtures["viewer"].as_str().unwrap().as_bytes(),
+            ];
+            assert_eq!(parts, expected);
+        } else {
+            assert_eq!(parts[2], include_bytes!("../web/atlas-tools.js"));
+            assert_eq!(parts[4], include_bytes!("../web/app.js"));
+            assert_eq!(parts[6], include_bytes!("../web/workspace-tools.js"));
+            assert_eq!(parts[8], include_bytes!("../web/inference.js"));
+            for part in [parts[1], parts[3], parts[5], parts[7]] {
+                assert_eq!(part, b"\n;\n");
+            }
         }
         let html = include_str!("../web/index.html");
         assert_eq!(html.matches("<script ").count(), 1);

@@ -161,3 +161,84 @@ impl From<Legend<'_>> for Value {
         ]))
     }
 }
+
+pub(super) struct Legends {
+    pub left: Value,
+    pub right: Value,
+}
+
+impl From<Legends> for Value {
+    fn from(response: Legends) -> Self {
+        Value::Object(serde_json::Map::from_iter([
+            ("left".to_owned(), response.left),
+            ("right".to_owned(), response.right),
+        ]))
+    }
+}
+
+pub(super) struct Scalar<'a> {
+    pub raw_exact: String,
+    pub raw_hex_le: String,
+    pub dtype: &'static str,
+    pub element_bytes: usize,
+    pub shard: &'a str,
+    pub byte_offset: u64,
+    pub classification: &'static str,
+    pub original_source_value: bool,
+}
+
+impl From<Scalar<'_>> for Value {
+    fn from(response: Scalar<'_>) -> Self {
+        Value::Object(serde_json::Map::from_iter([
+            ("raw_exact".to_owned(), Value::from(response.raw_exact)),
+            ("raw_hex_le".to_owned(), Value::from(response.raw_hex_le)),
+            ("dtype".to_owned(), Value::from(response.dtype)),
+            (
+                "element_bytes".to_owned(),
+                Value::from(response.element_bytes),
+            ),
+            ("shard".to_owned(), Value::from(response.shard)),
+            ("byte_offset".to_owned(), Value::from(response.byte_offset)),
+            (
+                "classification".to_owned(),
+                Value::from(response.classification),
+            ),
+            (
+                "original_source_value".to_owned(),
+                Value::from(response.original_source_value),
+            ),
+        ]))
+    }
+}
+
+pub(super) struct CatalogEntry<'a> {
+    pub pair: Value,
+    pub calibration_complete: bool,
+    pub scales: Option<&'a super::Scales>,
+}
+
+impl From<CatalogEntry<'_>> for Value {
+    fn from(response: CatalogEntry<'_>) -> Self {
+        let mut pair = response.pair;
+        pair["calibration_complete"] = json!(response.calibration_complete);
+        pair["scales"] = json!(response.scales);
+        pair
+    }
+}
+
+pub(super) struct CompatibilityDiagnostic<'a> {
+    pub missing: &'a [&'a str],
+    pub extra: &'a [&'a str],
+    pub shape: &'a [&'a str],
+}
+
+impl From<CompatibilityDiagnostic<'_>> for Value {
+    fn from(report: CompatibilityDiagnostic<'_>) -> Self {
+        let CompatibilityDiagnostic {
+            missing,
+            extra,
+            shape,
+        } = report;
+        json!({"missing_in_b_count":missing.len(),"extra_in_b_count":extra.len(),"shape_mismatch_count":shape.len(),"missing_in_b":missing.iter().take(20).collect::<Vec<_>>(),"extra_in_b":extra.iter().take(20).collect::<Vec<_>>(),"shape_mismatch":shape.iter().take(20).collect::<Vec<_>>() })
+    }
+}

@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 from typing import Any
+from atlas_host import experiment_schema as _record_schema
 from atlas_host.inference_geometry import Architecture
 
 
@@ -358,18 +359,9 @@ def validate_step(
         raise ValueError("Invalid sweep activation")
     case, prompt = plan["cases"][index // count], index % count
     value = step.get("sweep")
-    if type(value) is not dict or set(value) != {
-        "record_id",
-        "case_id",
-        "role",
-        "prompt_index",
-        "selected_cells",
-        "changed_cells",
-        "parameter_delta_l2",
-        "restoration_verified",
-        "metrics",
-        "candidates",
-    }:
+    if type(value) is not dict or set(value) != set(
+        _record_schema.FIELD_GROUPS["sweep_record"]
+    ):
         raise ValueError("Invalid sweep record")
     if (
         value["record_id"] != record_ids(plan)[index]
@@ -387,16 +379,7 @@ def validate_step(
     ):
         raise ValueError("Sweep record differs from its accepted plan")
     values = value["metrics"]
-    fields = {
-        "logit_delta_rms",
-        "logit_delta_max_abs",
-        "softmax_total_variation",
-        "baseline_argmax_id",
-        "baseline_argmax_logit_delta",
-        "edited_argmax_id",
-        "context",
-        "semantics",
-    }
+    fields = set(_record_schema.FIELD_GROUPS["sweep_metrics"])
     if (
         type(values) is not dict
         or set(values) != fields
@@ -435,7 +418,7 @@ def validate_step(
     for entry in candidates:
         if (
             type(entry) is not dict
-            or set(entry) != {"id", "piece", "baseline_logit", "edited_logit", "delta"}
+            or set(entry) != set(_record_schema.FIELD_GROUPS["candidate"])
             or not _int(entry["id"], 0, VOCAB - 1)
             or entry["id"] in seen
             or type(entry["piece"]) is not str

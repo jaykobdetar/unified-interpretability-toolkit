@@ -1,6 +1,6 @@
 (() => {
   "use strict";
-  // Closed, bounded archive import. No DOM, transport, storage, or worker ownership.
+  // Closed, bounded archive contract factory. No DOM, transport, storage, or worker ownership.
   const AtlasExperimentImport = (() => {
     const utf8Size = (text) => new TextEncoder().encode(text).length;
     const MAX_BYTES = 1048576,
@@ -76,7 +76,11 @@
         if (typeof x === "string")
           check(x.length <= 16384, "Experiment text exceeds limit");
         if (Array.isArray(x))
-          check(x.length <= 576, "Experiment array exceeds limit");
+          check(
+            x.length <=
+              /* layout-fact: archive_array_limit */ 576 /* end-layout-fact */,
+            "Experiment array exceeds limit",
+          );
         if (x && typeof x === "object")
           for (const [k, v] of Object.entries(x)) {
             check(
@@ -98,10 +102,10 @@
       bounded(value, 0);
       return value;
     }
-    function validateRecord(record, { experimentRecord: experimentRecord }) {
+    function validateRecordEnvelope(record) {
       keys(
         record,
-        "schema created_at status complete worker_cleanup_confirmed termination privacy request settings runtime limits summary baseline edited steps sweep_plan",
+        /* schema-fields: archive */ "schema created_at status complete worker_cleanup_confirmed termination privacy request settings runtime limits summary baseline edited steps sweep_plan" /* end-schema-fields */,
       );
       check(
         record.runtime &&
@@ -134,7 +138,7 @@
       const request = record.request;
       keys(
         request,
-        "mode max_new_tokens layer activation_site source_model edits observation prompt prompt_ids prompts preview_digest plan_digest positions targets operation scale seed capture_layer",
+        /* schema-fields: archive_request */ "mode max_new_tokens layer activation_site source_model edits observation prompt prompt_ids prompts preview_digest plan_digest positions targets operation scale seed capture_layer" /* end-schema-fields */,
       );
       check(
         [undefined, "generate", "comparison", "prompt_pair", "sweep"].includes(
@@ -142,7 +146,10 @@
         ),
         "Unsupported archived mode",
       );
-      keys(request.source_model, "repo revision weights_sha256");
+      keys(
+        request.source_model,
+        /* schema-fields: source_model */ "repo revision weights_sha256" /* end-schema-fields */,
+      );
       check(
         Object.keys(request.source_model).length === 0 ||
           ["repo", "revision", "weights_sha256"].every(
@@ -157,6 +164,9 @@
         Array.isArray(record.steps) && record.steps.length <= 32,
         "Invalid archived trace cap",
       );
+      return request;
+    }
+    function validateTraceBudget(record, request) {
       let equivalents = 0,
         width = null;
       for (const [index, step] of record.steps.entries()) {
@@ -164,7 +174,8 @@
           step.index === index &&
             Array.isArray(step.activation) &&
             step.activation.length > 0 &&
-            step.activation.length <= 576 &&
+            step.activation.length <=
+              /* layout-fact: archive_activation_limit */ 576 /* end-layout-fact */ &&
             step.activation.every(Number.isFinite),
           "Invalid archived activation",
         );
@@ -222,125 +233,164 @@
             record.limits?.prompts <= 2,
           "Archived sweep cap exceeded",
         );
-      const edit = (e) => {
-        const element = e.kind === "element",
-          fields = [
-            "tensor",
-            "shape",
-            "kind",
-            "operation",
-            ...(element ? ["row", "col"] : ["start", "end"]),
-            ...(e.operation === "scale" ? ["scale"] : []),
-          ];
-        keys(e, fields);
-        check(
-          Object.keys(e).length === fields.length &&
-            typeof e.tensor === "string" &&
-            e.tensor.length > 0 &&
-            Array.isArray(e.shape) &&
-            e.shape.length === 2 &&
-            e.shape.every((n) => integer(n, 1, Number.MAX_SAFE_INTEGER)) &&
-            Number.isSafeInteger(e.shape[0] * e.shape[1]) &&
-            ["element", "rows", "columns"].includes(e.kind) &&
-            ["zero", "scale"].includes(e.operation),
-          "Invalid archived edit",
-        );
-        check(
-          element
-            ? integer(e.row, 0, e.shape[0] - 1) &&
-                integer(e.col, 0, e.shape[1] - 1)
-            : integer(e.start, 0, e.shape[e.kind === "rows" ? 0 : 1] - 1) &&
-                integer(e.end, e.start + 1, e.shape[e.kind === "rows" ? 0 : 1]),
-          "Edit coordinates exceed native shape",
-        );
-        if (e.operation === "scale")
-          check(
-            Number.isFinite(e.scale) && Math.abs(e.scale) <= 100,
-            "Invalid edit scale",
-          );
-      };
-      (request.edits || []).forEach(edit);
-      const target = (t) => {
-        const fields = [
+    }
+    const edit = (e) => {
+      const element = e.kind === "element",
+        fields = [
+          "tensor",
+          "shape",
           "kind",
-          "layer",
-          ...(t.kind === "offset"
-            ? ["heads", "offset"]
-            : t.kind === "layer_heads"
-              ? []
-              : ["head"]),
+          "operation",
+          ...(element ? ["row", "col"] : ["start", "end"]),
+          ...(e.operation === "scale" ? ["scale"] : []),
         ];
-        keys(t, fields);
+      keys(e, fields);
+      check(
+        Object.keys(e).length === fields.length &&
+          typeof e.tensor === "string" &&
+          e.tensor.length > 0 &&
+          Array.isArray(e.shape) &&
+          e.shape.length === 2 &&
+          e.shape.every((n) => integer(n, 1, Number.MAX_SAFE_INTEGER)) &&
+          Number.isSafeInteger(e.shape[0] * e.shape[1]) &&
+          ["element", "rows", "columns"].includes(e.kind) &&
+          ["zero", "scale"].includes(e.operation),
+        "Invalid archived edit",
+      );
+      check(
+        element
+          ? integer(e.row, 0, e.shape[0] - 1) &&
+              integer(e.col, 0, e.shape[1] - 1)
+          : integer(e.start, 0, e.shape[e.kind === "rows" ? 0 : 1] - 1) &&
+              integer(e.end, e.start + 1, e.shape[e.kind === "rows" ? 0 : 1]),
+        "Edit coordinates exceed native shape",
+      );
+      if (e.operation === "scale")
         check(
-          Object.keys(t).length === fields.length &&
-            ["head", "query_head", "offset", "layer_heads"].includes(t.kind) &&
-            integer(t.layer, 0, 29) &&
-            (t.kind === "layer_heads" ||
-              (t.kind === "offset"
-                ? Array.isArray(t.heads) &&
-                  t.heads.length > 0 &&
-                  t.heads.length <= 8 &&
-                  new Set(t.heads).size === t.heads.length &&
-                  t.heads.every((h) => integer(h, 0, 8)) &&
-                  integer(t.offset, 0, 63)
-                : integer(t.head, 0, 8))),
-          "Invalid archived target",
+          Number.isFinite(e.scale) && Math.abs(e.scale) <= 100,
+          "Invalid edit scale",
         );
+    };
+    const target = (t) => {
+      const fields = [
+        "kind",
+        "layer",
+        ...(t.kind === "offset"
+          ? ["heads", "offset"]
+          : t.kind === "layer_heads"
+            ? []
+            : ["head"]),
+      ];
+      keys(t, fields);
+      check(
+        Object.keys(t).length === fields.length &&
+          ["head", "query_head", "offset", "layer_heads"].includes(t.kind) &&
+          integer(t.layer, 0, 29) &&
+          (t.kind === "layer_heads" ||
+            (t.kind === "offset"
+              ? Array.isArray(t.heads) &&
+                t.heads.length > 0 &&
+                t.heads.length <= 8 &&
+                new Set(t.heads).size === t.heads.length &&
+                t.heads.every((h) => integer(h, 0, 8)) &&
+                integer(t.offset, 0, 63)
+              : integer(t.head, 0, 8))),
+        "Invalid archived target",
+      );
+    };
+    const candidates = (a) =>
+      a?.forEach((c) => {
+        keys(
+          c,
+          /* schema-fields: candidate */ "id piece baseline_logit edited_logit delta" /* end-schema-fields */,
+        );
+        check(
+          Object.keys(c).length === 5 &&
+            integer(c.id, 0, 49151) &&
+            typeof c.piece === "string" &&
+            utf8Size(c.piece) <= 1024,
+          "Invalid candidate fields",
+        );
+        check(
+          [c.baseline_logit, c.edited_logit, c.delta].every(
+            (x) => x === null || Number.isFinite(x),
+          ) &&
+            c.delta ===
+              (c.baseline_logit === null || c.edited_logit === null
+                ? null
+                : c.edited_logit - c.baseline_logit),
+          "Invalid candidate scores",
+        );
+      });
+    const coverage = (v) => {
+      if (v && typeof v === "object") {
+        for (const k of ["planned_ids", "completed_ids", "unrun_ids"])
+          check(
+            Array.isArray(v[k]) &&
+              v[k].length <= 32 &&
+              v[k].every((x) => typeof x === "string") &&
+              new Set(v[k]).size === v[k].length,
+            "Invalid coverage IDs",
+          );
+        check(
+          typeof v.complete === "boolean" &&
+            (v.interrupted_id === null ||
+              typeof v.interrupted_id === "string") &&
+            Array.isArray(v.unfinished_heads) &&
+            v.unfinished_heads.every((h) => integer(h, 0, 8)),
+          "Invalid coverage state",
+        );
+        keys(
+          v,
+          /* schema-fields: coverage */ "planned_ids completed_ids unrun_ids interrupted_id complete finished_targets unfinished_targets unfinished_heads" /* end-schema-fields */,
+        );
+        check(
+          Object.keys(v).length === 8 &&
+            [v.finished_targets, v.unfinished_targets].every(
+              (a) => Array.isArray(a) && a.length <= 9,
+            ),
+          "Invalid target coverage",
+        );
+        for (const a of [v.finished_targets, v.unfinished_targets])
+          a?.forEach(target);
+      }
+    };
+    const architecture = (a) => {
+      const dimensions = {
+        width: /* layout-fact: width */ 576 /* end-layout-fact */,
+        layers: /* layout-fact: layers */ 30 /* end-layout-fact */,
+        query_heads: /* layout-fact: query_heads */ 9 /* end-layout-fact */,
+        kv_heads: /* layout-fact: kv_heads */ 3 /* end-layout-fact */,
+        head_dim: /* layout-fact: head_dim */ 64 /* end-layout-fact */,
+        queries_per_kv: /* layout-fact: queries_per_kv */ 3 /* end-layout-fact */,
+        vocab_size: /* layout-fact: vocab_size */ 49152 /* end-layout-fact */,
+        intermediate_size: /* layout-fact: intermediate_size */ 1536 /* end-layout-fact */,
       };
-      const candidates = (a) =>
-        a?.forEach((c) => {
-          keys(c, "id piece baseline_logit edited_logit delta");
-          check(
-            Object.keys(c).length === 5 &&
-              integer(c.id, 0, 49151) &&
-              typeof c.piece === "string" &&
-              utf8Size(c.piece) <= 1024,
-            "Invalid candidate fields",
-          );
-          check(
-            [c.baseline_logit, c.edited_logit, c.delta].every(
-              (x) => x === null || Number.isFinite(x),
-            ) &&
-              c.delta ===
-                (c.baseline_logit === null || c.edited_logit === null
-                  ? null
-                  : c.edited_logit - c.baseline_logit),
-            "Invalid candidate scores",
-          );
-        });
-      const coverage = (v) => {
-        if (v && typeof v === "object") {
-          for (const k of ["planned_ids", "completed_ids", "unrun_ids"])
-            check(
-              Array.isArray(v[k]) &&
-                v[k].length <= 32 &&
-                v[k].every((x) => typeof x === "string") &&
-                new Set(v[k]).size === v[k].length,
-              "Invalid coverage IDs",
-            );
-          check(
-            typeof v.complete === "boolean" &&
-              (v.interrupted_id === null ||
-                typeof v.interrupted_id === "string") &&
-              Array.isArray(v.unfinished_heads) &&
-              v.unfinished_heads.every((h) => integer(h, 0, 8)),
-            "Invalid coverage state",
-          );
-          keys(
-            v,
-            "planned_ids completed_ids unrun_ids interrupted_id complete finished_targets unfinished_targets unfinished_heads",
-          );
-          check(
-            Object.keys(v).length === 8 &&
-              [v.finished_targets, v.unfinished_targets].every(
-                (a) => Array.isArray(a) && a.length <= 9,
-              ),
-            "Invalid target coverage",
-          );
-          for (const a of [v.finished_targets, v.unfinished_targets])
-            a?.forEach(target);
-        }
-      };
+      check(
+        Object.entries(dimensions).every(([k, v]) => a[k] === v) &&
+          a.model_type === "llama" &&
+          a.layout === "llama-eager-head-major-v1",
+        "Invalid archived architecture",
+      );
+      keys(
+        a,
+        /* schema-fields: architecture */ "model_type width layers query_heads kv_heads head_dim queries_per_kv vocab_size intermediate_size capture_sites layout head_ablation query_intervention" /* end-schema-fields */,
+      );
+      keys(
+        a.capture_sites,
+        /* schema-fields: capture_sites */ "block attention mlp" /* end-schema-fields */,
+      );
+      check(
+        Object.keys(a).length === 13 &&
+          Object.keys(a.capture_sites).length === 3 &&
+          Object.values(a.capture_sites).every((x) => typeof x === "string") &&
+          a.head_ablation === "o_proj columns" &&
+          a.query_intervention === "q_proj rows",
+        "Invalid capture architecture",
+      );
+    };
+    function validateRelatedFields(record, request) {
+      (request.edits || []).forEach(edit);
       coverage(record.summary?.coverage);
       coverage(record.summary?.sweep_coverage);
       request.targets?.forEach(target);
@@ -349,21 +399,29 @@
         if (step.sweep) {
           keys(
             step.sweep.metrics,
-            "logit_delta_rms logit_delta_max_abs softmax_total_variation baseline_argmax_id baseline_argmax_logit_delta edited_argmax_id context semantics",
+            /* schema-fields: sweep_metrics */ "logit_delta_rms logit_delta_max_abs softmax_total_variation baseline_argmax_id baseline_argmax_logit_delta edited_argmax_id context semantics" /* end-schema-fields */,
           );
           candidates(step.sweep.candidates);
         }
       }
+    }
+    function validateSweepPlan(record) {
       if (record.sweep_plan) {
         const plan = record.sweep_plan;
         keys(
           plan,
-          "version scope architecture intervention_semantics control_semantics seed control_version source_model targets cases prompt_count records prefills capture_layer activation_site coverage limits",
+          /* schema-fields: sweep_plan */ "version scope architecture intervention_semantics control_semantics seed control_version source_model targets cases prompt_count records prefills capture_layer activation_site coverage limits" /* end-schema-fields */,
         );
-        keys(plan.source_model, "repo revision weights_sha256");
+        keys(
+          plan.source_model,
+          /* schema-fields: source_model */ "repo revision weights_sha256" /* end-schema-fields */,
+        );
         plan.targets.forEach(target);
         for (const c of plan.cases) {
-          keys(c, "id role target edits selected_cells control_geometry");
+          keys(
+            c,
+            /* schema-fields: sweep_case */ "id role target edits selected_cells control_geometry" /* end-schema-fields */,
+          );
           if (c.target) target(c.target);
           check(
             Array.isArray(c.edits) && c.edits.length <= 8,
@@ -371,45 +429,15 @@
           );
           c.edits.forEach(edit);
         }
-        const architecture = (a) => {
-          const dimensions = {
-            width: 576,
-            layers: 30,
-            query_heads: 9,
-            kv_heads: 3,
-            head_dim: 64,
-            queries_per_kv: 3,
-            vocab_size: 49152,
-            intermediate_size: 1536,
-          };
-          check(
-            Object.entries(dimensions).every(([k, v]) => a[k] === v) &&
-              a.model_type === "llama" &&
-              a.layout === "llama-eager-head-major-v1",
-            "Invalid archived architecture",
-          );
-          keys(
-            a,
-            "model_type width layers query_heads kv_heads head_dim queries_per_kv vocab_size intermediate_size capture_sites layout head_ablation query_intervention",
-          );
-          keys(a.capture_sites, "block attention mlp");
-          check(
-            Object.keys(a).length === 13 &&
-              Object.keys(a.capture_sites).length === 3 &&
-              Object.values(a.capture_sites).every(
-                (x) => typeof x === "string",
-              ) &&
-              a.head_ablation === "o_proj columns" &&
-              a.query_intervention === "q_proj rows",
-            "Invalid capture architecture",
-          );
-        };
         architecture(plan.architecture);
         keys(
           plan.limits,
-          "targets interventions_including_controls prompts subset_limits probes_per_prompt records prefills edits selected_cells wall_seconds worker_cpu_seconds control_version full_layer_records trace_cap architecture scope",
+          /* schema-fields: sweep_limits */ "targets interventions_including_controls prompts subset_limits probes_per_prompt records prefills edits selected_cells wall_seconds worker_cpu_seconds control_version full_layer_records trace_cap architecture scope" /* end-schema-fields */,
         );
-        keys(plan.limits.subset_limits, "targets records prefills");
+        keys(
+          plan.limits.subset_limits,
+          /* schema-fields: sweep_subset_limits */ "targets records prefills" /* end-schema-fields */,
+        );
         architecture(plan.limits.architecture);
         const caps = {
           targets: 9,
@@ -442,6 +470,8 @@
           "Invalid sweep metadata",
         );
       }
+    }
+    function validateRequest(record, request) {
       // Semantic constraints are independent of the exporter field projection.
       const pair = request.mode === "prompt_pair",
         sweep = request.mode === "sweep",
@@ -482,6 +512,9 @@
           integer(budget, 1, 32) && record.steps.length <= budget,
           "Invalid generation budget",
         );
+      return { pair, sweep, budget };
+    }
+    function validateModeInputs(record, request, pair, sweep) {
       if (pair) {
         check(
           Array.isArray(request.positions) &&
@@ -493,7 +526,10 @@
           "Invalid paired positions",
         );
         for (const p of request.positions) {
-          keys(p, "a b");
+          keys(
+            p,
+            /* schema-fields: pair_positions */ "a b" /* end-schema-fields */,
+          );
           check(
             integer(p.a, 0, 127) && integer(p.b, 0, 127),
             "Invalid paired position",
@@ -532,6 +568,8 @@
           "Invalid sweep plan counts or capture",
         );
       }
+    }
+    function validatePrivateRequest(record, request, pair) {
       if (request.prompts !== undefined)
         check(
           Array.isArray(request.prompts) &&
@@ -555,7 +593,10 @@
             "Invalid prompt/plan digest",
           );
       if (request.observation) {
-        keys(request.observation, "kind head");
+        keys(
+          request.observation,
+          /* schema-fields: observation_request */ "kind head" /* end-schema-fields */,
+        );
         check(
           request.observation.kind === "attention"
             ? integer(request.observation.head, 0, 8) &&
@@ -566,13 +607,15 @@
           "Invalid observation request",
         );
       }
-      const ids = (v, cap) =>
-        check(
-          Array.isArray(v) &&
-            v.length <= cap &&
-            v.every((id) => integer(id, 0, 49151)),
-          "Invalid archived token IDs or budget",
-        );
+    }
+    const ids = (v, cap) =>
+      check(
+        Array.isArray(v) &&
+          v.length <= cap &&
+          v.every((id) => integer(id, 0, 49151)),
+        "Invalid archived token IDs or budget",
+      );
+    function validateLeafFields(record, request, budget) {
       if (request.prompt_ids !== undefined) ids(request.prompt_ids, 128);
       const rules = {},
         rule = (names, test) =>
@@ -639,6 +682,8 @@
         ...record.steps,
       ])
         leaves(v);
+    }
+    function validateTraceRelations(record, request, pair, sweep, budget) {
       for (const step of record.steps) {
         check(
           pair
@@ -679,6 +724,8 @@
             "Invalid attention positions",
           );
       }
+    }
+    function validateSweepTrace(record, request, sweep) {
       if (sweep) {
         const p = record.sweep_plan,
           planned = p.cases.flatMap((c) =>
@@ -750,6 +797,8 @@
           );
         }
       }
+    }
+    function validateCandidateRelations(record) {
       for (const step of record.steps) {
         for (const table of [
           step.top_logits,
@@ -785,6 +834,8 @@
             "Invalid sweep score delta",
           );
       }
+    }
+    function validateConsent(record, request, pair, sweep) {
       check(
         typeof record.privacy?.prompt_included === "boolean" &&
           (record.termination === null ||
@@ -805,9 +856,14 @@
             "Missing consented plan digest",
           );
       }
+    }
+    function validateCandidateTables(record) {
       for (const step of record.steps) {
         for (const c of step.top_logits || []) {
-          keys(c, "id value");
+          keys(
+            c,
+            /* schema-fields: logit */ "id value" /* end-schema-fields */,
+          );
           check(
             Object.keys(c).length === 2 &&
               integer(c.id, 0, 49151) &&
@@ -816,7 +872,10 @@
           );
         }
         for (const c of step.logit_lens?.candidates || []) {
-          keys(c, "id piece lens_logit final_logit delta_lens_minus_final");
+          keys(
+            c,
+            /* schema-fields: lens_candidate */ "id piece lens_logit final_logit delta_lens_minus_final" /* end-schema-fields */,
+          );
           check(
             Object.keys(c).length === 5 &&
               integer(c.id, 0, 49151) &&
@@ -829,6 +888,8 @@
           );
         }
       }
+    }
+    function rebuildRecord(record, request, experimentRecord) {
       // Rebuild through the exporter: removes unknown fields and recomputes derived
       // status/privacy/settings/limits. Equality refuses anything it would discard.
       const req = {
@@ -867,6 +928,23 @@
       );
       return rebuilt;
     }
+    function validateRecord(record, { experimentRecord: experimentRecord }) {
+      // Preserve the historical first-error order as well as the export bytes.
+      const request = validateRecordEnvelope(record);
+      validateTraceBudget(record, request);
+      validateRelatedFields(record, request);
+      validateSweepPlan(record);
+      const { pair, sweep, budget } = validateRequest(record, request);
+      validateModeInputs(record, request, pair, sweep);
+      validatePrivateRequest(record, request, pair);
+      validateLeafFields(record, request, budget);
+      validateTraceRelations(record, request, pair, sweep, budget);
+      validateSweepTrace(record, request, sweep);
+      validateCandidateRelations(record);
+      validateConsent(record, request, pair, sweep);
+      validateCandidateTables(record);
+      return rebuildRecord(record, request, experimentRecord);
+    }
     function read(
       text,
       {
@@ -883,8 +961,14 @@
       const value = parse(text);
       let records;
       if (value.schema === "weight-atlas-session-log-v1") {
-        keys(value, "schema created_at persistence limits records");
-        keys(value.limits, "bytes runs");
+        keys(
+          value,
+          /* schema-fields: session_log */ "schema created_at persistence limits records" /* end-schema-fields */,
+        );
+        keys(
+          value.limits,
+          /* schema-fields: session_limits */ "bytes runs" /* end-schema-fields */,
+        );
         check(
           value.limits.bytes <= MAX_BYTES &&
             value.limits.runs <= MAX_RUNS &&
@@ -948,5 +1032,5 @@
     };
   })();
   if (typeof module !== "undefined") module.exports = AtlasExperimentImport;
-  else globalThis.AtlasExperimentImport = AtlasExperimentImport;
+  else document.currentScript.atlasRegisterImport(AtlasExperimentImport);
 })();

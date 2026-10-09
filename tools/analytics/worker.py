@@ -174,41 +174,45 @@ def catalog_from_payload(payload: Mapping[str, Any]) -> Catalog:
     return catalog
 
 
-def analyze_request(
+def _summary_report(
     payload: Mapping[str, Any],
-) -> "RegionReport | ModelOutliers | Summary":
-    if TYPE_CHECKING:
-        np: Any
-    catalog = catalog_from_payload(payload)
-    data = payload["request"]
-    chosen: Mapping[str, Any] | None = validate_request(
-        data, payload["model"]["catalog"]
+    catalog: Catalog,
+    data: Mapping[str, Any],
+    chosen: Mapping[str, Any],
+    seed: int,
+) -> "Summary":
+    np: Any
+    from .svd_summary import (
+        compute_with_numpy as compute_summary_with_numpy,
+        binding,
     )
-    seed = data.get("seed", 1)
-    if chosen is None:
-        return catalog.model_outliers(seed=seed)
-    if data.get("scope") == "svd_summary":
-        from .svd_summary import (
-            compute_with_numpy as compute_summary_with_numpy,
-            binding,
-        )
 
-        binding(payload["model"], chosen, data["region"], seed)
-        tensor = next(t for t in catalog.tensors if t.name == chosen["name"])
-        values = catalog.read(tensor, data["region"])
-        if not TYPE_CHECKING:
-            import numpy as np  # Same owned worker, BLAS/process caps; no general dense report.
+    binding(payload["model"], chosen, data["region"], seed)
+    tensor = next(t for t in catalog.tensors if t.name == chosen["name"])
+    values = catalog.read(tensor, data["region"])
+    if not TYPE_CHECKING:
+        import numpy as np  # Same owned worker, BLAS/process caps; no general dense report.
 
-        summary_result = compute_summary_with_numpy(
-            np,
-            values,
-            model=payload["model"],
-            tensor=chosen,
-            region=data["region"],
-            seed=seed,
-        )
-        catalog.verify()
-        return summary_result
+    summary_result = compute_summary_with_numpy(
+        np,
+        values,
+        model=payload["model"],
+        tensor=chosen,
+        region=data["region"],
+        seed=seed,
+    )
+    catalog.verify()
+    return summary_result
+
+
+def _region_report(
+    payload: Mapping[str, Any],
+    catalog: Catalog,
+    data: Mapping[str, Any],
+    chosen: Mapping[str, Any],
+    seed: int,
+) -> RegionReport:
+    np: Any
     from .profiles import resolve_local
 
     options, unavailable = resolve_local(catalog.root)
@@ -266,6 +270,22 @@ def analyze_request(
             }
     catalog.verify()
     return result
+
+
+def analyze_request(
+    payload: Mapping[str, Any],
+) -> "RegionReport | ModelOutliers | Summary":
+    catalog = catalog_from_payload(payload)
+    data = payload["request"]
+    chosen: Mapping[str, Any] | None = validate_request(
+        data, payload["model"]["catalog"]
+    )
+    seed = data.get("seed", 1)
+    if chosen is None:
+        return catalog.model_outliers(seed=seed)
+    if data.get("scope") == "svd_summary":
+        return _summary_report(payload, catalog, data, chosen, seed)
+    return _region_report(payload, catalog, data, chosen, seed)
 
 
 def main() -> None:

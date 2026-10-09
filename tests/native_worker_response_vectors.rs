@@ -285,3 +285,71 @@ fn worker_requests_preserve_readiness_calibration_defaults_and_tile_headers() {
         "worker default global tile after complete calibration"
     );
 }
+
+#[test]
+fn startup_diagnostic_envelope_keeps_resource_observations() {
+    let fixture = Fixture::new();
+    let raw = std::fs::read_to_string(fixture.root.join("stdout")).unwrap();
+    let value: Value = serde_json::from_str(raw.trim()).unwrap();
+    assert_eq!(
+        value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec![
+            "header_bytes",
+            "listening",
+            "metadata_ready_seconds",
+            "peak_rss_mib",
+            "resources",
+            "tensors"
+        ]
+    );
+    assert_eq!(
+        value["listening"],
+        format!("http://{}", fixture.address.unwrap())
+    );
+    assert_eq!(value["tensors"], 2);
+    assert_eq!(
+        value["header_bytes"],
+        std::fs::metadata(fixture.root.join("model/tiny.safetensors"))
+            .unwrap()
+            .len()
+            - 8
+    );
+    for field in ["metadata_ready_seconds", "peak_rss_mib"] {
+        let sample = value[field].as_f64().unwrap();
+        assert!(
+            sample.is_finite() && sample >= 0.0,
+            "diagnostic sample assertion: {field}"
+        );
+    }
+    assert!(
+        value["resources"].is_object(),
+        "resource observation object assertion"
+    );
+    assert_eq!(
+        value["resources"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["configured", "effective", "scope"]
+    );
+    assert_eq!(
+        value["resources"]["scope"],
+        "standalone Rust process; hosted/inference/build policies are separate"
+    );
+    assert_eq!(value["resources"]["effective"]["affinity_cpu_count"], 1);
+    assert_eq!(
+        value["resources"]["effective"]["reserved_workspace_bytes"],
+        0
+    );
+    assert_eq!(
+        value["resources"]["effective"]["active_numeric_operations"],
+        0
+    );
+}

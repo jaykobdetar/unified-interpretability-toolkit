@@ -1,17 +1,4 @@
-"use strict";
-// Owned model contexts. Capabilities live in this closure, never URLs or storage.
-(function (root, factory) {
-  const api = factory();
-  if (typeof module === "object" && module.exports) module.exports = api;
-  else
-    root.AtlasHost = api.create({
-      fetchImpl: root.fetch.bind(root),
-      document: root.document,
-      schedule: root.setTimeout.bind(root),
-      cancel: root.clearTimeout.bind(root),
-      window: root,
-    });
-})(globalThis, () => {
+const api = (() => {
   const abort = () => new DOMException("Model context changed", "AbortError");
   const require = (ok, message) => {
     if (!ok) throw new Error(message);
@@ -450,4 +437,6 @@
     };
   }
   return { create };
-});
+})();
+export default api;
+export { api as "module.exports" };

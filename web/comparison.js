@@ -27,7 +27,7 @@ const error = (message) => {
   text("error", message);
   $("error").hidden = !message;
 };
-function envelope(v) {
+function envelope(v, model) {
   assert(
     v.coordinate_space === SPACE && v.inference_editable === false,
     "Invalid comparison coordinate boundary",
@@ -38,11 +38,11 @@ function envelope(v) {
       v.sources?.b?.source_identity,
     "Missing ordered comparison identities",
   );
-  if (state.model) {
+  if (model) {
     assert(
-      v.comparison_identity === state.model.comparison_identity &&
-        v.sources.a.source_identity === state.model.sources.a.source_identity &&
-        v.sources.b.source_identity === state.model.sources.b.source_identity,
+      v.comparison_identity === model.comparison_identity &&
+        v.sources.a.source_identity === model.sources.a.source_identity &&
+        v.sources.b.source_identity === model.sources.b.source_identity,
       "Comparison source identity changed; refresh required",
     );
   }
@@ -159,7 +159,7 @@ async function refresh() {
       { signal: state.modelController.signal },
     );
     if (ticket !== state.modelEpoch) return;
-    envelope(model);
+    envelope(model, state.model);
     assert(
       model.compatibility?.complete && model.catalog?.length,
       "Complete named-shape compatibility required",
@@ -253,91 +253,13 @@ async function loadView() {
   try {
     const view = await request("view", s, { signal: state.controller.signal });
     if (epoch !== state.epoch) return;
-    envelope(view);
-    assert(
-      view.pair?.id === s.tensor &&
-        view.pair.name === state.pair.name &&
-        JSON.stringify(view.pair.shape) === JSON.stringify(state.pair.shape),
-      "Comparison pair mismatch",
-    );
-    for (const side of SIDES)
-      assert(
-        view.legends[side]?.quantity === s[side] &&
-          view.legends[side]?.mapping === s.mapping,
-        "Comparison legend mismatch",
-      );
+    validateComparisonView(view, s);
     state.view = view;
     for (const side of SIDES) {
-      const v = OpenSeadragon({
-        id: side + "-canvas",
-        prefixUrl: "",
-        drawer: "canvas",
-        showNavigationControl: false,
-        showNavigator: false,
-        maxZoomPixelRatio: 24,
-        minPixelRatio: 1,
-        visibilityRatio: 0.25,
-        constrainDuringPan: true,
-        preserveViewport: false,
-        imageSmoothingEnabled: false,
-        blendTime: 0,
-        animationTime: 0,
-        immediateRender: true,
-        maxImageCacheCount: 32,
-        imageLoaderLimit: 1,
-        timeout: 60000,
-        gestureSettingsMouse: {
-          clickToZoom: false,
-          dblClickToZoom: true,
-          scrollToZoom: true,
-        },
-        gestureSettingsTouch: {
-          clickToZoom: false,
-          dblClickToZoom: true,
-          pinchToZoom: true,
-        },
-      });
+      const v = createComparisonViewer(side);
       state.viewers[side] = v;
       drawLegend(side, view.legends[side]);
-      v.addHandler("viewport-change", () => {
-        if (epoch !== state.epoch || state.syncing) return;
-        const other = state.viewers[side === "left" ? "right" : "left"];
-        if (!v.world.getItemCount() || !other?.world.getItemCount()) return;
-        state.syncing = true;
-        try {
-          other.viewport.fitBounds(v.viewport.getBounds(true), true);
-        } finally {
-          state.syncing = false;
-        }
-      });
-      v.addHandler("canvas-click", (e) => {
-        if (epoch !== state.epoch || !e.quick || !v.world.getItemCount())
-          return;
-        const point = v.world
-          .getItemAt(0)
-          .viewportToImageCoordinates(v.viewport.pointFromPixel(e.position));
-        inspectAt(Math.floor(point.y), Math.floor(point.x));
-      });
-      v.addHandler("tile-drawn", () => {
-        if (epoch === state.epoch) resolution(side, v, view.pair);
-      });
-      v.addHandler("tile-load-failed", () => {
-        if (epoch === state.epoch)
-          error(
-            "Comparison tile failed. Refresh status or retry; no source values are substituted.",
-          );
-      });
-      v.addHandler("open", () => {
-        if (epoch !== state.epoch) return;
-        if (SIDES.every((k) => state.viewers[k]?.world.getItemCount())) {
-          for (const id of ["fit", "zoom-in", "zoom-out"])
-            $(id).disabled = false;
-          text(
-            "status",
-            "Native coordinates synchronized. A/B raw scale and B−A scale are separately labeled.",
-          );
-        }
-      });
+      bindComparisonViewer(v, side, view, epoch);
       v.open(tileSource(view.pair, s[side], s.mapping, identity));
     }
   } catch (e) {
@@ -352,6 +274,93 @@ async function loadView() {
     }
   }
 }
+
+function validateComparisonView(view, s) {
+  envelope(view, state.model);
+  assert(
+    view.pair?.id === s.tensor &&
+      view.pair.name === state.pair.name &&
+      JSON.stringify(view.pair.shape) === JSON.stringify(state.pair.shape),
+    "Comparison pair mismatch",
+  );
+  for (const side of SIDES)
+    assert(
+      view.legends[side]?.quantity === s[side] &&
+        view.legends[side]?.mapping === s.mapping,
+      "Comparison legend mismatch",
+    );
+}
+function createComparisonViewer(side) {
+  return OpenSeadragon({
+    id: side + "-canvas",
+    prefixUrl: "",
+    drawer: "canvas",
+    showNavigationControl: false,
+    showNavigator: false,
+    maxZoomPixelRatio: 24,
+    minPixelRatio: 1,
+    visibilityRatio: 0.25,
+    constrainDuringPan: true,
+    preserveViewport: false,
+    imageSmoothingEnabled: false,
+    blendTime: 0,
+    animationTime: 0,
+    immediateRender: true,
+    maxImageCacheCount: 32,
+    imageLoaderLimit: 1,
+    timeout: 60000,
+    gestureSettingsMouse: {
+      clickToZoom: false,
+      dblClickToZoom: true,
+      scrollToZoom: true,
+    },
+    gestureSettingsTouch: {
+      clickToZoom: false,
+      dblClickToZoom: true,
+      pinchToZoom: true,
+    },
+  });
+}
+function bindComparisonViewer(v, side, view, epoch) {
+  v.addHandler("viewport-change", () => {
+    if (epoch !== state.epoch || state.syncing) return;
+    const other = state.viewers[side === "left" ? "right" : "left"];
+    if (!v.world.getItemCount() || !other?.world.getItemCount()) return;
+    state.syncing = true;
+    try {
+      other.viewport.fitBounds(v.viewport.getBounds(true), true);
+    } finally {
+      state.syncing = false;
+    }
+  });
+  v.addHandler("canvas-click", (e) => {
+    if (epoch !== state.epoch || !e.quick || !v.world.getItemCount()) return;
+    const point = v.world
+      .getItemAt(0)
+      .viewportToImageCoordinates(v.viewport.pointFromPixel(e.position));
+    inspectAt(Math.floor(point.y), Math.floor(point.x));
+  });
+  v.addHandler("tile-drawn", () => {
+    if (epoch === state.epoch) resolution(side, v, view.pair);
+  });
+  v.addHandler("tile-load-failed", () => {
+    if (epoch === state.epoch)
+      error(
+        "Comparison tile failed. Refresh status or retry; no source values are substituted.",
+      );
+  });
+  v.addHandler("open", () => {
+    if (epoch !== state.epoch) return;
+    if (SIDES.every((k) => state.viewers[k]?.world.getItemCount())) {
+      for (const id of ["fit", "zoom-in", "zoom-out"]) $(id).disabled = false;
+      text(
+        "status",
+        "Native coordinates synchronized. A/B raw scale and B−A scale are separately labeled.",
+      );
+    }
+  });
+}
+
 async function inspectAt(row, col) {
   const p = state.pair;
   if (!p) return;
@@ -380,7 +389,7 @@ async function inspectAt(row, col) {
       { signal: state.inspectController.signal },
     );
     if (ticket !== state.inspectEpoch || epoch !== state.epoch) return;
-    envelope(v);
+    envelope(v, state.model);
     assert(
       v.pair_id === p.id && v.name === p.name && v.row === row && v.col === col,
       "Comparison address mismatch",
@@ -449,7 +458,7 @@ async function calibrate() {
       try {
         const m = await request("model");
         if (epoch !== state.epoch) return;
-        envelope(m);
+        envelope(m, state.model);
         const p = m.catalog.find((p) => p.id === id);
         if (m.progress.error) throw Error(m.progress.error);
         if (p.calibration_complete) {
@@ -513,4 +522,17 @@ function initialize() {
   bind();
   refresh();
 }
-initialize();
+// A Node import exposes the pure logic without starting the browser controller.
+if (typeof document !== "undefined") initialize();
+
+export {
+  state,
+  envelope,
+  tileSource,
+  bind,
+  refresh,
+  settings,
+  loadView,
+  inspectAt,
+  calibrate,
+};

@@ -1,4 +1,6 @@
-use serde_json::{json, Value};
+#[cfg(test)]
+use serde_json::json;
+use serde_json::Value;
 use std::{
     collections::BTreeMap,
     io::Write,
@@ -9,13 +11,16 @@ use std::{
 };
 use weight_atlas_rust::{
     atomic_write,
-    command::{defaults, parse_options, Command, COMPARISON_PREFIX, HELP},
-    configure, configure_standalone, headroom, peak_rss_mib, render, require, server,
-    slice::{parse_indices, TensorSlice},
+    command::{argument as arg, parse_options, Command, COMPARISON_PREFIX, HELP},
+    configure, configure_standalone, headroom, render, require, server,
+    slice::TensorSlice,
     source::{Dtype, Source},
     state::State,
     Result,
 };
+#[path = "main/response.rs"]
+mod response;
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("ERROR: {e}");
@@ -43,8 +48,7 @@ fn run_args(
     if Command::lookup(command) == Some(Command::ProfileWorker) {
         return weight_atlas_rust::profile_worker::run(&opts);
     }
-    let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
-    let model = PathBuf::from(opts.get("model").ok_or("--model DIRECTORY is required")?);
+    let model = PathBuf::from(arg::MODEL.read(&opts)?);
     let cpu = configure(weight_atlas_rust::resources::StartupScope::for_command(
         command,
     ))?;
@@ -57,13 +61,11 @@ fn run_args(
     }
     let state = Arc::new(State::open(
         &model,
-        Path::new(&get("cache", defaults::INTAKE_CACHE)),
-        opts.get("name").cloned(),
-        opts.get("revision").cloned(),
+        Path::new(&arg::CACHE.read(&opts)?),
+        arg::NAME.optional(&opts)?,
+        arg::REVISION.optional(&opts)?,
     )?);
-    if Command::lookup(command) == Some(Command::Serve)
-        && get("verify-sha", defaults::INTAKE_VERIFY_SHA) == "true"
-    {
+    if Command::lookup(command) == Some(Command::Serve) && arg::VERIFY_SHA.read(&opts)? == "true" {
         verify_source(&state, cpu, Instant::now())?;
     }
     dispatch_command(command, &opts, state, cpu, start)
@@ -76,15 +78,11 @@ fn dispatch_command(
     cpu: usize,
     start: Instant,
 ) -> Result<()> {
-    let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
     match Command::lookup(command) {
-        Some(Command::Serve) => server::serve(state, get("port", defaults::SERVE_PORT).parse()?)?,
-        Some(Command::HostedRenderer) => weight_atlas_rust::hosted_renderer::run(
-            state,
-            opts.get("channel-fd")
-                .ok_or("Private channel required")?
-                .parse()?,
-        )?,
+        Some(Command::Serve) => server::serve(state, arg::SERVE_PORT.read(opts)?)?,
+        Some(Command::HostedRenderer) => {
+            weight_atlas_rust::hosted_renderer::run(state, arg::CHANNEL_FD.read(opts)?)?
+        }
         Some(Command::Calibrate) => run_calibration(&state, opts, cpu, start)?,
         Some(Command::Verify) => println!("{}", verify_source(&state, cpu, Instant::now())?),
         Some(Command::Inspect) => println!(
@@ -113,8 +111,8 @@ fn run_calibration(
     cpu: usize,
     start: Instant,
 ) -> Result<()> {
-    let ids = if let Some(id) = opts.get("tensor") {
-        vec![id.parse()?]
+    let ids = if let Some(id) = arg::CALIBRATE_TENSOR.optional(opts)? {
+        vec![id]
     } else {
         state
             .source
@@ -132,41 +130,33 @@ fn run_calibration(
     let model = state.model()?;
     println!(
         "{}",
-        json!({"model":model,"wall_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"minimum_available_gib":minimum as f64/1024f64.powi(3),"cpu":cpu})
+        Value::from(response::Calibration {
+            model: &model,
+            start,
+            minimum,
+            cpu
+        })
     );
     Ok(())
 }
 
 fn run_overview(state: &State, opts: &BTreeMap<String, String>) -> Result<()> {
-    let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
-    let id = opts
-        .get("tensor")
-        .ok_or("Overview requires explicit --tensor ID")?
-        .parse()?;
-    let leading = parse_indices(&get("slice", defaults::OVERVIEW_SLICE))?;
-    let rules = get("rules", defaults::OVERVIEW_RULES);
+    let id = arg::OVERVIEW_TENSOR.read(opts)?;
+    let leading = arg::OVERVIEW_SLICE.read(opts)?;
+    let rules = arg::OVERVIEW_RULES.read(opts)?;
     let rules = rules.split(',').collect::<Vec<_>>();
-    let report = state.prepare_overview(
-        id,
-        &leading,
-        &rules,
-        get("max-values", defaults::OVERVIEW_MAX_VALUES).parse()?,
-    )?;
+    let report =
+        state.prepare_overview(id, &leading, &rules, arg::OVERVIEW_MAX_VALUES.read(opts)?)?;
     println!("{}", report);
     Ok(())
 }
 
 fn run_tile(state: &State, opts: &BTreeMap<String, String>, start: Instant) -> Result<()> {
-    let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
-    let id: usize = get("tensor", defaults::TILE_TENSOR).parse()?;
-    let slice = TensorSlice::new(
-        &state.source,
-        id,
-        &parse_indices(&get("slice", defaults::TILE_SLICE))?,
-    )?;
+    let id: usize = arg::TILE_TENSOR.read(opts)?;
+    let slice = TensorSlice::new(&state.source, id, &arg::TILE_SLICE.read(opts)?)?;
     let t = &slice.tensor;
-    let level: u32 = get("level", &t.max_level.to_string()).parse()?;
-    let rules = get("rules", defaults::TILE_RULES);
+    let level: u32 = arg::TILE_LEVEL.read_with_default(opts, &t.max_level.to_string())?;
+    let rules = arg::TILE_RULES.read(opts)?;
     let rules = rules.split(',').collect::<Vec<_>>();
     let luts = rules
         .iter()
@@ -182,10 +172,10 @@ fn run_tile(state: &State, opts: &BTreeMap<String, String>, start: Instant) -> R
         t,
         &refs,
         level,
-        get("x", defaults::TILE_X).parse()?,
-        get("y", defaults::TILE_Y).parse()?,
+        arg::TILE_X.read(opts)?,
+        arg::TILE_Y.read(opts)?,
     )?;
-    let out = get("out", defaults::TILE_OUT);
+    let out = arg::TILE_OUT.read(opts)?;
     for (rule, field) in rules.iter().zip(&fields) {
         std::fs::write(
             format!("{out}-{rule}.png"),
@@ -196,10 +186,7 @@ fn run_tile(state: &State, opts: &BTreeMap<String, String>, start: Instant) -> R
             f.write_all(&x.to_le_bytes())?
         }
     }
-    println!(
-        "{}",
-        json!({"metrics":m,"seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib()})
-    );
+    println!("{}", Value::from(response::Tile { m: &m, start }));
     Ok(())
 }
 
@@ -209,10 +196,9 @@ fn run_benchmark(
     cpu: usize,
     start: Instant,
 ) -> Result<()> {
-    let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
-    let id = get("tensor", defaults::BENCH_TENSOR).parse()?;
+    let id = arg::BENCH_TENSOR.read(opts)?;
     let t = state.source.tensor(id)?;
-    let reps: usize = get("repeats", defaults::BENCH_REPEATS).parse()?;
+    let reps: usize = arg::BENCH_REPEATS.read(opts)?;
     require((1..=30).contains(&reps), "repeats 1–30")?;
     let mut records = Vec::new();
     for f in [1usize, 4, 16] {
@@ -238,19 +224,29 @@ fn run_benchmark(
                 bytes += render::png(&field, m.width, m.height)?.len()
             }
             times.push(begin.elapsed().as_secs_f64());
-            last = Some(json!({"metrics":m,"png_bytes":bytes}));
+            last = Some(Value::from(response::BenchmarkSample { m: &m, bytes }));
         }
-        records.push(json!({"tensor":t.name,"shape":t.shape,"factor":f,"level":level,"runs_seconds":times,"last":last}));
+        records.push(Value::from(response::BenchmarkRun {
+            t,
+            f,
+            level,
+            times: &times,
+            last: &last,
+        }));
     }
     println!(
         "{}",
-        json!({"records":records,"wall_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"cpu":cpu})
+        Value::from(response::Benchmark {
+            records: &records,
+            start,
+            cpu
+        })
     );
     Ok(())
 }
 
 fn initialize_resources(command: &str, opts: &BTreeMap<String, String>) -> Result<()> {
-    if let Some(raw) = opts.get("resources") {
+    if let Some(raw) = opts.get(arg::RESOURCES.name) {
         require(
             weight_atlas_rust::resources::StartupScope::for_command(command)
                 == weight_atlas_rust::resources::StartupScope::Standalone,
@@ -264,10 +260,7 @@ fn initialize_resources(command: &str, opts: &BTreeMap<String, String>) -> Resul
 
 fn print_metadata(model: &Path, cpu: usize, start: Instant) -> Result<()> {
     let s = Source::open(model)?;
-    println!(
-        "{}",
-        json!({"source_directory":s.root,"source_identity":s.identity,"header_bytes":s.header_bytes,"source_bytes":s.bytes,"tensor_count":s.tensors.len(),"parameter_count":s.tensors.iter().map(|t|t.count).sum::<usize>(),"catalog":s.tensors,"shards":s.shards,"elapsed_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"cpu":cpu,"full_sha_recomputed":false})
-    );
+    println!("{}", Value::from(response::Metadata { s: &s, start, cpu }));
     Ok(())
 }
 
@@ -361,22 +354,18 @@ fn run_comparison(
     cpu: usize,
 ) -> Result<()> {
     use weight_atlas_rust::{comparison::Comparison, comparison_http};
-    let get = |k: &str, default: &str| opts.get(k).cloned().unwrap_or_else(|| default.into());
-    let b = PathBuf::from(
-        opts.get("compare-model")
-            .ok_or("--compare-model DIRECTORY is required for comparison")?,
-    );
+    let b = PathBuf::from(arg::COMPARE_MODEL.read(opts)?);
     let pair = Arc::new(Comparison::open(
         model,
         &b,
-        Path::new(&get("cache", defaults::COMPARISON_CACHE)),
+        Path::new(&arg::COMPARE_CACHE.read(opts)?),
     )?);
-    let id = get("tensor", defaults::COMPARISON_TENSOR).parse()?;
+    let id = arg::COMPARE_TENSOR.read(opts)?;
     let output = match Command::lookup(command) {
         Some(Command::CompareMetadata) => pair.model()?,
         Some(Command::CompareCalibrate) => {
             require(
-                opts.contains_key("tensor"),
+                opts.contains_key(arg::COMPARE_TENSOR.name),
                 "Comparison calibration requires an explicit --tensor ID",
             )?;
             pair.calibrate_one(id)?;
@@ -384,17 +373,17 @@ fn run_comparison(
         }
         Some(Command::CompareInspect) => pair.inspect(
             id,
-            get("row", defaults::COMPARISON_ROW).parse()?,
-            get("col", defaults::COMPARISON_COL).parse()?,
+            arg::COMPARE_ROW.read(opts)?,
+            arg::COMPARE_COL.read(opts)?,
         )?,
         Some(Command::CompareTile) => {
-            let quantity = get("quantity", defaults::COMPARISON_QUANTITY);
-            let mapping = get("mapping", defaults::COMPARISON_MAPPING);
-            let level = get("level", &pair.pair(id)?.max_level.to_string()).parse()?;
-            let x = get("x", defaults::COMPARISON_X).parse()?;
-            let y = get("y", defaults::COMPARISON_Y).parse()?;
-            let prefix =
-                pair.output_prefix(Path::new(opts.get("out").ok_or("--out PREFIX required")?))?;
+            let quantity = arg::COMPARE_QUANTITY.read(opts)?;
+            let mapping = arg::COMPARE_MAPPING.read(opts)?;
+            let level = arg::COMPARE_LEVEL
+                .read_with_default(opts, &pair.pair(id)?.max_level.to_string())?;
+            let x = arg::COMPARE_X.read(opts)?;
+            let y = arg::COMPARE_Y.read(opts)?;
+            let prefix = pair.output_prefix(Path::new(&arg::COMPARE_OUT.read(opts)?))?;
             let (field, metrics) = pair.fields(id, &quantity, &mapping, level, x, y)?;
             let rule = if quantity == "abs_delta" || mapping == "magnitude" {
                 "tensor_magnitude"
@@ -416,17 +405,17 @@ fn run_comparison(
                     .flat_map(|x| x.to_le_bytes())
                     .collect::<Vec<_>>(),
             )?;
-            let mut result = pair.identity_metadata();
-            result["pair_id"] = json!(id);
-            result["quantity"] = json!(quantity);
-            result["mapping"] = json!(mapping);
-            result["legend"] = pair.legend(id, &quantity, &mapping)?;
-            result["metrics"] = json!(metrics);
-            result["cpu"] = json!(cpu);
-            result
+            Value::try_from(response::ComparisonTile {
+                pair: &pair,
+                id,
+                quantity: &quantity,
+                mapping: &mapping,
+                metrics: &metrics,
+                cpu,
+            })?
         }
         Some(Command::CompareServe) => {
-            comparison_http::serve(pair, get("port", defaults::COMPARISON_PORT).parse()?)?;
+            comparison_http::serve(pair, arg::COMPARE_PORT.read(opts)?)?;
             return Ok(());
         }
         _ => return Err("Unknown comparison command".into()),
@@ -471,10 +460,20 @@ fn verify_source(state: &State, cpu: usize, start: Instant) -> Result<Value> {
                 "Full shard SHA mismatch against local pinned metadata",
             )?
         }
-        records.push(json!({"shard":s.name,"sha256":hash,"matches_saved_expected_sha":expected.map(|e|e==hash),"bytes":s.fingerprint.size}));
+        records.push(Value::from(response::VerificationShard {
+            s,
+            hash: &hash,
+            expected,
+        }));
         eprintln!("Hashed {}", s.name);
     }
-    let v = json!({"source_identity":state.source.identity,"shards":records,"wall_seconds":start.elapsed().as_secs_f64(),"peak_rss_mib":peak_rss_mib(),"minimum_available_gib":minimum as f64/1024f64.powi(3),"cpu":cpu,"scope":"Fresh full source SHA; comparisons use explicitly selected local metadata, not a new remote trust check"});
+    let v = Value::from(response::Verification {
+        source_identity: &state.source.identity,
+        records: &records,
+        start,
+        minimum,
+        cpu,
+    });
     atomic_write(
         &state.root.join("verification.json"),
         &serde_json::to_vec_pretty(&v)?,

@@ -291,7 +291,7 @@ impl State {
             self.commit_calibration(id, s, |next| self.persist_calibration(next))?;
             eprintln!(
                 "{}",
-                json!({"calibrated":id,"name":t.name,"seconds":seconds,"values":t.count})
+                Value::from(response::CalibrationProgress { id, t, seconds })
             );
             Ok(())
         })();
@@ -306,9 +306,10 @@ impl State {
         render::validate_rule_dtype(right, dtype)?;
         let s = self.stats(t.id);
         let g = self.global();
-        Ok(
-            json!({"left":render::legend(left,s.as_ref(),g)?,"right":render::legend(right,s.as_ref(),g)?}),
-        )
+        Ok(Value::from(response::Legends {
+            left: render::legend(left, s.as_ref(), g)?,
+            right: render::legend(right, s.as_ref(), g)?,
+        }))
     }
     pub fn mapping(&self, rule: &str, l: &Value, dtype: Dtype) -> Result<Arc<render::Mapping>> {
         let key = format!("{}:{rule}:{}:{}", dtype.name(), l["max"], l["s"]);
@@ -544,14 +545,24 @@ impl State {
             .as_bytes());
             let png = render::png_for_rule(rule, field, metrics.width, metrics.height)?;
             self.cache.lock().unwrap().put(&key, &png)?;
-            records.push(json!({"rule":rule,"level":level,"x":0,"y":0,
-                "binding":self.tile_binding_for(&slice,rule,legend),"png_bytes":png.len()}));
+            records.push(Value::from(response::OverviewTile {
+                rule,
+                level,
+                x: 0,
+                y: 0,
+                binding: self.tile_binding_for(&slice, rule, legend),
+                png_bytes: png.len(),
+            }));
         }
         self.source.check()?;
-        Ok(
-            json!({"api_version":1,"source_binding":self.slice_binding(&slice),"max_values":max_values,
-            "metrics":metrics,"tiles":records,"coverage":"one selected-slice overview per rule; fine tiles remain on demand"}),
-        )
+        Ok(Value::from(response::Overview {
+            api_version: 1,
+            source_binding: self.slice_binding(&slice),
+            max_values,
+            metrics,
+            tiles: records,
+            coverage: "one selected-slice overview per rule; fine tiles remain on demand",
+        }))
     }
 
     /// Small readiness projection. Never construct the full tensor catalog here.

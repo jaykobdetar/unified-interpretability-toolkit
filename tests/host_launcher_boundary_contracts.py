@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 import unittest
 
 import host_atlas as module
+from page_startup_fixture import expected_bundle
 
 
 class HostLauncherBoundaryTests(unittest.TestCase):
@@ -146,9 +147,7 @@ class HostLauncherBoundaryTests(unittest.TestCase):
     def test_bundle_response_keeps_original_separator(self):
         handler = self.handler("/viewer.js")
         self.assertIsNone(self.ok(handler.handle_action))
-        expected = b"\n;\n".join(
-            (module.ROOT / "web" / name).read_bytes() for name in module.BUNDLE
-        )
+        expected = expected_bundle(module.ROOT, module.BUNDLE)
         handler.send.assert_called_once_with(200, expected, "text/javascript")
 
     def test_disabled_inference_response_keeps_exact_status_and_receipt(self):

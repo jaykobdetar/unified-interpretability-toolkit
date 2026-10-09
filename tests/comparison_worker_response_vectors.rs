@@ -362,3 +362,56 @@ fn comparison_worker_preserves_status_defaults_calibration_and_provenance() {
         "comparison worker second pair tile ready"
     );
 }
+
+#[test]
+fn startup_diagnostic_envelope_keeps_comparison_coordinates() {
+    let fixture = Fixture::new();
+    let raw = std::fs::read_to_string(fixture.root.join("stdout")).unwrap();
+    let value: Value = serde_json::from_str(raw.trim()).unwrap();
+    assert_eq!(
+        value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec![
+            "comparison_identity",
+            "coordinate_space",
+            "inference_editable",
+            "listening",
+            "peak_rss_mib",
+            "tensors"
+        ]
+    );
+    assert_eq!(
+        value["listening"],
+        format!("http://{}", fixture.address.unwrap())
+    );
+    assert_eq!(value["tensors"], 2);
+    assert_eq!(value["coordinate_space"], "checkpoint-comparison-v1");
+    assert_eq!(value["inference_editable"], false);
+    assert_eq!(
+        value["comparison_identity"],
+        fixture.request("GET", "/api/comparison/model").json()["comparison_identity"]
+    );
+    let peak = value["peak_rss_mib"].as_f64().unwrap();
+    assert!(
+        peak.is_finite() && peak >= 0.0,
+        "comparison peak observation assertion"
+    );
+}
+
+#[test]
+fn repeated_calibration_reports_complete_without_requeueing() {
+    let fixture = Fixture::new();
+    let queued = fixture.request("POST", "/api/comparison/calibrate?tensor=0");
+    assert_eq!(queued.status, 202);
+    let model = fixture.wait_status(|status| status["catalog"][0]["calibration_complete"] == true);
+    let complete = fixture.request("POST", "/api/comparison/calibrate?tensor=0");
+    assert_eq!(complete.status, 200);
+    let body = complete.json();
+    assert_eq!(body["complete"], true);
+    assert!(body.get("queued").is_none());
+    assert_eq!(body["comparison_identity"], model["comparison_identity"]);
+}

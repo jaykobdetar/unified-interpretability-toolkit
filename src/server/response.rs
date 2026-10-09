@@ -140,3 +140,35 @@ impl From<CalibrationReply<'_>> for Value {
         ]))
     }
 }
+
+pub(super) struct Selection<'a> {
+    pub tensor: Value,
+    pub slice: &'a [usize],
+    pub slice_identity: &'a str,
+    pub slice_count: usize,
+}
+
+impl From<Selection<'_>> for Value {
+    fn from(response: Selection<'_>) -> Self {
+        let mut tensor = response.tensor;
+        tensor["slice"] = serde_json::json!(response.slice);
+        tensor["slice_identity"] = serde_json::json!(response.slice_identity);
+        tensor["slice_count"] = serde_json::json!(response.slice_count);
+        tensor
+    }
+}
+
+pub(super) struct Startup<'a> {
+    pub state: &'a crate::state::State,
+    pub port: u16,
+}
+
+impl TryFrom<Startup<'_>> for Value {
+    type Error = crate::Error;
+    fn try_from(report: Startup<'_>) -> crate::Result<Self> {
+        let Startup { state, port } = report;
+        Ok(
+            serde_json::json!({"listening":format!("http://127.0.0.1:{port}"),"metadata_ready_seconds":state.started.elapsed().as_secs_f64(),"header_bytes":state.source.header_bytes,"tensors":state.source.tensors.len(),"peak_rss_mib":crate::peak_rss_mib(),"resources":crate::resources::snapshot()?}),
+        )
+    }
+}

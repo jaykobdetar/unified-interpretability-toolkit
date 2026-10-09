@@ -184,52 +184,87 @@ pub struct Options {
 }
 
 pub mod options {
-    // Common documented arguments stay known even when an early command ignores
-    // them. Existing resource-policy refusal remains separate from key spelling.
-    pub const COMMON: &[&str] = &["model", "cache", "name", "revision", "resources"];
-    pub const PROFILE_REQUIRED: &[&str] = &[
-        "model",
-        "revision",
-        "tensor",
-        "slice",
-        "seed",
-        "values",
-        "wall-ms",
-        "cpu-ms",
-        "binding",
-        "output-fd",
+    use super::argument as arg;
+    pub const COMMON: &[&str] = &[
+        arg::MODEL.name,
+        arg::CACHE.name,
+        arg::NAME.name,
+        arg::REVISION.name,
+        arg::RESOURCES.name,
     ];
-    pub const PROFILE_RESTORE: &[&str] = &["input-fd", "input-sha"];
+    pub const PROFILE_REQUIRED: &[&str] = &[
+        arg::PROFILE_MODEL.name,
+        arg::PROFILE_REVISION.name,
+        arg::PROFILE_TENSOR.name,
+        arg::PROFILE_SLICE.name,
+        arg::PROFILE_SEED.name,
+        arg::PROFILE_VALUES.name,
+        arg::PROFILE_WALL_MS.name,
+        arg::PROFILE_CPU_MS.name,
+        arg::PROFILE_BINDING.name,
+        arg::PROFILE_OUTPUT_FD.name,
+    ];
+    pub const PROFILE_RESTORE: &[&str] = &[arg::PROFILE_INPUT_FD.name, arg::PROFILE_INPUT_SHA.name];
 }
 
 impl Command {
     /// Audited option names; ordinary command intake remains permissive here.
     pub fn options(self) -> Options {
-        use crate::api::parameter::{
-            COL, LEFT, LEVEL, MAPPING, QUANTITY, RIGHT, ROW, SLICE, TENSOR, X, Y,
-        };
+        use crate::api::argument as api;
+        use argument as arg;
         let specific: &[&str] = match self {
             Self::Metadata | Self::Verify => &[],
-            Self::Serve => &["port", "verify-sha"],
-            Self::Calibrate => &[TENSOR],
-            Self::Overview => &[TENSOR, SLICE, "rules", "max-values"],
-            Self::Tile => &[TENSOR, SLICE, "rules", LEVEL, X, Y, "out"],
-            Self::Inspect => &[TENSOR, SLICE, ROW, COL, LEFT, RIGHT],
-            Self::Bench => &[TENSOR, "repeats"],
-            Self::CompareMetadata | Self::CompareCalibrate => &["compare-model", TENSOR],
-            Self::CompareServe => &["compare-model", TENSOR, "port"],
-            Self::CompareTile => &[
-                "compare-model",
-                TENSOR,
-                QUANTITY,
-                MAPPING,
-                LEVEL,
-                X,
-                Y,
-                "out",
+            Self::Serve => &[arg::SERVE_PORT.name, arg::VERIFY_SHA.name],
+            Self::Calibrate => &[arg::CALIBRATE_TENSOR.name],
+            Self::Overview => &[
+                arg::OVERVIEW_TENSOR.name,
+                arg::OVERVIEW_SLICE.name,
+                arg::OVERVIEW_RULES.name,
+                arg::OVERVIEW_MAX_VALUES.name,
             ],
-            Self::CompareInspect => &["compare-model", TENSOR, ROW, COL],
-            Self::HostedRenderer => &["channel-fd"],
+            Self::Tile => &[
+                arg::TILE_TENSOR.name,
+                arg::TILE_SLICE.name,
+                arg::TILE_RULES.name,
+                arg::TILE_LEVEL.name,
+                arg::TILE_X.name,
+                arg::TILE_Y.name,
+                arg::TILE_OUT.name,
+            ],
+            Self::Inspect => &[
+                api::TENSOR.name,
+                api::SLICE.name,
+                api::ROW.name,
+                api::COL.name,
+                api::LEFT.name,
+                api::RIGHT.name,
+            ],
+            Self::Bench => &[arg::BENCH_TENSOR.name, arg::BENCH_REPEATS.name],
+            Self::CompareMetadata | Self::CompareCalibrate => {
+                &[arg::COMPARE_MODEL.name, arg::COMPARE_TENSOR.name]
+            }
+            Self::CompareServe => &[
+                arg::COMPARE_MODEL.name,
+                arg::COMPARE_TENSOR.name,
+                arg::COMPARE_PORT.name,
+            ],
+            Self::CompareTile => &[
+                arg::COMPARE_MODEL.name,
+                arg::COMPARE_TENSOR.name,
+                arg::COMPARE_QUANTITY.name,
+                arg::COMPARE_MAPPING.name,
+                arg::COMPARE_LEVEL.name,
+                arg::COMPARE_X.name,
+                arg::COMPARE_Y.name,
+                arg::COMPARE_OUT.name,
+            ],
+            Self::CompareInspect => &[
+                arg::COMPARE_MODEL.name,
+                arg::COMPARE_TENSOR.name,
+                arg::COMPARE_ROW.name,
+                arg::COMPARE_COL.name,
+            ],
+            Self::HostedRenderer => &[arg::CHANNEL_FD.name],
             Self::ProfileWorker => options::PROFILE_RESTORE,
         };
         Options {
@@ -240,5 +275,68 @@ impl Command {
             },
             specific,
         }
+    }
+}
+
+/// Typed option facts. Reading a field never validates unrelated/unknown names.
+/// The existing help/default declaration above remains the source of fallback text.
+pub mod argument {
+    use super::defaults;
+    use crate::parameter::parse_indices;
+    use crate::parameter::{number, text, Parameter};
+
+    macro_rules! arguments {
+        ($($id:ident: $ty:ty = ($name:expr, $default:expr, $missing:expr, $parser:expr);)*) => {
+            $(pub const $id: Parameter<$ty> = Parameter::new($name, $default, $missing, $parser);)*
+        };
+    }
+
+    arguments! {
+        MODEL: String = ("model", "", Some("--model DIRECTORY is required"), text);
+        PROFILE_MODEL: String = ("model", "", Some("Unknown or missing worker option"), text);
+        PROFILE_REVISION: String = ("revision", "", Some("Unknown or missing worker option"), text);
+        PROFILE_TENSOR: usize = ("tensor", "", Some("Unknown or missing worker option"), number);
+        PROFILE_SLICE: Vec<usize> = ("slice", "", Some("Unknown or missing worker option"), parse_indices);
+        PROFILE_SEED: u64 = ("seed", "", Some("Unknown or missing worker option"), number);
+        PROFILE_VALUES: usize = ("values", "", Some("Unknown or missing worker option"), number);
+        PROFILE_WALL_MS: u64 = ("wall-ms", "", Some("Unknown or missing worker option"), number);
+        PROFILE_CPU_MS: u64 = ("cpu-ms", "", Some("Unknown or missing worker option"), number);
+        PROFILE_BINDING: String = ("binding", "", Some("Unknown or missing worker option"), text);
+        PROFILE_OUTPUT_FD: i32 = ("output-fd", "", Some("Unknown or missing worker option"), number);
+        PROFILE_INPUT_FD: i32 = ("input-fd", "", None, number);
+        PROFILE_INPUT_SHA: String = ("input-sha", "", None, text);
+        CACHE: String = ("cache", defaults::INTAKE_CACHE, None, text);
+        NAME: String = ("name", "", None, text);
+        REVISION: String = ("revision", "", None, text);
+        RESOURCES: String = ("resources", "", None, text);
+        SERVE_PORT: u16 = ("port", defaults::SERVE_PORT, None, number);
+        VERIFY_SHA: String = ("verify-sha", defaults::INTAKE_VERIFY_SHA, None, text);
+        CALIBRATE_TENSOR: usize = ("tensor", "", None, number);
+        CHANNEL_FD: i32 = ("channel-fd", "", Some("Private channel required"), number);
+        OVERVIEW_TENSOR: usize = ("tensor", "", Some("Overview requires explicit --tensor ID"), number);
+        OVERVIEW_SLICE: Vec<usize> = ("slice", defaults::OVERVIEW_SLICE, None, parse_indices);
+        OVERVIEW_RULES: String = ("rules", defaults::OVERVIEW_RULES, None, text);
+        OVERVIEW_MAX_VALUES: usize = ("max-values", defaults::OVERVIEW_MAX_VALUES, None, number);
+        TILE_TENSOR: usize = ("tensor", defaults::TILE_TENSOR, None, number);
+        TILE_SLICE: Vec<usize> = ("slice", defaults::TILE_SLICE, None, parse_indices);
+        TILE_RULES: String = ("rules", defaults::TILE_RULES, None, text);
+        TILE_LEVEL: u32 = ("level", "", None, number);
+        TILE_X: usize = ("x", defaults::TILE_X, None, number);
+        TILE_Y: usize = ("y", defaults::TILE_Y, None, number);
+        TILE_OUT: String = ("out", defaults::TILE_OUT, None, text);
+        BENCH_TENSOR: usize = ("tensor", defaults::BENCH_TENSOR, None, number);
+        BENCH_REPEATS: usize = ("repeats", defaults::BENCH_REPEATS, None, number);
+        COMPARE_MODEL: String = ("compare-model", "", Some("--compare-model DIRECTORY is required for comparison"), text);
+        COMPARE_CACHE: String = ("cache", defaults::COMPARISON_CACHE, None, text);
+        COMPARE_TENSOR: usize = ("tensor", defaults::COMPARISON_TENSOR, None, number);
+        COMPARE_ROW: usize = ("row", defaults::COMPARISON_ROW, None, number);
+        COMPARE_COL: usize = ("col", defaults::COMPARISON_COL, None, number);
+        COMPARE_QUANTITY: String = ("quantity", defaults::COMPARISON_QUANTITY, None, text);
+        COMPARE_MAPPING: String = ("mapping", defaults::COMPARISON_MAPPING, None, text);
+        COMPARE_LEVEL: u32 = ("level", "", None, number);
+        COMPARE_X: usize = ("x", defaults::COMPARISON_X, None, number);
+        COMPARE_Y: usize = ("y", defaults::COMPARISON_Y, None, number);
+        COMPARE_OUT: String = ("out", "", Some("--out PREFIX required"), text);
+        COMPARE_PORT: u16 = ("port", defaults::COMPARISON_PORT, None, number);
     }
 }

@@ -2,27 +2,47 @@
 
 import json
 
+from . import limits as _limits
+
 MIB = 1024**2
 GIB = 1024**3
 DEFAULTS = {
     "version": 1,
-    "cpu_count": 1,
-    "address_space_bytes": 768 * MIB,
-    "available_floor_bytes": 3 * GIB,
-    "disk_reserve_bytes": 25 * GIB,
-    "workspace_bytes": 64 * MIB,
-    "tile_cache_bytes": 2 * GIB,
-    "tile_cache_files": 1000,
+    "cpu_count": _limits.VIEWER_DEFAULT_CPU_COUNT,
+    "address_space_bytes": _limits.VIEWER_DEFAULT_ADDRESS_SPACE_BYTES,
+    "available_floor_bytes": _limits.VIEWER_DEFAULT_AVAILABLE_FLOOR_BYTES,
+    "disk_reserve_bytes": _limits.VIEWER_DEFAULT_DISK_RESERVE_BYTES,
+    "workspace_bytes": _limits.VIEWER_DEFAULT_WORKSPACE_BYTES,
+    "tile_cache_bytes": _limits.VIEWER_DEFAULT_TILE_CACHE_BYTES,
+    "tile_cache_files": _limits.VIEWER_DEFAULT_TILE_CACHE_FILES,
 }
 RANGES = {
     "version": (1, 1),
-    "cpu_count": (1, 8),
-    "address_space_bytes": (256 * MIB, 8 * GIB),
-    "available_floor_bytes": (512 * MIB, 128 * GIB),
-    "disk_reserve_bytes": (GIB, 1024 * GIB),
-    "workspace_bytes": (64 * MIB, GIB),
-    "tile_cache_bytes": (16 * MIB, 64 * GIB),
-    "tile_cache_files": (64, 100000),
+    "cpu_count": (_limits.VIEWER_MIN_CPU_COUNT, _limits.VIEWER_MAX_CPU_COUNT),
+    "address_space_bytes": (
+        _limits.VIEWER_MIN_ADDRESS_SPACE_BYTES,
+        _limits.VIEWER_MAX_ADDRESS_SPACE_BYTES,
+    ),
+    "available_floor_bytes": (
+        _limits.VIEWER_MIN_AVAILABLE_FLOOR_BYTES,
+        _limits.VIEWER_MAX_AVAILABLE_FLOOR_BYTES,
+    ),
+    "disk_reserve_bytes": (
+        _limits.VIEWER_MIN_DISK_RESERVE_BYTES,
+        _limits.VIEWER_MAX_DISK_RESERVE_BYTES,
+    ),
+    "workspace_bytes": (
+        _limits.VIEWER_MIN_WORKSPACE_BYTES,
+        _limits.VIEWER_MAX_WORKSPACE_BYTES,
+    ),
+    "tile_cache_bytes": (
+        _limits.VIEWER_MIN_TILE_CACHE_BYTES,
+        _limits.VIEWER_MAX_TILE_CACHE_BYTES,
+    ),
+    "tile_cache_files": (
+        _limits.VIEWER_MIN_TILE_CACHE_FILES,
+        _limits.VIEWER_MAX_TILE_CACHE_FILES,
+    ),
 }
 
 

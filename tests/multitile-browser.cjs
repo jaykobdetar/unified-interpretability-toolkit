@@ -42,32 +42,60 @@ require("./support/async-completion.cjs").requireCompletion(
           "aria-busy",
           "false",
         );
-        await page.waitForFunction(() =>
-          ["left", "right"].every((side) =>
-            state.viewers[side]?.world.getItemAt(0)?.getFullyLoaded(),
-          ),
+        await page.waitForFunction(
+          (__atlasController) => {
+            return ["left", "right"].every((side) =>
+              __atlasController.state.viewers[side]?.world
+                .getItemAt(0)
+                ?.getFullyLoaded(),
+            );
+          },
+          await page.evaluateHandle(async () => {
+            const __atlasController =
+              typeof state === "undefined"
+                ? await import("/app.js")
+                : { state };
+            return __atlasController;
+          }),
         );
       };
       await page.goto(base);
-      await page.waitForFunction(() => state.viewers.left?.source);
+      await page.waitForFunction(
+        (__atlasController) => {
+          return __atlasController.state.viewers.left?.source;
+        },
+        await page.evaluateHandle(async () => {
+          const __atlasController =
+            typeof state === "undefined" ? await import("/app.js") : { state };
+          return __atlasController;
+        }),
+      );
       step = "P01 tile coordinates";
       for (const side of ["left", "right"]) {
-        const params = await page.evaluate(
-          (side) => [
+        const params = await page.evaluate(async (side) => {
+          const __atlasController =
+            typeof state === "undefined" ? await import("/app.js") : { state };
+          return [
             ...new URL(
-              state.viewers[side].source.getTileUrl(10, 2, 1),
+              __atlasController.state.viewers[side].source.getTileUrl(10, 2, 1),
               location.origin,
             ).searchParams,
-          ],
-          side,
-        );
+          ];
+        }, side);
         const query = new Map(params);
         assert.equal(query.get("x"), "2");
         assert.equal(query.get("y"), "1");
       }
       await ready();
       assert.deepEqual(
-        await page.evaluate(() => [state.tensor.rows, state.tensor.cols]),
+        await page.evaluate(async () => {
+          const __atlasController =
+            typeof state === "undefined" ? await import("/app.js") : { state };
+          return [
+            __atlasController.state.tensor.rows,
+            __atlasController.state.tensor.cols,
+          ];
+        }),
         [513, 769],
       );
       step = "P13 English count";
@@ -78,31 +106,54 @@ require("./support/async-completion.cjs").requireCompletion(
       );
       step = "P14 native indices";
       assert.deepEqual(
-        await page.evaluate(() =>
-          AtlasTools.nativeIndices(state.tensor, 300, 600),
-        ),
+        await page.evaluate(async () => {
+          const __atlasController =
+            typeof state === "undefined" ? await import("/app.js") : { state };
+          const __atlasOwner =
+            typeof state === "undefined"
+              ? (await import("/viewer-context.js")).default
+              : globalThis;
+          return __atlasOwner.AtlasTools.nativeIndices(
+            __atlasController.state.tensor,
+            300,
+            600,
+          );
+        }),
         [300, 600],
       );
       step = "P02 revision boundary";
       assert.deepEqual(
-        await page.evaluate(() => {
+        await page.evaluate(async () => {
+          const __atlasController =
+            typeof state === "undefined"
+              ? await import("/app.js")
+              : { settings, state };
+          const __atlasOwner =
+            typeof state === "undefined"
+              ? (await import("/viewer-context.js")).default
+              : globalThis;
+
           const value = {
-            ...settings(),
+            ...__atlasController.settings(),
             region: [300, 600, 305, 611],
             viewport: [600, 300, 12, 6],
           };
-          const bookmark = AtlasTools.parseBookmark(
-            AtlasTools.bookmark(value, state.model),
+          const bookmark = __atlasOwner.AtlasTools.parseBookmark(
+            __atlasOwner.AtlasTools.bookmark(
+              value,
+              __atlasController.state.model,
+            ),
           );
-          const healthy = AtlasTools.resolveBookmark(
+          const healthy = __atlasOwner.AtlasTools.resolveBookmark(
             bookmark,
-            state.model,
+            __atlasController.state.model,
           ).tensor;
           let rejected = "";
           try {
-            AtlasTools.resolveBookmark(bookmark, {
-              ...state.model,
-              model_identity: (state.model.model_identity[0] === "a"
+            __atlasOwner.AtlasTools.resolveBookmark(bookmark, {
+              ...__atlasController.state.model,
+              model_identity: (__atlasController.state.model
+                .model_identity[0] === "a"
                 ? "b"
                 : "a"
               ).repeat(64),
@@ -110,7 +161,7 @@ require("./support/async-completion.cjs").requireCompletion(
           } catch (error) {
             rejected = error.message;
           }
-          return [healthy === state.tensor.id, rejected];
+          return [healthy === __atlasController.state.tensor.id, rejected];
         }),
         [
           true,
@@ -119,36 +170,62 @@ require("./support/async-completion.cjs").requireCompletion(
       );
       step = "P03 bookmark precision";
       assert.deepEqual(
-        await page.evaluate(
-          () =>
-            AtlasTools.parseBookmark(
-              AtlasTools.bookmark(
-                {
-                  ...settings(),
-                  region: [0, 0, 0, 0],
-                  viewport: [1e-8, -1e-8, 2, 2],
-                },
-                state.model,
-              ),
-            )?.viewport,
-        ),
+        await page.evaluate(async () => {
+          const __atlasController =
+            typeof state === "undefined"
+              ? await import("/app.js")
+              : { settings, state };
+          const __atlasOwner =
+            typeof state === "undefined"
+              ? (await import("/viewer-context.js")).default
+              : globalThis;
+          return __atlasOwner.AtlasTools.parseBookmark(
+            __atlasOwner.AtlasTools.bookmark(
+              {
+                ...__atlasController.settings(),
+                region: [0, 0, 0, 0],
+                viewport: [1e-8, -1e-8, 2, 2],
+              },
+              __atlasController.state.model,
+            ),
+          )?.viewport;
+        }),
         [1e-8, -1e-8, 2, 2],
       );
       step = "P04 F16 decoding";
       assert.deepEqual(
-        await page.evaluate(() => [
-          AtlasTools.decodeSource("F16", "003e"),
-          AtlasTools.decodeSource("F16", "00c0"),
-        ]),
+        await page.evaluate(async () => {
+          const __atlasOwner =
+            typeof state === "undefined"
+              ? (await import("/viewer-context.js")).default
+              : globalThis;
+          return [
+            __atlasOwner.AtlasTools.decodeSource("F16", "003e"),
+            __atlasOwner.AtlasTools.decodeSource("F16", "00c0"),
+          ];
+        }),
         [1.5, -2],
       );
       step = "P05 region boundary";
       assert.deepEqual(
-        await page.evaluate(() => {
-          const valid = AtlasTools.region([512, 768, 512, 768], state.tensor);
+        await page.evaluate(async () => {
+          const __atlasController =
+            typeof state === "undefined" ? await import("/app.js") : { state };
+          const __atlasOwner =
+            typeof state === "undefined"
+              ? (await import("/viewer-context.js")).default
+              : globalThis;
+
+          const valid = __atlasOwner.AtlasTools.region(
+            [512, 768, 512, 768],
+            __atlasController.state.tensor,
+          );
           let rejected = "";
           try {
-            AtlasTools.region([512, 768, 513, 768], state.tensor);
+            __atlasOwner.AtlasTools.region(
+              [512, 768, 513, 768],
+              __atlasController.state.tensor,
+            );
           } catch (error) {
             rejected = error.message;
           }
@@ -158,13 +235,18 @@ require("./support/async-completion.cjs").requireCompletion(
       );
       step = "P07 rule availability";
       assert.deepEqual(
-        await page.evaluate(() => {
-          const original = state.tensor,
+        await page.evaluate(async () => {
+          const __atlasController =
+            typeof state === "undefined"
+              ? await import("/app.js")
+              : { state, updateRuleAvailability };
+
+          const original = __atlasController.state.tensor,
             result = [];
           try {
             for (const dtype of ["F16", "F32"]) {
-              state.tensor = { ...original, dtype };
-              updateRuleAvailability();
+              __atlasController.state.tensor = { ...original, dtype };
+              __atlasController.updateRuleAvailability();
               result.push(
                 ...["left", "right"].map(
                   (side) =>
@@ -175,8 +257,8 @@ require("./support/async-completion.cjs").requireCompletion(
               );
             }
           } finally {
-            state.tensor = original;
-            updateRuleAvailability();
+            __atlasController.state.tensor = original;
+            __atlasController.updateRuleAvailability();
           }
           return result;
         }),
@@ -184,31 +266,49 @@ require("./support/async-completion.cjs").requireCompletion(
       );
       step = "P08 hover boundary";
       assert.deepEqual(
-        await page.evaluate(() => {
-          queueHover(512, 100);
-          const valid = hover.key !== null;
-          queueHover(513, 100);
+        await page.evaluate(async () => {
+          const __atlasController =
+            typeof state === "undefined"
+              ? await import("/app.js")
+              : { queueHover, hover, cancelHover };
+
+          __atlasController.queueHover(512, 100);
+          const valid = __atlasController.hover.key !== null;
+          __atlasController.queueHover(513, 100);
           const invalid = [
-            hover.key,
+            __atlasController.hover.key,
             document.getElementById("hover-readout").textContent,
           ];
-          cancelHover();
+          __atlasController.cancelHover();
           return [valid, ...invalid];
         }),
         [true, null, "Hover over either image to read one original value."],
       );
       step = "P10 CSV text guard";
       assert.equal(
-        await page.evaluate(() => AtlasTools.csvCell("=synthetic-label", true)),
+        await page.evaluate(async () => {
+          const __atlasOwner =
+            typeof state === "undefined"
+              ? (await import("/viewer-context.js")).default
+              : globalThis;
+          return __atlasOwner.AtlasTools.csvCell("=synthetic-label", true);
+        }),
         '"\'=synthetic-label"',
       );
       step = "P11 bounded retry";
       assert.deepEqual(
         await page.evaluate(async () => {
+          const __atlasController =
+            typeof state === "undefined" ? await import("/app.js") : { state };
+          const __atlasOwner =
+            typeof state === "undefined"
+              ? (await import("/viewer-context.js")).default
+              : globalThis;
+
           let calls = 0;
           const waits = [];
           try {
-            const value = await AtlasTools.readJSON("/api/model", {
+            const value = await __atlasOwner.AtlasTools.readJSON("/api/model", {
               fetchImpl: async () =>
                 ++calls === 1
                   ? {
@@ -219,13 +319,19 @@ require("./support/async-completion.cjs").requireCompletion(
                         error: "Synthetic busy response",
                       }),
                     }
-                  : { ok: true, status: 200, json: async () => state.model },
+                  : {
+                      ok: true,
+                      status: 200,
+                      json: async () => __atlasController.state.model,
+                    },
               wait: async (ms) => waits.push(ms),
             });
             return {
               calls,
               waits,
-              identity: value.model_identity === state.model.model_identity,
+              identity:
+                value.model_identity ===
+                __atlasController.state.model.model_identity,
             };
           } catch (error) {
             return { calls, waits, error: error.message };
@@ -239,17 +345,25 @@ require("./support/async-completion.cjs").requireCompletion(
       step = "P06 pending right rule";
       assert.equal(
         await page.evaluate(async () => {
+          const __atlasController =
+            typeof state === "undefined"
+              ? await import("/app.js")
+              : { loadView, state };
+
           document.getElementById("right-rule").value = "tensor_linear";
-          const opening = loadView();
+          const opening = __atlasController.loadView();
           document.getElementById("right-rule").value = "tensor_magnitude";
           await opening;
-          return state.current;
+          return __atlasController.state.current;
         }),
         null,
       );
       await page.evaluate(async () => {
+        const __atlasController =
+          typeof state === "undefined" ? await import("/app.js") : { loadView };
+
         document.getElementById("right-rule").value = "tensor_asinh";
-        await loadView();
+        await __atlasController.loadView();
       });
       await ready();
       checks.push(
@@ -258,7 +372,11 @@ require("./support/async-completion.cjs").requireCompletion(
       await page.locator("#right-rule").selectOption("tensor_linear");
       await ready();
       assert.equal(
-        await page.evaluate(() => state.current.settings.right),
+        await page.evaluate(async () => {
+          const __atlasController =
+            typeof state === "undefined" ? await import("/app.js") : { state };
+          return __atlasController.state.current.settings.right;
+        }),
         "tensor_linear",
       );
       await page.locator("#row").fill("300");
@@ -289,9 +407,11 @@ require("./support/async-completion.cjs").requireCompletion(
       await page.locator("#region-focus").click();
       await ready();
       step = "P12 inclusive focus";
-      const centers = await page.evaluate(() =>
-        ["left", "right"].map((side) => {
-          const viewer = state.viewers[side],
+      const centers = await page.evaluate(async () => {
+        const __atlasController =
+          typeof state === "undefined" ? await import("/app.js") : { state };
+        return ["left", "right"].map((side) => {
+          const viewer = __atlasController.state.viewers[side],
             item = viewer.world.getItemAt(0),
             bounds = viewer.viewport.getBounds(true);
           const a = item.viewportToImageCoordinates(bounds.x, bounds.y, true),
@@ -301,38 +421,46 @@ require("./support/async-completion.cjs").requireCompletion(
               true,
             );
           return [(a.x + b.x) / 2, (a.y + b.y) / 2];
-        }),
-      );
+        });
+      });
       assert(
         centers.every(
           ([x, y]) => Math.abs(x - 606) < 1e-7 && Math.abs(y - 303) < 1e-7,
         ),
       );
-      await page.waitForFunction(() =>
-        state.viewers.left.world
-          .getItemAt(0)
-          .lastDrawn.some(
-            ({ tile }) =>
-              tile.level === state.tensor.max_level &&
-              tile.x === 2 &&
-              tile.y === 1 &&
-              tile.loaded,
-          ),
+      await page.waitForFunction(
+        (__atlasController) => {
+          return __atlasController.state.viewers.left.world
+            .getItemAt(0)
+            .lastDrawn.some(
+              ({ tile }) =>
+                tile.level === __atlasController.state.tensor.max_level &&
+                tile.x === 2 &&
+                tile.y === 1 &&
+                tile.loaded,
+            );
+        },
+        await page.evaluateHandle(async () => {
+          const __atlasController =
+            typeof state === "undefined" ? await import("/app.js") : { state };
+          return __atlasController;
+        }),
       );
       for (const side of ["left", "right"]) {
-        const params = await page.evaluate(
-          (side) => [
+        const params = await page.evaluate(async (side) => {
+          const __atlasController =
+            typeof state === "undefined" ? await import("/app.js") : { state };
+          return [
             ...new URL(
-              state.viewers[side].source.getTileUrl(
-                state.tensor.max_level,
+              __atlasController.state.viewers[side].source.getTileUrl(
+                __atlasController.state.tensor.max_level,
                 2,
                 1,
               ),
               location.origin,
             ).searchParams,
-          ],
-          side,
-        );
+          ];
+        }, side);
         const query = new Map(params);
         assert.equal(query.get("x"), "2");
         assert.equal(query.get("y"), "1");
