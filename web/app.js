@@ -1,4 +1,4 @@
-"use strict";
+import shared from "./viewer-context.js";
 // Derived from validated reference frontend. Progressive extension; frozen API SHA256: 665f2e600fd22676f757f4ee59f3603d92bd3811a4444551bab062ffe057ffd7
 const $ = (id) => document.getElementById(id);
 const SIDES = ["left", "right"];
@@ -63,12 +63,12 @@ function assert(condition, message) {
   if (!condition) throw new Error("API contract: " + message);
 }
 async function json(url, signal) {
-  if (globalThis.AtlasTools)
-    return AtlasTools.readJSON(url, {
+  if (shared.AtlasTools)
+    return shared.AtlasTools.readJSON(url, {
       signal,
-      onState: (event) => globalThis.atlasWorkspace?.retry(event, url, signal),
+      onState: (event) => shared.atlasWorkspace?.retry(event, url, signal),
     });
-  const bound = globalThis.AtlasHost?.bindRead(url);
+  const bound = shared.AtlasHost?.bindRead(url);
   const response = await fetch(bound?.url || url, {
     signal,
     cache: "no-store",
@@ -90,7 +90,7 @@ async function json(url, signal) {
   bound?.check(data);
   return data;
 }
-const apiURL = (url) => (globalThis.AtlasHost ? AtlasHost.url(url) : url);
+const apiURL = (url) => (shared.AtlasHost ? shared.AtlasHost.url(url) : url);
 function settings() {
   return {
     tensor: state.tensor?.id,
@@ -156,10 +156,10 @@ function validateTensor(t) {
 }
 function validateView(data, s) {
   validateTensor(data.tensor);
-  if (globalThis.AtlasTools)
-    AtlasTools.requireBinding(
+  if (shared.AtlasTools)
+    shared.AtlasTools.requireBinding(
       data.source_binding,
-      AtlasTools.sourceBinding(state.model, state.tensor),
+      shared.AtlasTools.sourceBinding(state.model, state.tensor),
     );
   assert(data.tensor.id === s.tensor, "view returned a different tensor.");
   assert(
@@ -214,8 +214,8 @@ function setInteraction(enabled) {
     $(id).disabled = !enabled;
 }
 function publishInferenceSelection(selection) {
-  window.atlasInferenceSelection = selection;
-  window.atlasInferenceSelectionChanged?.(selection);
+  shared.atlasInferenceSelection = selection;
+  shared.atlasInferenceSelectionChanged?.(selection);
 }
 function clearInspection(keep = false) {
   publishInferenceSelection(null);
@@ -257,7 +257,7 @@ function deactivate(keep = false) {
   clearOverview();
   state.pollController?.abort();
   state.viewFailed = false;
-  globalThis.atlasWorkspace?.changed("deactivate");
+  shared.atlasWorkspace?.changed("deactivate");
   state.viewEpoch++;
   state.viewController?.abort();
   state.viewController = null;
@@ -510,7 +510,7 @@ function refuseUnsupportedView() {
     return false;
   deactivate();
   allowRawInspection();
-  globalThis.atlasWorkspace?.rawReady();
+  shared.atlasWorkspace?.rawReady();
   describeTensor();
   text("tensor-name", state.tensor.name);
   text("tensor-shape", `${state.tensor.shape.join(" × ")} native shape · F32`);
@@ -647,16 +647,16 @@ function populateModel(model, prior) {
   selectModelTensor(model, prior);
   updateRuleAvailability();
   drawCatalog();
-  globalThis.atlasWorkspace?.model(model);
+  shared.atlasWorkspace?.model(model);
 }
 async function refreshModel() {
   try {
-    await globalThis.AtlasHost?.prepareProfileChange?.();
+    await shared.AtlasHost?.prepareProfileChange?.();
   } catch (e) {
     showError(e.message);
     return;
   }
-  globalThis.AtlasHost?.setProfileSelection?.(null);
+  shared.AtlasHost?.setProfileSelection?.(null);
   if (typeof window.CustomEvent === "function")
     window.dispatchEvent(new CustomEvent("atlas:tensor", { detail: null }));
   const prior = state.tensor ? settings() : null,
@@ -699,15 +699,15 @@ async function selectTensor(id) {
   if (!tensor) return;
   const selectedModel = state.model;
   try {
-    await globalThis.AtlasHost?.prepareProfileChange?.();
+    await shared.AtlasHost?.prepareProfileChange?.();
   } catch (e) {
     showError(e.message);
     return;
   }
   if (state.model !== selectedModel) return;
-  globalThis.AtlasHost?.setProfileSelection?.(null);
+  shared.AtlasHost?.setProfileSelection?.(null);
   state.tensor = tensor;
-  globalThis.atlasWorkspace?.changed("tensor");
+  shared.atlasWorkspace?.changed("tensor");
   deactivate();
   drawCatalog();
   const epoch = state.modelEpoch,
@@ -845,7 +845,7 @@ function bindViewerDrawing(viewer, side, valid) {
       cancelHover();
       synchronize(side);
       updateOverview();
-      globalThis.atlasWorkspace?.changed("viewport");
+      shared.atlasWorkspace?.changed("viewport");
     }
     scheduleResolution();
   });
@@ -1101,7 +1101,7 @@ function activateLoadedView(view, s, pair, prior) {
   setInteraction(true);
   drawCatalog();
   scheduleResolution();
-  globalThis.atlasWorkspace?.loaded();
+  shared.atlasWorkspace?.loaded();
   loadOverview();
   if (state.selected) markers();
 }
@@ -1265,10 +1265,10 @@ function showInspection(data) {
   );
 }
 function validateInspection(data, t, row, col) {
-  if (globalThis.AtlasTools)
-    AtlasTools.requireBinding(
+  if (shared.AtlasTools)
+    shared.AtlasTools.requireBinding(
       data.source_binding,
-      AtlasTools.sourceBinding(state.model, t),
+      shared.AtlasTools.sourceBinding(state.model, t),
     );
   assert(
     data.tensor === t.id && data.row === row && data.col === col,
@@ -1434,7 +1434,7 @@ function focusView() {
 }
 function bind() {
   bindWelcomeAndTheme();
-  window.atlasFocusView = focusView;
+  shared.atlasFocusView = focusView;
   for (const [id, target] of [
     ["skip-to-view", "workspace"],
     ["nav-inspect", "scalar-inspector"],
@@ -1469,7 +1469,7 @@ function bind() {
   });
   $("refresh-model").addEventListener("click", () => {
     refreshModel();
-    window.atlasRefreshAvailability?.();
+    shared.atlasRefreshAvailability?.();
   });
   $("tensor-search").addEventListener("input", drawCatalog);
   $("layer-filter").addEventListener("change", drawCatalog);
@@ -1634,12 +1634,12 @@ function drawSlicePicker() {
       const leading = inputs.map((input) =>
         /^\d+$/.test(input.value) ? Number(input.value) : NaN,
       );
-      await globalThis.AtlasHost?.prepareProfileChange?.();
+      await shared.AtlasHost?.prepareProfileChange?.();
       if (state.tensor !== t) return;
-      globalThis.AtlasHost?.setProfileSelection?.(null);
-      state.tensor = AtlasTools.withSlice(t, leading);
+      shared.AtlasHost?.setProfileSelection?.(null);
+      state.tensor = shared.AtlasTools.withSlice(t, leading);
       deactivate();
-      globalThis.atlasWorkspace?.changed("tensor");
+      shared.atlasWorkspace?.changed("tensor");
       prepareTensor();
     } catch (e) {
       showError(e.message);
@@ -1648,7 +1648,7 @@ function drawSlicePicker() {
   host.append(button);
 }
 async function calibrationAction(query) {
-  if (globalThis.AtlasHost)
+  if (shared.AtlasHost)
     throw new Error("Fixture preparation is an owner CLI action.");
   const r = await fetch("/api/calibrate?" + query, {
     method: "POST",
@@ -1677,12 +1677,12 @@ function allowRawInspection() {
   $("inspect-submit").disabled = false;
 }
 async function prepareTensor() {
-  if (globalThis.AtlasHost?.setProfileSelection) {
+  if (shared.AtlasHost?.setProfileSelection) {
     let selected = null;
     try {
-      selected = AtlasTools.sourceBinding(state.model, state.tensor);
+      selected = shared.AtlasTools.sourceBinding(state.model, state.tensor);
     } catch {}
-    await AtlasHost.setProfileSelection(selected);
+    await shared.AtlasHost.setProfileSelection(selected);
   }
   if (typeof window.CustomEvent === "function")
     window.dispatchEvent(
@@ -1700,7 +1700,7 @@ async function prepareTensor() {
   const id = state.viewEpoch,
     t = state.tensor;
   allowRawInspection();
-  globalThis.atlasWorkspace?.rawReady();
+  shared.atlasWorkspace?.rawReady();
   describeTensor();
   text("tensor-name", t.name);
   text(
@@ -1715,7 +1715,7 @@ async function prepareTensor() {
     text(side + "-parameter", "");
     text(side + "-units", "");
   }
-  if (globalThis.AtlasHost) {
+  if (shared.AtlasHost) {
     status(
       "Raw inspection ready. Color scales require separately reviewed owner preparation before reopening this model.",
     );
@@ -1813,7 +1813,7 @@ async function pollStatus() {
   try {
     while (state.model && !signal.aborted) {
       const ms = state.tensor?.calibration_complete ? 1000 : 250;
-      if (globalThis.AtlasTools) await AtlasTools.delay(ms, signal);
+      if (shared.AtlasTools) await shared.AtlasTools.delay(ms, signal);
       else await new Promise((resolve) => setTimeout(resolve, ms));
       if (
         signal.aborted ||
@@ -1918,7 +1918,7 @@ function queueHover(row, col) {
       assert(data.api_version === 1, "expected api_version 1.");
       validateInspection(data, t, row, col);
       const head =
-        globalThis.AtlasTools?.hoverHead(state.model, t, row, col) ||
+        shared.AtlasTools?.hoverHead(state.model, t, row, col) ||
         "Head unavailable · no verified layout for this source";
       text(
         "hover-readout",
@@ -2078,8 +2078,8 @@ function bindWelcomeAndTheme() {
 }
 function drawExamples() {
   const box = $("guided-examples");
-  if (!globalThis.AtlasTools?.guidedExamples) return;
-  const examples = AtlasTools.guidedExamples(state.model);
+  if (!shared.AtlasTools?.guidedExamples) return;
+  const examples = shared.AtlasTools.guidedExamples(state.model);
   box.replaceChildren();
   for (const example of examples) {
     const card = node("a", "example-card");
@@ -2103,12 +2103,12 @@ function drawExamples() {
 
 async function initialize() {
   bind();
-  if (globalThis.AtlasHost) {
-    if (globalThis.AtlasProfiles && AtlasHost.mountProfiles)
-      AtlasHost.mountProfiles($("profile-panel"), AtlasProfiles);
+  if (shared.AtlasHost) {
+    if (shared.AtlasProfiles && shared.AtlasHost.mountProfiles)
+      shared.AtlasHost.mountProfiles($("profile-panel"), shared.AtlasProfiles);
     $("calibrate-all").hidden = true;
     try {
-      await AtlasHost.initialize(
+      await shared.AtlasHost.initialize(
         async () => {
           state.tensor = null;
           await refreshModel();
@@ -2131,7 +2131,7 @@ async function initialize() {
 }
 
 // Small additive bridge for optional analytics UI; original state stays private.
-window.atlasAnalyticsBridge = {
+shared.atlasAnalyticsBridge = {
   selected: () => (state.model ? state.tensor : null),
   jump: ({ axis, index }) => {
     const t = state.tensor;
@@ -2173,4 +2173,46 @@ window.atlasAnalyticsBridge = {
   },
 };
 
-initialize();
+export {
+  $,
+  SIDES,
+  state,
+  settings,
+  sameSettings,
+  validateView,
+  clearInspection,
+  deactivate,
+  calibrationScope,
+  tensorDescription,
+  drawCatalog,
+  updateRuleAvailability,
+  refuseUnsupportedView,
+  populateModel,
+  refreshModel,
+  selectTensor,
+  tileSource,
+  drawLegend,
+  tensorContextKey,
+  loadView,
+  synchronize,
+  scheduleResolution,
+  updateResolution,
+  inspectAt,
+  scalarZoom,
+  bind,
+  drawSlicePicker,
+  calibrationAction,
+  allowRawInspection,
+  prepareTensor,
+  applyStatus,
+  pollStatus,
+  hover,
+  cancelHover,
+  queueHover,
+  clearOverview,
+  loadOverview,
+  updateViewportBounds,
+  updateOverview,
+  bindWelcomeAndTheme,
+  initialize,
+};

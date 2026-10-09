@@ -1,10 +1,5 @@
-"use strict";
-// Pure, bounded workspace contracts. No inference APIs, storage globals, or DOM.
-(function (root, factory) {
-  const api = factory();
-  if (typeof module === "object" && module.exports) module.exports = api;
-  else root.AtlasTools = api;
-})(globalThis, () => {
+import shared from "./viewer-context.js";
+const api = (() => {
   const RULES = /* rule-ids */ [
     "global_linear",
     "global_asinh",
@@ -278,7 +273,7 @@
         ),
       "Read-only atlas route required",
     );
-    const bound = globalThis.AtlasHost?.bindRead(url),
+    const bound = shared.AtlasHost?.bindRead(url),
       requestURL = bound?.url || url;
     const request = {},
       emit = (event) => onState({ ...event, request });
@@ -966,4 +961,6 @@
     boundedNPY,
     collectRegion,
   };
-});
+})();
+export default api;
+export { api as "module.exports" };

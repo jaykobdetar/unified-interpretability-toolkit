@@ -16,6 +16,7 @@ from .runtime_adapter import (
 from .hosted_runtime import HostedApplication
 from .static_operation import StaticOperation
 from host_atlas import FixtureServer, HostHandler, ROOT, BUNDLE
+from atlas_host.host_assets import bundle_bytes as _bundle_bytes
 from .host_assets import add_profile_client
 
 
@@ -180,9 +181,7 @@ class HostedHandler(HostHandler):
                     add_profile_client(bundle)
                 return self.send(
                     200,
-                    b"\n;\n".join(
-                        (ROOT / "web" / name).read_bytes() for name in bundle
-                    ),
+                    _bundle_bytes(ROOT, bundle),
                     "text/javascript",
                 )
             if (

@@ -13,6 +13,7 @@ from http.server import HTTPServer
 from atlas_host import limits as _limits
 from atlas_host.common import canonical, require
 from atlas_host.host_assets import ASSETS as ASSETS, BUNDLE as BUNDLE
+from atlas_host.host_assets import bundle_bytes as _bundle_bytes
 from atlas_host.config import load_config
 from atlas_host.registry import Registry, RegistryEntry
 from atlas_host.runtime_adapter import FixtureHost, HostError, NativeResponse, dispatch
@@ -136,9 +137,7 @@ class HostHandler(GuardedHandler):
                 require(not length, "GET bodies are unsupported")
                 return self.send(
                     200,
-                    b"\n;\n".join(
-                        (ROOT / "web" / name).read_bytes() for name in BUNDLE
-                    ),
+                    _bundle_bytes(ROOT, BUNDLE),
                     "text/javascript",
                 )
             if self.command == "GET" and path in ASSETS:

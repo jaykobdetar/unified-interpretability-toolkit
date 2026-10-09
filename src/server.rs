@@ -154,8 +154,8 @@ pub fn reply(mut socket: TcpStream, status: u16, mime: &str, body: &[u8], header
     }
 }
 // One fixed startup resource keeps the normal page below the unchanged four
-// header-admission slots. Preserve script order without eval, loaders or copies.
-fn viewer_scripts() -> [&'static [u8]; 9] {
+// header-admission slots. Derive the part count from the ordered asset catalogue.
+fn viewer_scripts() -> [&'static [u8]; crate::page_assets::VIEWER_SCRIPTS.len()] {
     crate::page_assets::VIEWER_SCRIPTS
 }
 

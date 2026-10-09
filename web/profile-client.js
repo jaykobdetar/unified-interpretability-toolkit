@@ -1,10 +1,4 @@
-"use strict";
-// Loaded only by the explicit local profile host; private ownership stays in this closure.
-(function (root, factory) {
-  const api = factory();
-  if (typeof module === "object" && module.exports) module.exports = api;
-  else root.AtlasProfiles = api;
-})(globalThis, () => {
+const api = (() => {
   const check = (ok, message) => {
     if (!ok) throw new Error(message);
   };
@@ -621,4 +615,6 @@
     };
   }
   return { create, mount };
-});
+})();
+export default api;
+export { api as "module.exports" };
