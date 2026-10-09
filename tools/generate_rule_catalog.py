@@ -25,6 +25,10 @@ NATIVE = re.compile(
 BROWSER = re.compile(
     r"/\* rule-ids \*/(\s*\[.*?\])(\s*;?\s*)/\* end-rule-ids \*/", re.DOTALL
 )
+MAGNITUDE = re.compile(
+    r"/\* magnitude-rule-ids \*/(\s*\[.*?\])(\s*;?\s*)/\* end-magnitude-rule-ids \*/",
+    re.DOTALL,
+)
 
 
 def read_catalog(path: Path) -> list[dict[str, str]]:
@@ -108,12 +112,24 @@ def update_native(source: str, rules: list[dict[str, str]], check: bool) -> str:
     return source[: match.start(2)] + expected + source[match.end(2) :]
 
 
-def update_browser(source: str, rules: list[dict[str, str]], check: bool) -> str:
-    matches = list(BROWSER.finditer(source))
+def update_browser(
+    source: str,
+    rules: list[dict[str, str]],
+    check: bool,
+    pattern: re.Pattern[str] = BROWSER,
+    magnitude: bool = False,
+) -> str:
+    matches = list(pattern.finditer(source))
     if len(matches) != 1:
         raise ValueError("Expected one browser rule ID declaration")
     match = matches[0]
     expected = [rule["id"] for rule in rules]
+    if magnitude:
+        expected = [
+            rule["id"]
+            for rule in rules
+            if rule["transform"] in ("MagnitudeLinear", "MagnitudeAsinh")
+        ]
     if ast.literal_eval(match[1].strip()) == expected:
         return source
     if check:
@@ -137,6 +153,8 @@ def main() -> None:
         source = path.read_text()
         update = update_native if name.endswith(".rs") else update_browser
         result = update(source, rules, args.check)
+        if name == "web/app.js":
+            result = update_browser(result, rules, args.check, MAGNITUDE, True)
         if not args.check and result != source:
             path.write_text(result)
     print("PASS: native rule facts and browser IDs match the shared catalogue")

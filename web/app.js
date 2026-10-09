@@ -12,6 +12,10 @@ const RULE_IDS = /* rule-ids */ [
   "tensor_robust99",
   "tensor_signed_percentile",
 ]; /* end-rule-ids */
+const MAGNITUDE_RULE_IDS = /* magnitude-rule-ids */ [
+  "tensor_magnitude",
+  "tensor_magnitude_asinh",
+]; /* end-magnitude-rule-ids */
 const state = {
   model: null,
   tensor: null,
@@ -192,7 +196,7 @@ function validateView(data, s) {
         typeof l.units === "string",
       "formula, scope and units required.",
     );
-    if (["tensor_magnitude", "tensor_magnitude_asinh"].includes(s[side]))
+    if (MAGNITUDE_RULE_IDS.includes(s[side]))
       assert(
         l.min === 0 && l.palette === "sequential-purple-v1",
         "unsigned magnitude bounds and palette required.",
@@ -923,27 +927,26 @@ function bindViewerInspection(viewer, host, view, signal, valid) {
   host.addEventListener("pointerleave", () => cancelHover(), { signal });
 }
 
+function legendParameter(l, magnitude) {
+  return ["tensor_robust99", "tensor_magnitude_asinh"].includes(l.id)
+    ? `${l.id === "tensor_magnitude_asinh" ? "Median nonzero |x| s = " + exact(l.s) + "; " : ""}Q99 = ${exact(l.q99)}; effective divisor D = ${exact(l.effective_divisor)}${l.zero_quantile_fallback ? " (Q99=0 fallback)" : ""}. ${number(l.clipped_count)} original values clipped (${(100 * l.clipped_fraction).toFixed(3)}%).`
+    : l.id === "tensor_signed_percentile"
+      ? "Signed absolute-magnitude mid-CDF; ties share ranks; zeros map to zero."
+      : magnitude
+        ? `Unsigned magnitude; exact tensor M = ${exact(l.max)}`
+        : l.s === null || l.s === undefined
+          ? "Linear mapping; raw bounds shown."
+          : `Exact asinh scale s = ${exact(l.s)}`;
+}
+
 function drawLegend(side, l) {
   text(side + "-min", exact(l.min));
   text(side + "-max", exact(l.max));
   text(side + "-scope", `${l.title} · ${l.scope}`);
-  const magnitude = ["tensor_magnitude", "tensor_magnitude_asinh"].includes(
-    l.id,
-  );
+  const magnitude = MAGNITUDE_RULE_IDS.includes(l.id);
   $(side + "-gradient").classList.toggle("magnitude", magnitude);
   text(side + "-mid", magnitude ? "" : "0");
-  text(
-    side + "-parameter",
-    ["tensor_robust99", "tensor_magnitude_asinh"].includes(l.id)
-      ? `${l.id === "tensor_magnitude_asinh" ? "Median nonzero |x| s = " + exact(l.s) + "; " : ""}Q99 = ${exact(l.q99)}; effective divisor D = ${exact(l.effective_divisor)}${l.zero_quantile_fallback ? " (Q99=0 fallback)" : ""}. ${number(l.clipped_count)} original values clipped (${(100 * l.clipped_fraction).toFixed(3)}%).`
-      : l.id === "tensor_signed_percentile"
-        ? "Signed absolute-magnitude mid-CDF; ties share ranks; zeros map to zero."
-        : magnitude
-          ? `Unsigned magnitude; exact tensor M = ${exact(l.max)}`
-          : l.s === null || l.s === undefined
-            ? "Linear mapping; raw bounds shown."
-            : `Exact asinh scale s = ${exact(l.s)}`,
-  );
+  text(side + "-parameter", legendParameter(l, magnitude));
   text(side + "-formula", l.formula);
   text(
     side + "-units",
