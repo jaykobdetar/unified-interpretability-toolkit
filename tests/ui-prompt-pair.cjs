@@ -1,301 +1,319 @@
 "use strict";
-const architecture = require("./fixtures/inference-architecture.json");
-const fs = require("fs"),
-  vm = require("vm"),
-  assert = require("assert/strict");
-const {
-  pairPositions,
-  experimentRecord,
-  redactExperiment,
-} = require("../web/inference.js");
-const preview = {
-  digest: "a".repeat(64),
-  model_loaded: false,
-  tokens: [
-    [
-      { position: 0, id: 1, piece: "one" },
-      { position: 1, id: 2, piece: "two" },
-      { position: 2, id: 3, piece: "three" },
-    ],
-    [
-      { position: 0, id: 1, piece: "one" },
-      { position: 1, id: 4, piece: "four" },
-    ],
-  ],
-};
-assert.deepEqual(pairPositions("2,1\n0,0", preview), [
-  { a: 2, b: 1 },
-  { a: 0, b: 0 },
-]);
-for (const text of [
-  "",
-  true,
-  "-1,0",
-  "0.5,0",
-  "true,0",
-  "3,1",
-  "2,2",
-  "0,0\n0,0",
-  "1e0,0",
-  Array(9).fill("0,1").join("\n"),
-])
-  assert.throws(() => pairPositions(text, preview));
-const zero = Array(576).fill(0),
-  one = [1, ...Array(575).fill(0)],
-  step = {
-    index: 0,
-    mode: "prompt_pair",
-    layer: 7,
-    activation_site: "block",
-    activation_kind: "post-block residual; B minus A",
-    activation: one,
-    compute_ms: 1,
-    compute_total_ms: 1,
-    prompt_pair: {
-      a: { position: 2, token_id: 3, token_piece: "three", activation: zero },
-      b: { position: 1, token_id: 4, token_piece: "four", activation: one },
-      token_equal: false,
-      prefix_equal: false,
-      metrics: { a_l2: 0, b_l2: 1, delta_l2: 1, cosine: null },
-    },
-  };
-const source_model = {
-  repo: "HuggingFaceTB/SmolLM2-135M",
-  revision: "pinned",
-  weights_sha256: "pinned",
-};
-const request = {
-  mode: "prompt_pair",
-  prompts: ["A", "B"],
-  layer: 7,
-  activation_site: "block",
-  source_model,
-  positions: [{ a: 2, b: 1 }],
-  preview_digest: preview.digest,
-};
-const snapshot = {
-  status: "complete",
-  worker_alive: false,
-  steps: [step],
-  details: {
-    record_count: 1,
-    coverage: "selected",
-    reason: "prompt_pair_complete",
-  },
-};
-const omitted = experimentRecord(request, snapshot),
-  included = experimentRecord(request, snapshot, { includePrompt: true });
-assert(!Object.hasOwn(omitted.request, "prompts"));
-assert(!Object.hasOwn(omitted.request, "preview_digest"));
-assert(!Object.hasOwn(omitted.request, "edits"));
-assert(!omitted.privacy.generated_outputs_included);
-assert(!omitted.privacy.request_replayable);
-for (const key of ["a", "b"]) {
-  assert(!Object.hasOwn(omitted.steps[0].prompt_pair[key], "token_id"));
-  assert(!Object.hasOwn(omitted.steps[0].prompt_pair[key], "token_piece"));
-  assert.equal(omitted.steps[0].prompt_pair[key].activation.length, 576);
-}
-assert.deepEqual(included.request.prompts, ["A", "B"]);
-assert(included.privacy.request_replayable);
-assert.equal(included.steps[0].prompt_pair.a.token_id, 3);
-const redacted = redactExperiment(included);
-assert(!Object.hasOwn(redacted.request, "prompts"));
-assert(!Object.hasOwn(redacted.request, "preview_digest"));
-assert(!Object.hasOwn(redacted.steps[0].prompt_pair.b, "token_piece"));
-class Element {
-  constructor() {
-    this.value = "";
-    this.textContent = "";
-    this.hidden = false;
-    this.disabled = false;
-    this.checked = false;
-    this.children = [];
-    this.listeners = {};
-    this.width = 512;
-    this.height = 288;
-  }
-  replaceChildren(...v) {
-    this.children = v;
-  }
-  append(...v) {
-    this.children.push(...v);
-  }
-  addEventListener(k, f) {
-    this.listeners[k] = f;
-  }
-  getContext() {
-    return { clearRect() {}, fillRect() {} };
-  }
-}
-const elements = new Map(),
-  requests = [],
-  get = (id) => {
-    if (!elements.has(id)) elements.set(id, new Element());
-    return elements.get(id);
-  };
-for (const [key, value] of Object.entries({
-  rate: "2",
-  limit: "2",
-  layer: "7",
-  site: "block",
-  mode: "step",
-  prompt: "A",
-  "prompt-b": "B",
-  task: "generation",
-  observation: "none",
-  "head-index": "0",
-}))
-  get("infer-" + key).value = value;
-const context = vm.createContext({
-  console,
-  document: { getElementById: get, createElement: () => new Element() },
-  window: { addEventListener() {} },
-  fetch: (url, options) =>
-    new Promise((resolve) =>
-      requests.push({
-        url,
-        options,
-        resolve: (body) =>
-          resolve({ ok: true, status: 200, json: async () => body }),
-      }),
-    ),
-  setTimeout: () => 1,
-  clearTimeout() {},
-});
-vm.runInContext(fs.readFileSync("web/inference.js", "utf8"), context);
-const take = (part) => {
-    const i = requests.findIndex((r) => r.url.endsWith(part));
-    assert(i >= 0, part);
-    return requests.splice(i, 1)[0];
-  },
-  el = (id) => get("infer-" + id),
-  click = (id) => el(id).listeners.click(),
-  submit = () => el("form").listeners.submit({ preventDefault() {} }),
-  tick = async () => {
-    for (let i = 0; i < 15; i++) await Promise.resolve();
-  };
+require("./support/comparison-controller.cjs").enableModules(__filename);
 require("./support/async-completion.cjs").requireCompletion(
   (async () => {
-    take("/api/inference").resolve({
-      architecture,
-      model: "fixture",
-      engine: "fixture",
-      comparison: { source_model, max_edits: 8, tensors: [] },
-      prompt_pair: { max_positions: 8 },
-      observations: { kinds: ["attention", "logit_lens"] },
-    });
-    await tick();
-    el("task").value = "prompt_pair";
-    el("task").listeners.change();
-    assert(el("start").disabled);
-    assert(!el("pair-controls").hidden);
-    assert(el("observation").disabled);
-    assert(el("limit").disabled);
-    await submit();
-    assert.equal(requests.length, 0);
-    assert(el("error").textContent.includes("fresh preview"));
-    const p = click("pair-preview"),
-      req = take("/start");
-    assert.deepEqual(JSON.parse(req.options.body), {
-      mode: "prompt_pair_preview",
+    const architecture = require("./fixtures/inference-architecture.json");
+    const fs = require("fs"),
+      vm = require("vm"),
+      assert = require("assert/strict");
+    const {
+      pairPositions,
+      experimentRecord,
+      redactExperiment,
+    } = require("../web/inference.js");
+    const preview = {
+      digest: "a".repeat(64),
+      model_loaded: false,
+      tokens: [
+        [
+          { position: 0, id: 1, piece: "one" },
+          { position: 1, id: 2, piece: "two" },
+          { position: 2, id: 3, piece: "three" },
+        ],
+        [
+          { position: 0, id: 1, piece: "one" },
+          { position: 1, id: 4, piece: "four" },
+        ],
+      ],
+    };
+    assert.deepEqual(pairPositions("2,1\n0,0", preview), [
+      { a: 2, b: 1 },
+      { a: 0, b: 0 },
+    ]);
+    for (const text of [
+      "",
+      true,
+      "-1,0",
+      "0.5,0",
+      "true,0",
+      "3,1",
+      "2,2",
+      "0,0\n0,0",
+      "1e0,0",
+      Array(9).fill("0,1").join("\n"),
+    ])
+      assert.throws(() => pairPositions(text, preview));
+    const zero = Array(576).fill(0),
+      one = [1, ...Array(575).fill(0)],
+      step = {
+        index: 0,
+        mode: "prompt_pair",
+        layer: 7,
+        activation_site: "block",
+        activation_kind: "post-block residual; B minus A",
+        activation: one,
+        compute_ms: 1,
+        compute_total_ms: 1,
+        prompt_pair: {
+          a: {
+            position: 2,
+            token_id: 3,
+            token_piece: "three",
+            activation: zero,
+          },
+          b: { position: 1, token_id: 4, token_piece: "four", activation: one },
+          token_equal: false,
+          prefix_equal: false,
+          metrics: { a_l2: 0, b_l2: 1, delta_l2: 1, cosine: null },
+        },
+      };
+    const source_model = {
+      repo: "HuggingFaceTB/SmolLM2-135M",
+      revision: "pinned",
+      weights_sha256: "pinned",
+    };
+    const request = {
+      mode: "prompt_pair",
       prompts: ["A", "B"],
+      layer: 7,
+      activation_site: "block",
       source_model,
-    });
-    req.resolve({
-      session: "preview-owner",
-      status: "loading",
-      steps: [],
-      details: {},
-    });
-    await p;
-    assert(el("task").disabled);
-    take("/poll").resolve({
-      session: "preview-owner",
+      positions: [{ a: 2, b: 1 }],
+      preview_digest: preview.digest,
+    };
+    const snapshot = {
       status: "complete",
       worker_alive: false,
-      steps: [],
-      details: { preview, reason: "token_preview" },
+      steps: [step],
+      details: {
+        record_count: 1,
+        coverage: "selected",
+        reason: "prompt_pair_complete",
+      },
+    };
+    const omitted = experimentRecord(request, snapshot),
+      included = experimentRecord(request, snapshot, { includePrompt: true });
+    assert(!Object.hasOwn(omitted.request, "prompts"));
+    assert(!Object.hasOwn(omitted.request, "preview_digest"));
+    assert(!Object.hasOwn(omitted.request, "edits"));
+    assert(!omitted.privacy.generated_outputs_included);
+    assert(!omitted.privacy.request_replayable);
+    for (const key of ["a", "b"]) {
+      assert(!Object.hasOwn(omitted.steps[0].prompt_pair[key], "token_id"));
+      assert(!Object.hasOwn(omitted.steps[0].prompt_pair[key], "token_piece"));
+      assert.equal(omitted.steps[0].prompt_pair[key].activation.length, 576);
+    }
+    assert.deepEqual(included.request.prompts, ["A", "B"]);
+    assert(included.privacy.request_replayable);
+    assert.equal(included.steps[0].prompt_pair.a.token_id, 3);
+    const redacted = redactExperiment(included);
+    assert(!Object.hasOwn(redacted.request, "prompts"));
+    assert(!Object.hasOwn(redacted.request, "preview_digest"));
+    assert(!Object.hasOwn(redacted.steps[0].prompt_pair.b, "token_piece"));
+    class Element {
+      constructor() {
+        this.value = "";
+        this.textContent = "";
+        this.hidden = false;
+        this.disabled = false;
+        this.checked = false;
+        this.children = [];
+        this.listeners = {};
+        this.width = 512;
+        this.height = 288;
+      }
+      replaceChildren(...v) {
+        this.children = v;
+      }
+      append(...v) {
+        this.children.push(...v);
+      }
+      addEventListener(k, f) {
+        this.listeners[k] = f;
+      }
+      getContext() {
+        return { clearRect() {}, fillRect() {} };
+      }
+    }
+    const elements = new Map(),
+      requests = [],
+      get = (id) => {
+        if (!elements.has(id)) elements.set(id, new Element());
+        return elements.get(id);
+      };
+    for (const [key, value] of Object.entries({
+      rate: "2",
+      limit: "2",
+      layer: "7",
+      site: "block",
+      mode: "step",
+      prompt: "A",
+      "prompt-b": "B",
+      task: "generation",
+      observation: "none",
+      "head-index": "0",
+    }))
+      get("infer-" + key).value = value;
+    const context = vm.createContext({
+      console,
+      document: { getElementById: get, createElement: () => new Element() },
+      window: { addEventListener() {} },
+      fetch: (url, options) =>
+        new Promise((resolve) =>
+          requests.push({
+            url,
+            options,
+            resolve: (body) =>
+              resolve({ ok: true, status: 200, json: async () => body }),
+          }),
+        ),
+      setTimeout: () => 1,
+      clearTimeout() {},
     });
-    await tick();
-    assert.equal(el("pairs").value, "2,1");
-    assert(el("preview-a").textContent.includes('2: 3 "three"'));
-    assert(el("preview-status").textContent.includes("No model was loaded"));
-    assert(!el("start").disabled);
-    assert(el("export-run").disabled);
-    const run = submit(),
-      pairReq = take("/start");
-    assert.deepEqual(JSON.parse(pairReq.options.body), request);
-    pairReq.resolve({
-      session: "pair-owner",
-      status: "running",
-      steps: [],
-      details: {},
-    });
-    await run;
-    assert(el("pairs").disabled);
-    assert(el("prompt-b").disabled);
-    take("/poll").resolve({ session: "pair-owner", ...snapshot });
-    await tick();
-    click("step");
-    assert.equal(el("left-title").textContent, "Prompt A capture");
-    assert.equal(el("right-title").textContent, "Prompt B capture");
-    assert(
-      el("alignment").textContent.includes("no generated or predicted tokens"),
+    await require("./support/comparison-controller.cjs").load(
+      fs.readFileSync("web/inference.js", "utf8"),
+      context,
+      "web/inference.js",
     );
-    assert(
-      el("score-context").textContent.includes("undefined for a zero norm"),
+    const take = (part) => {
+        const i = requests.findIndex((r) => r.url.endsWith(part));
+        assert(i >= 0, part);
+        return requests.splice(i, 1)[0];
+      },
+      el = (id) => get("infer-" + id),
+      click = (id) => el(id).listeners.click(),
+      submit = () => el("form").listeners.submit({ preventDefault() {} }),
+      tick = async () => {
+        for (let i = 0; i < 15; i++) await Promise.resolve();
+      };
+    require("./support/async-completion.cjs").requireCompletion(
+      (async () => {
+        take("/api/inference").resolve({
+          architecture,
+          model: "fixture",
+          engine: "fixture",
+          comparison: { source_model, max_edits: 8, tensors: [] },
+          prompt_pair: { max_positions: 8 },
+          observations: { kinds: ["attention", "logit_lens"] },
+        });
+        await tick();
+        el("task").value = "prompt_pair";
+        el("task").listeners.change();
+        assert(el("start").disabled);
+        assert(!el("pair-controls").hidden);
+        assert(el("observation").disabled);
+        assert(el("limit").disabled);
+        await submit();
+        assert.equal(requests.length, 0);
+        assert(el("error").textContent.includes("fresh preview"));
+        const p = click("pair-preview"),
+          req = take("/start");
+        assert.deepEqual(JSON.parse(req.options.body), {
+          mode: "prompt_pair_preview",
+          prompts: ["A", "B"],
+          source_model,
+        });
+        req.resolve({
+          session: "preview-owner",
+          status: "loading",
+          steps: [],
+          details: {},
+        });
+        await p;
+        assert(el("task").disabled);
+        take("/poll").resolve({
+          session: "preview-owner",
+          status: "complete",
+          worker_alive: false,
+          steps: [],
+          details: { preview, reason: "token_preview" },
+        });
+        await tick();
+        assert.equal(el("pairs").value, "2,1");
+        assert(el("preview-a").textContent.includes('2: 3 "three"'));
+        assert(
+          el("preview-status").textContent.includes("No model was loaded"),
+        );
+        assert(!el("start").disabled);
+        assert(el("export-run").disabled);
+        const run = submit(),
+          pairReq = take("/start");
+        assert.deepEqual(JSON.parse(pairReq.options.body), request);
+        pairReq.resolve({
+          session: "pair-owner",
+          status: "running",
+          steps: [],
+          details: {},
+        });
+        await run;
+        assert(el("pairs").disabled);
+        assert(el("prompt-b").disabled);
+        take("/poll").resolve({ session: "pair-owner", ...snapshot });
+        await tick();
+        click("step");
+        assert.equal(el("left-title").textContent, "Prompt A capture");
+        assert.equal(el("right-title").textContent, "Prompt B capture");
+        assert(
+          el("alignment").textContent.includes(
+            "no generated or predicted tokens",
+          ),
+        );
+        assert(
+          el("score-context").textContent.includes("undefined for a zero norm"),
+        );
+        assert(el("baseline-output").textContent.includes("Position 2"));
+        assert(el("output").textContent.includes("Position 1"));
+        assert(el("activation-title").textContent.includes("B − A"));
+        click("replay");
+        assert.equal(
+          el("baseline-output").textContent,
+          "No prompt A capture selected in playback.",
+        );
+        el("prompt-b").value = "changed";
+        el("prompt-b").listeners.input();
+        assert(el("start").disabled);
+        assert.equal(el("preview-b").textContent, "No current token preview.");
+        const next = click("pair-preview");
+        take("/start").resolve({
+          session: "late-preview",
+          status: "running",
+          steps: [],
+          details: {},
+        });
+        await next;
+        const stale = take("/poll");
+        const reset = click("reset");
+        take("/reset").resolve({
+          session: null,
+          status: "idle",
+          steps: [],
+          details: {},
+        });
+        await reset;
+        stale.resolve({
+          session: "late-preview",
+          status: "complete",
+          steps: [],
+          details: { preview, reason: "token_preview" },
+        });
+        await tick();
+        assert(el("start").disabled);
+        assert.equal(el("preview-a").textContent, "No current token preview.");
+        console.log(
+          JSON.stringify(
+            {
+              status: "PASS",
+              scope:
+                "Explicit bounded positional alignment, tokenizer-only preview review, exact mode requests, stale prompt/preview invalidation, ownership reset, no generated-token display, zero-norm label, prompt/token/digest export consent and redaction",
+            },
+            null,
+            2,
+          ),
+        );
+      })().catch((e) => {
+        console.error(e);
+        process.exitCode = 1;
+      }),
     );
-    assert(el("baseline-output").textContent.includes("Position 2"));
-    assert(el("output").textContent.includes("Position 1"));
-    assert(el("activation-title").textContent.includes("B − A"));
-    click("replay");
-    assert.equal(
-      el("baseline-output").textContent,
-      "No prompt A capture selected in playback.",
-    );
-    el("prompt-b").value = "changed";
-    el("prompt-b").listeners.input();
-    assert(el("start").disabled);
-    assert.equal(el("preview-b").textContent, "No current token preview.");
-    const next = click("pair-preview");
-    take("/start").resolve({
-      session: "late-preview",
-      status: "running",
-      steps: [],
-      details: {},
-    });
-    await next;
-    const stale = take("/poll");
-    const reset = click("reset");
-    take("/reset").resolve({
-      session: null,
-      status: "idle",
-      steps: [],
-      details: {},
-    });
-    await reset;
-    stale.resolve({
-      session: "late-preview",
-      status: "complete",
-      steps: [],
-      details: { preview, reason: "token_preview" },
-    });
-    await tick();
-    assert(el("start").disabled);
-    assert.equal(el("preview-a").textContent, "No current token preview.");
-    console.log(
-      JSON.stringify(
-        {
-          status: "PASS",
-          scope:
-            "Explicit bounded positional alignment, tokenizer-only preview review, exact mode requests, stale prompt/preview invalidation, ownership reset, no generated-token display, zero-norm label, prompt/token/digest export consent and redaction",
-        },
-        null,
-        2,
-      ),
-    );
-  })().catch((e) => {
-    console.error(e);
-    process.exitCode = 1;
-  }),
+  })(),
 );

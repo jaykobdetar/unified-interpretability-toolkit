@@ -41,14 +41,19 @@ fs.mkdirSync(out, { recursive: true });
   const sample = async (label) =>
     views.push({
       label,
-      ...(await page.evaluate(() => ({
-        left: state.viewers.left.viewport.getBounds(true),
-        right: state.viewers.right.viewport.getBounds(true),
-        leftZoom: state.viewers.left.viewport.getZoom(true),
-        rightZoom: state.viewers.right.viewport.getZoom(true),
-        magnification:
-          document.getElementById("left-magnification").textContent,
-      }))),
+      ...(await page.evaluate(async () => {
+        const __atlasController =
+          typeof state === "undefined" ? await import("/app.js") : { state };
+        return {
+          left: __atlasController.state.viewers.left.viewport.getBounds(true),
+          right: __atlasController.state.viewers.right.viewport.getBounds(true),
+          leftZoom: __atlasController.state.viewers.left.viewport.getZoom(true),
+          rightZoom:
+            __atlasController.state.viewers.right.viewport.getZoom(true),
+          magnification:
+            document.getElementById("left-magnification").textContent,
+        };
+      })),
     });
   const start = async () => {
     const response = page.waitForResponse(

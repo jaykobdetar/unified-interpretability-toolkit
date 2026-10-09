@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 from atlas_host import host_assets as assets
 import generate_page_assets as generator
 import live_inference as live
+from page_startup_fixture import native_viewer
 
 
 class PageAssetCatalogContracts(unittest.TestCase):
@@ -23,6 +24,11 @@ class PageAssetCatalogContracts(unittest.TestCase):
                 "/atlas-tools.js": ("atlas-tools.js", "text/javascript"),
                 "/workspace-tools.js": ("workspace-tools.js", "text/javascript"),
                 "/app.js": ("app.js", "text/javascript"),
+                **(
+                    {"/viewer-context.js": ("viewer-context.js", "text/javascript")}
+                    if native_viewer(live.ROOT)
+                    else {}
+                ),
                 "/style.css": ("style.css", "text/css"),
                 "/vendor/openseadragon.min.js": (
                     "vendor/openseadragon.min.js",

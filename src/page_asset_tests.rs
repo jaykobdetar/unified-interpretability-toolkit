@@ -1,8 +1,21 @@
 use super::{comparison, viewer, VIEWER_SCRIPTS};
 
+fn native_viewer() -> bool {
+    include_str!("../web/app.js")
+        .lines()
+        .any(|line| matches!(line.split_whitespace().next(), Some("import" | "export")))
+}
+
 #[test]
 fn viewer_files_keep_exact_mime_and_bytes() {
-    let expected: &[(&str, &str, &[u8])] = &[
+    let owner = native_viewer().then(|| {
+        std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/web/viewer-context.js"
+        ))
+        .unwrap()
+    });
+    let mut expected: Vec<(&str, &str, &[u8])> = vec![
         (
             "/",
             "text/html; charset=utf-8",
@@ -50,7 +63,10 @@ fn viewer_files_keep_exact_mime_and_bytes() {
             include_bytes!("../web/vendor/OpenSeadragon-LICENSE.txt"),
         ),
     ];
-    for &(path, mime, bytes) in expected {
+    if let Some(bytes) = owner.as_deref() {
+        expected.push(("/viewer-context.js", "text/javascript", bytes));
+    }
+    for &(path, mime, bytes) in &expected {
         assert_eq!(viewer(path), Some((mime, bytes)), "{path}");
     }
     for path in [
@@ -104,6 +120,7 @@ fn comparison_files_keep_exact_mime_bytes_and_viewer_separation() {
         "/index.html",
         "/app.js",
         "/inference.js",
+        "/viewer-context.js",
         "/missing-fixture.js",
     ] {
         assert!(comparison(path).is_none(), "{path}");
@@ -112,16 +129,26 @@ fn comparison_files_keep_exact_mime_bytes_and_viewer_separation() {
 
 #[test]
 fn startup_has_exact_order_and_separators() {
-    let expected: [&[u8]; 9] = [
-        include_bytes!("../web/vendor/openseadragon.min.js"),
-        b"\n;\n",
-        include_bytes!("../web/atlas-tools.js"),
-        b"\n;\n",
-        include_bytes!("../web/app.js"),
-        b"\n;\n",
-        include_bytes!("../web/workspace-tools.js"),
-        b"\n;\n",
-        include_bytes!("../web/inference.js"),
-    ];
-    assert_eq!(VIEWER_SCRIPTS, expected);
+    let fixtures: serde_json::Value =
+        serde_json::from_str(include_str!("../tests/fixtures/viewer-startup.json")).unwrap();
+    let expected: Vec<&[u8]> = if native_viewer() {
+        vec![
+            include_bytes!("../web/vendor/openseadragon.min.js"),
+            b"\n;\n",
+            fixtures["viewer"].as_str().unwrap().as_bytes(),
+        ]
+    } else {
+        vec![
+            include_bytes!("../web/vendor/openseadragon.min.js"),
+            b"\n;\n",
+            include_bytes!("../web/atlas-tools.js"),
+            b"\n;\n",
+            include_bytes!("../web/app.js"),
+            b"\n;\n",
+            include_bytes!("../web/workspace-tools.js"),
+            b"\n;\n",
+            include_bytes!("../web/inference.js"),
+        ]
+    };
+    assert_eq!(VIEWER_SCRIPTS.as_slice(), expected);
 }

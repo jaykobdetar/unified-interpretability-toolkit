@@ -15,8 +15,8 @@ require("./support/async-completion.cjs").requireCompletion(
     assert.equal(second.run("state.viewEpoch"), 0);
     assert.equal(first.pending.length, 0);
     assert.equal(second.pending.length, 0);
-    const a = inference.createFixture(),
-      b = inference.createFixture();
+    const a = await inference.createFixture(),
+      b = await inference.createFixture();
     a.get("infer-rate").value = "9";
     a.take("/api/inference");
     assert.equal(b.get("infer-rate").value, "2");

@@ -211,6 +211,7 @@ require("./support/async-completion.cjs").requireCompletion(
       showError: (message) => assert.fail(message),
       status: () => {},
     };
+    context.shared = context;
     vm.createContext(context);
     vm.runInContext(snippet, context);
     await context.pollStatus();

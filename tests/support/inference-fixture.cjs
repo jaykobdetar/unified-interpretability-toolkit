@@ -1,5 +1,5 @@
 "use strict";
-function createFixture() {
+async function createFixture() {
   const fs = require("node:fs"),
     vm = require("node:vm"),
     assert = require("node:assert/strict");
@@ -65,7 +65,11 @@ function createFixture() {
     },
     clearTimeout: (id) => timers.delete(id),
   });
-  vm.runInContext(source, context);
+  await require("./comparison-controller.cjs").load(
+    source,
+    context,
+    require("node:path").join(__dirname, "../../web/inference.js"),
+  );
   const tick = async () => {
     for (let i = 0; i < 10; i++) await Promise.resolve();
   };

@@ -44,12 +44,13 @@ require("./support/async-completion.cjs").requireCompletion(
       throw Error("Unknown scenario");
     await require("./support/async-completion.cjs").requireCompletion(
       (async () => {
-        vm.runInContext(
+        await require("./support/comparison-controller.cjs").load(
           fs.readFileSync(
             path.join(__dirname, "../web/atlas-tools.js"),
             "utf8",
           ),
           context,
+          path.join(__dirname, "../web/atlas-tools.js"),
         );
         const high = {
           id: 21,

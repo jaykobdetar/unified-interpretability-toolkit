@@ -35,9 +35,10 @@ require("./support/async-completion.cjs").requireCompletion(
       activate,
       passed,
     } = await createFixture();
-    vm.runInContext(
+    await require("./support/comparison-controller.cjs").load(
       fs.readFileSync(path.join(__dirname, "../web/atlas-tools.js"), "utf8"),
       context,
+      path.join(__dirname, "../web/atlas-tools.js"),
     );
     const high = {
       id: 21,

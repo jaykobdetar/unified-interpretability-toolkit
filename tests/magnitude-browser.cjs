@@ -36,10 +36,19 @@ fs.mkdirSync(out, { recursive: true });
       "aria-busy",
       "false",
     );
-    await page.waitForFunction(() =>
-      ["left", "right"].every((s) =>
-        state.viewers[s]?.world.getItemAt(0)?.getFullyLoaded(),
-      ),
+    await page.waitForFunction(
+      (__atlasController) => {
+        return ["left", "right"].every((s) =>
+          __atlasController.state.viewers[s]?.world
+            .getItemAt(0)
+            ?.getFullyLoaded(),
+        );
+      },
+      await page.evaluateHandle(async () => {
+        const __atlasController =
+          typeof state === "undefined" ? await import("/app.js") : { state };
+        return __atlasController;
+      }),
     );
   };
   try {
@@ -58,14 +67,18 @@ fs.mkdirSync(out, { recursive: true });
     await ready();
     await page.locator("#fit").click();
     await ready();
-    const geometry = await page.evaluate(() => ({
-      shape: state.current.tensor.shape,
-      left: state.viewers.left.viewport.getBounds(true),
-      right: state.viewers.right.viewport.getBounds(true),
-      levels: ["left", "right"].map(
-        (s) => document.getElementById(s + "-canvas").dataset.loadedLevels,
-      ),
-    }));
+    const geometry = await page.evaluate(async () => {
+      const __atlasController =
+        typeof state === "undefined" ? await import("/app.js") : { state };
+      return {
+        shape: __atlasController.state.current.tensor.shape,
+        left: __atlasController.state.viewers.left.viewport.getBounds(true),
+        right: __atlasController.state.viewers.right.viewport.getBounds(true),
+        levels: ["left", "right"].map(
+          (s) => document.getElementById(s + "-canvas").dataset.loadedLevels,
+        ),
+      };
+    });
     assert.deepEqual(geometry.shape, [4096, 4096]);
     for (const key of ["x", "y", "width", "height"])
       assert(Math.abs(geometry.left[key] - geometry.right[key]) < 1e-9);
@@ -136,10 +149,13 @@ fs.mkdirSync(out, { recursive: true });
         { timeout: 10000 },
       );
       mobile.push(
-        await page.evaluate(
-          (side) => ({
+        await page.evaluate(async (side) => {
+          const __atlasController =
+            typeof state === "undefined" ? await import("/app.js") : { state };
+          return {
             side,
-            bounds: state.viewers[side].viewport.getBounds(true),
+            bounds:
+              __atlasController.state.viewers[side].viewport.getBounds(true),
             levels: document.getElementById(side + "-canvas").dataset
               .loadedLevels,
             canvas: [
@@ -158,9 +174,8 @@ fs.mkdirSync(out, { recursive: true });
                   ).data,
               ],
             })),
-          }),
-          side,
-        ),
+          };
+        }, side),
       );
       await page
         .locator("#" + side + "-canvas")

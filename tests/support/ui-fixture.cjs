@@ -185,7 +185,7 @@ async function createFixture({
         }),
       ),
   });
-  await require("./comparison-controller.cjs").load(source, context);
+  await require("./comparison-controller.cjs").load(source, context, appSource);
   const run = (s) => vm.runInContext(s, context),
     copy = (x) => JSON.parse(JSON.stringify(x)),
     tick = async () => {

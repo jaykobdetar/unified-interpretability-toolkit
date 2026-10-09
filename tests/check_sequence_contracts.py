@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import check
+from page_startup_fixture import native_viewer
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = [
@@ -134,7 +135,11 @@ class Sequence(unittest.TestCase):
                     ],
                     "3.12.0",
                 ),
-                ("Node", ["node", "--version"], "22.0.0"),
+                (
+                    "Node",
+                    ["node", "--version"],
+                    "22.16.0" if native_viewer(ROOT) else "22.0.0",
+                ),
                 ("rustc", ["rustc", "--version"], "1.92.0"),
                 ("cargo", ["cargo", "--version"], "1.92.0"),
             ],

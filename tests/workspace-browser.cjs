@@ -281,8 +281,11 @@ async function run() {
   await locator("right-rule").selectOption("global_asinh");
   await settled();
   await locator("region-focus").click();
-  const savedBounds = await page.evaluate(() => {
-    const b = state.viewers.left.viewport.getBounds(true);
+  const savedBounds = await page.evaluate(async () => {
+    const __atlasController =
+      typeof state === "undefined" ? await import("/app.js") : { state };
+
+    const b = __atlasController.state.viewers.left.viewport.getBounds(true);
     return [b.x, b.y, b.width, b.height];
   });
   await locator("bookmark-save").click();
@@ -301,8 +304,11 @@ async function run() {
   await expect(locator("region-r1")).toHaveValue("1");
   await expect(locator("left-rule")).toHaveValue("tensor_linear");
   await expect(locator("right-rule")).toHaveValue("global_asinh");
-  const restoredBounds = await page.evaluate(() => {
-    const b = state.viewers.left.viewport.getBounds(true);
+  const restoredBounds = await page.evaluate(async () => {
+    const __atlasController =
+      typeof state === "undefined" ? await import("/app.js") : { state };
+
+    const b = __atlasController.state.viewers.left.viewport.getBounds(true);
     return [b.x, b.y, b.width, b.height];
   });
   assert(restoredBounds.every((n, i) => Math.abs(n - savedBounds[i]) < 1e-6));
@@ -322,11 +328,24 @@ async function run() {
   checks.push(
     "Actual browser bookmark history/reset restores native matrix/vector selection, zoom and both color rules; vector export retains negative zero",
   );
-  const numeric = await page.evaluate(() => {
-    const b = AtlasTools.parseBookmark(
-      AtlasTools.bookmark(
-        { ...settings(), region: [0, 0, 0, 0], viewport: [1e-8, -1e-8, 2, 2] },
-        state.model,
+  const numeric = await page.evaluate(async () => {
+    const __atlasController =
+      typeof state === "undefined"
+        ? await import("/app.js")
+        : { settings, state };
+    const __atlasOwner =
+      typeof state === "undefined"
+        ? (await import("/viewer-context.js")).default
+        : globalThis;
+
+    const b = __atlasOwner.AtlasTools.parseBookmark(
+      __atlasOwner.AtlasTools.bookmark(
+        {
+          ...__atlasController.settings(),
+          region: [0, 0, 0, 0],
+          viewport: [1e-8, -1e-8, 2, 2],
+        },
+        __atlasController.state.model,
       ),
     );
     return b?.viewport;
@@ -374,20 +393,39 @@ async function run() {
     else await route.continue();
   };
   await page.route(base + "/api/model", parallelRoute);
-  await page.evaluate(() => {
-    globalThis.__qolFirst = AtlasTools.readJSON("/api/model", {
+  await page.evaluate(async () => {
+    const __atlasOwner =
+      typeof state === "undefined"
+        ? (await import("/viewer-context.js")).default
+        : globalThis;
+
+    globalThis.__qolFirst = __atlasOwner.AtlasTools.readJSON("/api/model", {
       wait: () => new Promise((r) => (globalThis.__qolRelease = r)),
       onState: (e) =>
-        atlasWorkspace.retry(e, "/api/model", undefined, "parallel-browser"),
+        __atlasOwner.atlasWorkspace.retry(
+          e,
+          "/api/model",
+          undefined,
+          "parallel-browser",
+        ),
     });
   });
   await expect(locator("read-retry")).toContainText("Retry 1/2");
-  await page.evaluate(() =>
-    AtlasTools.readJSON("/api/model", {
+  await page.evaluate(async () => {
+    const __atlasOwner =
+      typeof state === "undefined"
+        ? (await import("/viewer-context.js")).default
+        : globalThis;
+    return __atlasOwner.AtlasTools.readJSON("/api/model", {
       onState: (e) =>
-        atlasWorkspace.retry(e, "/api/model", undefined, "parallel-browser"),
-    }),
-  );
+        __atlasOwner.atlasWorkspace.retry(
+          e,
+          "/api/model",
+          undefined,
+          "parallel-browser",
+        ),
+    });
+  });
   await expect(locator("read-retry")).toContainText("Retry 1/2");
   await page.evaluate(() => {
     __qolRelease();
@@ -473,7 +511,11 @@ async function run() {
   const revisionALink = page.url();
   await stopServer();
   await startServer("fixture-B");
-  await page.evaluate(() => pollStatus());
+  await page.evaluate(async () => {
+    const __atlasController =
+      typeof state === "undefined" ? await import("/app.js") : { pollStatus };
+    return __atlasController.pollStatus();
+  });
   await settled();
   await expect(locator("revision")).toHaveText("fixture-A");
   await expect(locator("error")).toContainText(
@@ -528,13 +570,19 @@ async function run() {
     .locator(".workspace-tools")
     .evaluate((e) => e.scrollIntoView({ block: "start" }));
   await takeShot("desktop-tools");
-  const viewportBefore = await page.evaluate(() => {
-    const b = state.viewers.left.viewport.getBounds(true);
+  const viewportBefore = await page.evaluate(async () => {
+    const __atlasController =
+      typeof state === "undefined" ? await import("/app.js") : { state };
+
+    const b = __atlasController.state.viewers.left.viewport.getBounds(true);
     return [b.x, b.y, b.width, b.height];
   });
   await takeShot("desktop-viewport-stable");
-  const viewportAfter = await page.evaluate(() => {
-    const b = state.viewers.left.viewport.getBounds(true);
+  const viewportAfter = await page.evaluate(async () => {
+    const __atlasController =
+      typeof state === "undefined" ? await import("/app.js") : { state };
+
+    const b = __atlasController.state.viewers.left.viewport.getBounds(true);
     return [b.x, b.y, b.width, b.height];
   });
   assert.deepEqual(viewportAfter, viewportBefore);

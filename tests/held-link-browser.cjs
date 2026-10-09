@@ -147,7 +147,14 @@ const command = (args) =>
     assert.equal(model.source_identity, held.source_identity);
     assert.equal(model.model_identity, held.model_identity);
     assert.equal(model.revision, held.revision);
-    assert.equal(await page.evaluate(() => state.tensor.name), "matrix");
+    assert.equal(
+      await page.evaluate(async () => {
+        const __atlasController =
+          typeof state === "undefined" ? await import("/app.js") : { state };
+        return __atlasController.state.tensor.name;
+      }),
+      "matrix",
+    );
     await expect(page.locator("#left-rule")).toHaveValue("global_linear");
     await expect(page.locator("#right-rule")).toHaveValue("tensor_asinh");
     for (const [name, value] of [
@@ -157,12 +164,18 @@ const command = (args) =>
       ["c1", "1"],
     ])
       await expect(page.locator("#region-" + name)).toHaveValue(value);
-    const parsed = await page.evaluate(
-        (fragment) => AtlasTools.parseBookmark(fragment),
-        held.fragment,
-      ),
-      actual = await page.evaluate(() => {
-        const viewer = state.viewers.left,
+    const parsed = await page.evaluate(async (fragment) => {
+        const __atlasOwner =
+          typeof state === "undefined"
+            ? (await import("/viewer-context.js")).default
+            : globalThis;
+        return __atlasOwner.AtlasTools.parseBookmark(fragment);
+      }, held.fragment),
+      actual = await page.evaluate(async () => {
+        const __atlasController =
+          typeof state === "undefined" ? await import("/app.js") : { state };
+
+        const viewer = __atlasController.state.viewers.left,
           b = viewer.viewport.getBounds(true),
           item = viewer.world.getItemAt(0),
           a = item.viewportToImageCoordinates(b.x, b.y, true),

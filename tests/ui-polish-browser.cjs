@@ -44,10 +44,15 @@ fs.mkdirSync(out, { recursive: true });
       { timeout: 20000 },
     );
     await page.waitForFunction(
-      () =>
-        ["left", "right"].every((s) =>
-          state.viewers[s]?.world.getItemAt(0)?.getFullyLoaded(),
-        ),
+      async () => {
+        const __atlasController =
+          typeof state === "undefined" ? await import("/app.js") : { state };
+        return ["left", "right"].every((s) =>
+          __atlasController.state.viewers[s]?.world
+            .getItemAt(0)
+            ?.getFullyLoaded(),
+        );
+      },
       {},
       { timeout: 20000 },
     );
@@ -105,8 +110,11 @@ fs.mkdirSync(out, { recursive: true });
         await page.locator("#inspect-submit").click();
         await expect(page.locator(".native-index")).toContainText("[70, 5]");
         await page.locator("#left-canvas").scrollIntoViewIfNeeded();
-        const point = await page.evaluate(() => {
-          const v = state.viewers.left,
+        const point = await page.evaluate(async () => {
+          const __atlasController =
+            typeof state === "undefined" ? await import("/app.js") : { state };
+
+          const v = __atlasController.state.viewers.left,
             item = v.world.getItemAt(0),
             p = v.viewport.pixelFromPoint(
               item.imageToViewportCoordinates(6.5, 71.5),
@@ -149,15 +157,23 @@ fs.mkdirSync(out, { recursive: true });
         await page.locator("#zoom-in").click();
         await page.locator("#zoom-in").click();
         await ready();
-        const recolorBounds = await page.evaluate(() => {
-          const b = state.viewers.left.viewport.getBounds(true);
+        const recolorBounds = await page.evaluate(async () => {
+          const __atlasController =
+            typeof state === "undefined" ? await import("/app.js") : { state };
+
+          const b =
+            __atlasController.state.viewers.left.viewport.getBounds(true);
           return [b.x, b.y, b.width, b.height];
         });
         await page.locator("#left-rule").selectOption("tensor_asinh");
         await page.locator("#left-rule").selectOption("tensor_magnitude");
         await ready();
-        const afterRecolor = await page.evaluate(() => {
-          const b = state.viewers.left.viewport.getBounds(true);
+        const afterRecolor = await page.evaluate(async () => {
+          const __atlasController =
+            typeof state === "undefined" ? await import("/app.js") : { state };
+
+          const b =
+            __atlasController.state.viewers.left.viewport.getBounds(true);
           return [b.x, b.y, b.width, b.height];
         });
         assert(
@@ -324,8 +340,11 @@ fs.mkdirSync(out, { recursive: true });
       await page.locator("#inspect-submit").click();
       await expect(page.locator(".native-index")).toContainText("[128, 1]");
       await page.locator("#left-canvas").scrollIntoViewIfNeeded();
-      const point = await page.evaluate(() => {
-        const v = state.viewers.left,
+      const point = await page.evaluate(async () => {
+        const __atlasController =
+          typeof state === "undefined" ? await import("/app.js") : { state };
+
+        const v = __atlasController.state.viewers.left,
           item = v.world.getItemAt(0),
           p = v.viewport.pixelFromPoint(
             item.imageToViewportCoordinates(6.5, 129.5),

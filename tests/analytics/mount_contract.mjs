@@ -91,10 +91,12 @@ let source = fs
     new URL("../../web/analytics-mount.js", import.meta.url),
     "utf8",
   )
+  .replace(/^import shared from ["']\.\/viewer-context\.js["'];\s*/, "")
   .replace(
     /^import\s*\{[\s\S]*?\}\s*from\s*["']\.\/analytics-panel\.js["'];?\s*(?:\r?\n|$)/,
     "",
   );
+sandbox.shared = sandbox.window;
 vm.runInContext(source, sandbox);
 const settle = async () => {
   for (let i = 0; i < 20; i++) await Promise.resolve();

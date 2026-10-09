@@ -114,12 +114,13 @@ require("./support/async-completion.cjs").requireCompletion(
         for (const id of ["region-r0", "region-c0", "region-r1", "region-c1"])
           region.get(id).value = "0";
         for (const file of ["atlas-tools.js", "workspace-tools.js"]) {
-          region.vm.runInContext(
+          await require("./support/comparison-controller.cjs").load(
             region.fs.readFileSync(
               region.path.join(__dirname, "../web", file),
               "utf8",
             ),
             region.context,
+            region.path.join(__dirname, "../web", file),
           );
         }
         region.run("atlasWorkspace.model(state.model)");

@@ -85,9 +85,10 @@ require("./support/async-completion.cjs").requireCompletion(
         model.inference_source_model = sourceModel;
         model.model_identity = "model-fixture";
         model.source_identity = "source-fixture";
-        vm.runInContext(
+        await require("./support/comparison-controller.cjs").load(
           fs.readFileSync(path.join(__dirname, "../web/inference.js"), "utf8"),
           context,
+          path.join(__dirname, "../web/inference.js"),
         );
         take("/api/inference").resolve({
           model: "fixture",

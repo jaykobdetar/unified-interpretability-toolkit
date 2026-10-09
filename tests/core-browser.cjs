@@ -44,25 +44,39 @@ fs.mkdirSync(out, { recursive: true });
       "aria-busy",
       "false",
     );
-    await page.waitForFunction(() =>
-      ["left", "right"].every((s) =>
-        state.viewers[s]?.world.getItemAt(0)?.getFullyLoaded(),
-      ),
+    await page.waitForFunction(
+      (__atlasController) => {
+        return ["left", "right"].every((s) =>
+          __atlasController.state.viewers[s]?.world
+            .getItemAt(0)
+            ?.getFullyLoaded(),
+        );
+      },
+      await page.evaluateHandle(async () => {
+        const __atlasController =
+          typeof state === "undefined" ? await import("/app.js") : { state };
+        return __atlasController;
+      }),
     );
   };
   const pairReady = async () => {
-    await page.waitForFunction(async () => {
-      const current =
-        typeof state === "undefined"
-          ? (await import("/comparison.js")).state
-          : state;
-      return (
-        current.view &&
-        ["left", "right"].every((s) =>
-          current.viewers[s]?.world.getItemAt(0)?.getFullyLoaded(),
-        )
-      );
-    });
+    await page.waitForFunction(
+      (current) => {
+        return (
+          current.view &&
+          ["left", "right"].every((s) =>
+            current.viewers[s]?.world.getItemAt(0)?.getFullyLoaded(),
+          )
+        );
+      },
+      await page.evaluateHandle(async () => {
+        const current =
+          typeof state === "undefined"
+            ? (await import("/comparison.js")).state
+            : state;
+        return current;
+      }),
+    );
     await expect(page.locator("#fit")).toBeEnabled();
   };
   const painted = async (side, comparison = false) => {
