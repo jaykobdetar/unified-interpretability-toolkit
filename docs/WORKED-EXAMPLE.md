@@ -2,7 +2,7 @@
 
 This walkthrough uses the committed [Qwen observation fixture](../tests/fixtures/ui-polish-qwen-observations.json), recorded through bounded original BF16 reads without model execution. It pins Qwen/Qwen3-8B revision `b968826d9c46dd6066d109eabc6255188de91218` and source identity `cbf36b69cb8aab0ff2ec797fbd76cf756a0e72e151cdfac9c675d8bc9430e8f6`. A locally opened checkpoint must match the viewer's exact source/revision binding; matching a model name or shape is insufficient.
 
-With that already available source selected, open **Explore examples** or select the tensor and inclusive native bounds manually. Start with `model.layers.0.self_attn.q_proj.weight`, shape `[4096,4096]`, rows 128–135 and columns 0–7. Inspect individual cells to read their original decimals and BF16 bytes. Compare a signed view with tensor magnitude: sign distinguishes positive from negative values; magnitude shows absolute size. The source values do not change.
+With that already available source selected, open **Start with a verified finding** or select the tensor and inclusive native bounds manually. Start with `model.layers.0.self_attn.q_proj.weight`, shape `[4096,4096]`, rows 128–135 and columns 0–7. Inspect individual cells to read their original decimals and BF16 bytes. Compare a signed view with tensor magnitude: sign distinguishes positive from negative values; magnitude shows absolute size. The source values do not change.
 
 | Recorded native region | Observed values | Coverage |
 | --- | --- | --- |
@@ -10,7 +10,7 @@ With that already available source selected, open **Explore examples** or select
 | `k_proj.weight`, rows 0–7, columns 0–7 | 36 positive, 28 negative; −0.05712890625 to 0.06103515625 | 64 of 4,194,304 values |
 | `model.layers.0.input_layernorm.weight`, native indices 0–31 | All 32 positive; 0.00860595703125 to 0.0125732421875 | 32 of 4,096 values |
 
-The verified stored projection layout has 32 query heads and eight KV heads of dimension 128. The selected Q rows are within query head 1; the selected K rows are within KV head 0. Head labels require the bound reviewed configuration/implementation evidence. They cannot be inferred from color or divisibility alone. The normalization tensor stays a one-dimensional vector displayed as one native row; the positive first-32 window does not establish signs for the rest of the tensor.
+These observations establish native tensor names, shapes, coordinates, and stored values. They do not establish trusted attention-head labels. The plain static server has no bound head-layout descriptor, and the Qwen producer/consumer qualification remains incomplete; do not interpret these windows as verified head selections. Head labels require reviewed configuration/implementation evidence bound to the opened source, not color, tensor divisibility, or a matching model name. See the [head-layout contract](HEAD-LAYOUT-CONTRACT.md). The normalization tensor stays a one-dimensional vector displayed as one native row; the positive first-32 window does not establish signs for the rest of the tensor.
 
 Use **Export original values** for the chosen region. CSV retains source bytes and coordinates; Numeric NumPy + metadata retains the numeric array and its provenance in two files. The same selected values should match the inspector after independent decoding. Bookmarking stores the source-bound view, not prompts, notes or a new claim that the checkpoint was authenticated upstream.
 

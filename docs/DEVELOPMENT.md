@@ -67,7 +67,7 @@ Local model tests use `ATLAS_SMOL_MODEL`, `ATLAS_QWEN_MODEL`, and `ATLAS_CPU_PYT
 
 ## Contributor privacy
 
-Keep model files, local config, prompts, caches, credentials, and machine receipts out of commits. Example paths should be generic placeholders. Inspect actual screenshot pixels and metadata before adding images. The README captures use only `fixtures/tiny-bf16`; the two PNGs should be recaptured after visible UI changes. Never substitute a mockup for a screenshot of the running app.
+Keep model files, local config, prompts, caches, credentials, and machine receipts out of commits. Example paths should be generic placeholders. Inspect actual screenshot pixels and metadata before adding images. The README captures use existing real SmolLM2-135M weights; [screenshot notes](screenshots/README.md) identify the source, rules, coordinates, and reproduction steps. The older demo captures remain explicitly synthetic. Recapture images after visible UI changes. Never substitute a mockup for a screenshot of the running app.
 
 Historical qualification records are maintained in a verified private archive outside the release checkout. Removing them from a tree does not sanitize Git history. Public publication should use the reviewed clean snapshot in the separate repository, with a deliberate public author identity; the original repository remains private. Do not copy `.git`, old refs, private archives, or local receipts into the release.
 

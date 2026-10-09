@@ -4,15 +4,19 @@
 
 Run commands from the repository root. Linux is required by the current CPU, process, and memory guards. The launcher uses Python's standard library; Rust dependencies are vendored and builds use `--offline --locked -j 1`.
 
-## Viewer: shortest path
+## Viewer: local weights first
+
+Use a directory containing your supported local safetensors checkpoint:
 
 ```bash
-./run-atlas.sh --demo --build
+./run-atlas.sh /path/to/model --build
 # Later, without rebuilding:
-./run-atlas.sh --demo
+./run-atlas.sh /path/to/model
 ```
 
-Open `http://127.0.0.1:8775`. The tiny fixture has a 3×5 matrix, a vector, and zeros. Local tensor calibration occurs when selected; whole-model calibration is an explicit action. This command starts only the weight viewer. Ctrl-C stops the foreground process.
+Open `http://127.0.0.1:8775`. Select a tensor and wait for its calibration and image tiles. Whole-model calibration is an explicit action for global scales. This command starts only the weight viewer. Ctrl-C stops the foreground process. Follow the [static-analysis walkthrough](STATIC-ANALYSIS.md) for color comparisons, exact inspection, notes, and exports.
+
+Without model weights, use `./run-atlas.sh --demo --build`. The synthetic fixture has a 3×5 matrix, a vector, and zeros: 26 values total. It exercises the interface, not trained-model behavior. Neither launch mode downloads weights.
 
 ```bash
 ./run-atlas.sh /path/to/model --port 8776 --cache ./cache-other
@@ -34,9 +38,9 @@ Optional standalone `resources` budgets are described in [resource configuration
 
 Precedence is CLI options, `ATLAS_MODEL/ATLAS_CACHE/ATLAS_PORT/ATLAS_NAME/ATLAS_REVISION`, then JSON values. `ATLAS_CONFIG` selects a config file. `--demo` explicitly selects the checked-in fixture. Paths in JSON resolve relative to the config file; CLI/environment paths resolve relative to your current directory. The default cache is the checkout's ignored `cache/` directory. Configuration is parsed as JSON and never executed. Cache paths inside the selected model are refused. Use separate caches for concurrent viewers.
 
-## Inference is a separate process
+## Optional experimental modes
 
-Only the complete pinned SmolLM2-135M source is supported. Obtain it separately under its model license, and select an existing compatible CPU Python environment. Versions and file pins are in [INFERENCE.md](INFERENCE.md), `inference-requirements.txt`, and `docs/models/`.
+Inference runs separately from static inspection. Only the complete pinned SmolLM2-135M source is supported. Obtain it separately under its model license, and select an existing compatible CPU Python environment. Versions and file pins are in [INFERENCE.md](INFERENCE.md), `inference-requirements.txt`, and `docs/models/`.
 
 ```bash
 python3 tools/live_inference.py \
