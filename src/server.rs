@@ -980,17 +980,33 @@ mod query_tests {
     #[test]
     fn startup_script_bundle_is_fixed_order_bounded_and_single_request() {
         let parts = viewer_scripts();
+        let parts = parts.as_slice();
         assert!(parts.iter().map(|s| s.len()).sum::<usize>() < 600 * 1024);
         assert_eq!(
             parts[0],
             include_bytes!("../web/vendor/openseadragon.min.js")
         );
-        assert_eq!(parts[2], include_bytes!("../web/atlas-tools.js"));
-        assert_eq!(parts[4], include_bytes!("../web/app.js"));
-        assert_eq!(parts[6], include_bytes!("../web/workspace-tools.js"));
-        assert_eq!(parts[8], include_bytes!("../web/inference.js"));
-        for part in [parts[1], parts[3], parts[5], parts[7]] {
-            assert_eq!(part, b"\n;\n");
+        if include_str!("../web/app.js")
+            .lines()
+            .any(|line| matches!(line.split_whitespace().next(), Some("import" | "export")))
+        {
+            let fixtures: serde_json::Value =
+                serde_json::from_str(include_str!("../tests/fixtures/viewer-startup.json"))
+                    .unwrap();
+            let expected: [&[u8]; 3] = [
+                include_bytes!("../web/vendor/openseadragon.min.js"),
+                b"\n;\n",
+                fixtures["viewer"].as_str().unwrap().as_bytes(),
+            ];
+            assert_eq!(parts, expected);
+        } else {
+            assert_eq!(parts[2], include_bytes!("../web/atlas-tools.js"));
+            assert_eq!(parts[4], include_bytes!("../web/app.js"));
+            assert_eq!(parts[6], include_bytes!("../web/workspace-tools.js"));
+            assert_eq!(parts[8], include_bytes!("../web/inference.js"));
+            for part in [parts[1], parts[3], parts[5], parts[7]] {
+                assert_eq!(part, b"\n;\n");
+            }
         }
         let html = include_str!("../web/index.html");
         assert_eq!(html.matches("<script ").count(), 1);
